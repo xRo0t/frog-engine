@@ -1,0 +1,53 @@
+##############################
+# Frog - Window
+# OOP shell over the unified window package.
+##############################
+
+struct AppWindow:
+    title: str = "Frog Engine"
+    width: i32 = 1280
+    height: i32 = 720
+    handle: i64 = 0
+    opened: i32 = 0
+
+attach AppWindow:
+
+    static fun open(title: str, width: i32, height: i32) -> AppWindow:
+        w: AppWindow = AppWindow(title=title, width=width, height=height, handle=0, opened=0)
+        if Window.open(title, width, height) == 0:
+            return w
+        w.handle = Window.handle()
+        w.width = Window.width()
+        w.height = Window.height()
+        w.opened = 1
+        return w
+
+    fun poll(self):
+        if self.handle == 0:
+            return
+        Window.poll()
+        self.handle = Window.handle()
+        self.width = Window.width()
+        self.height = Window.height()
+        if Window.should_close() == 1:
+            self.opened = 0
+
+    fun running(self) -> i32:
+        if self.handle == 0:
+            return 0
+        return Window.running()
+
+    fun should_close(self) -> i32:
+        if self.handle == 0:
+            return 1
+        return Window.should_close()
+
+    fun request_close(self):
+        Window.request_close()
+        self.opened = 0
+
+    fun shutdown(self):
+        if self.handle != 0:
+            Window.shutdown()
+        self.handle = 0
+        self.opened = 0

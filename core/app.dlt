@@ -1,0 +1,77 @@
+##############################
+# Frog - App
+# Minimal OOP application shell.
+##############################
+
+struct App:
+    window: AppWindow = AppWindow()
+    clock: Clock = Clock()
+    running_flag: i32 = 0
+
+attach App:
+
+    static fun create(title: str, width: i32, height: i32) -> App:
+        app: App = App()
+        app.window = AppWindow.open(title, width, height)
+        app.clock = Clock.start()
+        app.running_flag = app.window.running()
+        return app
+
+    fun running(self) -> i32:
+        if self.running_flag == 0:
+            return 0
+        if Window.running() == 0:
+            self.running_flag = 0
+            return 0
+        return 1
+
+    fun begin_frame(self) -> f32:
+        Window.poll()
+        if Window.running() == 0:
+            self.running_flag = 0
+        clock: Clock = self.clock
+        dt: f32 = clock.tick()
+        self.clock = clock
+        return dt
+
+    fun delta_time(self) -> f32:
+        return self.clock.dt
+
+    fun elapsed_time(self) -> f32:
+        return self.clock.elapsed
+
+    fun frame_count(self) -> i32:
+        return self.clock.frame_count
+
+    fun handle(self) -> i64:
+        return Window.handle()
+
+    fun width(self) -> i32:
+        return Window.width()
+
+    fun height(self) -> i32:
+        return Window.height()
+
+    fun capture_mouse(self):
+        Input.capture_mouse(self.handle(), self.width(), self.height())
+
+    fun release_mouse(self):
+        Input.release_mouse()
+
+    fun center_mouse(self):
+        Input.center_mouse(self.handle(), self.width(), self.height())
+
+    fun mouse_x(self) -> i32:
+        return Input.mouse_x(self.handle())
+
+    fun mouse_y(self) -> i32:
+        return Input.mouse_y(self.handle())
+
+    fun close(self):
+        self.running_flag = 0
+        Window.request_close()
+
+    fun shutdown(self):
+        Window.shutdown()
+        self.window = AppWindow()
+        self.running_flag = 0

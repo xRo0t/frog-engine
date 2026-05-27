@@ -1,0 +1,68 @@
+##############################
+# Frog - Time
+# High-resolution frame timer.
+##############################
+
+g_frog_timer_freq: i64 = 0
+g_frog_timer_start: i64 = 0
+g_frog_timer_initialized: i32 = 0
+
+fun init_engine_timer():
+    if g_frog_timer_initialized == 1:
+        return
+    freq_buf: i64 = Memory.malloc_zeroed(8)
+    time_buf: i64 = Memory.malloc_zeroed(8)
+    if freq_buf == 0:
+        return
+    if time_buf == 0:
+        Memory.free(freq_buf)
+        return
+    QueryPerformanceFrequency(freq_buf)
+    g_frog_timer_freq = Memory.read_i64(freq_buf)
+    QueryPerformanceCounter(time_buf)
+    g_frog_timer_start = Memory.read_i64(time_buf)
+    Memory.free(freq_buf)
+    Memory.free(time_buf)
+    g_frog_timer_initialized = 1
+
+fun engine_time_seconds() -> f64:
+    if g_frog_timer_initialized == 0:
+        init_engine_timer()
+    if g_frog_timer_freq == 0:
+        return 0.0
+    time_buf: i64 = Memory.malloc_zeroed(8)
+    if time_buf == 0:
+        return 0.0
+    QueryPerformanceCounter(time_buf)
+    now: i64 = Memory.read_i64(time_buf)
+    Memory.free(time_buf)
+    elapsed: i64 = now - g_frog_timer_start
+    return (elapsed as f64) / (g_frog_timer_freq as f64)
+
+struct Clock:
+    last_time: f64 = 0.0
+    dt: f32 = 0.0
+    elapsed: f32 = 0.0
+    frame_count: i32 = 0
+
+attach Clock:
+
+    static fun start() -> Clock:
+        init_engine_timer()
+        now: f64 = engine_time_seconds()
+        return Clock(last_time=now, dt=0.0, elapsed=0.0, frame_count=0)
+
+    fun tick(self) -> f32:
+        now: f64 = engine_time_seconds()
+        delta64: f64 = now - self.last_time
+        self.last_time = now
+        self.dt = delta64 as f32
+        self.elapsed = self.elapsed + self.dt
+        self.frame_count = self.frame_count + 1
+        return self.dt
+
+    fun reset(self):
+        self.last_time = engine_time_seconds()
+        self.dt = 0.0
+        self.elapsed = 0.0
+        self.frame_count = 0

@@ -1,0 +1,316 @@
+##############################
+# Frog - Scene + GameObject
+# OOP API over packed object storage.
+##############################
+
+struct Scene:
+    root_ptr: i64 = 0
+    active_camera_ptr: i64 = 0
+    capacity: i32 = 0
+    count_ptr: i64 = 0
+    names: i64 = 0
+    active: i64 = 0
+    positions: i64 = 0
+    rotations: i64 = 0
+    scales: i64 = 0
+    velocities: i64 = 0
+
+struct GameObject:
+    id: i32 = -1
+    count: i32 = 0
+    names: i64 = 0
+    active: i64 = 0
+    positions: i64 = 0
+    rotations: i64 = 0
+    scales: i64 = 0
+    velocities: i64 = 0
+
+attach Scene:
+
+    static fun create() -> Scene:
+        root: RootNode = root_node_create("Root", 0)
+        return Scene(root_ptr=root as i64, active_camera_ptr=0)
+
+    static fun create(capacity: i32) -> Scene:
+        scene: Scene = Scene(capacity=capacity, count_ptr=0)
+        if capacity <= 0:
+            return scene
+        cap64: i64 = capacity as i64
+        scene.count_ptr = Memory.malloc_zeroed(4)
+        scene.names = Memory.malloc_zeroed(cap64 * 8)
+        scene.active = Memory.malloc_zeroed(cap64 * 4)
+        scene.positions = Memory.malloc_zeroed(cap64 * 12)
+        scene.rotations = Memory.malloc_zeroed(cap64 * 12)
+        scene.scales = Memory.malloc_zeroed(cap64 * 12)
+        scene.velocities = Memory.malloc_zeroed(cap64 * 12)
+        return scene
+
+    fun root(self) -> RootNode:
+        if self.root_ptr == 0:
+            root: RootNode = root_node_create("Root", 0)
+            self.root_ptr = root as i64
+        return self.root_ptr as RootNode
+
+    fun add_child(self, child: Node3D):
+        root: RootNode = self.root()
+        root.add_child(child as i64)
+
+    fun add_child(self, child: Camera3D):
+        root: RootNode = self.root()
+        root.add_child(child as i64)
+        if self.active_camera_ptr == 0:
+            self.active_camera_ptr = child as i64
+            child.current = 1
+
+    fun set_camera(self, camera: Camera3D):
+        self.active_camera_ptr = camera as i64
+        camera.current = 1
+
+    fun camera(self) -> Camera3D:
+        return self.active_camera_ptr as Camera3D
+
+    fun destroy(self):
+        if self.root_ptr != 0:
+            node_destroy_tree(self.root_ptr)
+        self.root_ptr = 0
+        self.active_camera_ptr = 0
+        self.cleanup()
+
+    fun is_valid(self) -> i32:
+        if self.capacity <= 0:
+            return 0
+        if self.count_ptr == 0:
+            return 0
+        if self.names == 0:
+            return 0
+        if self.active == 0:
+            return 0
+        if self.positions == 0:
+            return 0
+        if self.rotations == 0:
+            return 0
+        if self.scales == 0:
+            return 0
+        if self.velocities == 0:
+            return 0
+        return 1
+
+    fun make_object(self, id: i32) -> GameObject:
+        current_count: i32 = 0
+        if self.count_ptr != 0:
+            current_count = Memory.read_i32(self.count_ptr)
+        return GameObject(
+            id=id,
+            count=current_count,
+            names=self.names,
+            active=self.active,
+            positions=self.positions,
+            rotations=self.rotations,
+            scales=self.scales,
+            velocities=self.velocities
+        )
+
+    fun spawn(self, name: str) -> GameObject:
+        if self.is_valid() == 0:
+            return self.make_object(-1)
+        current_count: i32 = Memory.read_i32(self.count_ptr)
+        if current_count >= self.capacity:
+            return self.make_object(-1)
+
+        id: i32 = current_count
+        Memory.write_i32(self.count_ptr, current_count + 1)
+        off3: i64 = (id as i64) * 12
+        off4: i64 = (id as i64) * 4
+        off8: i64 = (id as i64) * 8
+
+        Memory.write_ptr(self.names + off8, name as i64)
+        Memory.write_i32(self.active + off4, 1)
+        Memory.write_f32(self.positions + off3, 0.0)
+        Memory.write_f32(self.positions + off3 + 4, 0.0)
+        Memory.write_f32(self.positions + off3 + 8, 0.0)
+        Memory.write_f32(self.rotations + off3, 0.0)
+        Memory.write_f32(self.rotations + off3 + 4, 0.0)
+        Memory.write_f32(self.rotations + off3 + 8, 0.0)
+        Memory.write_f32(self.scales + off3, 1.0)
+        Memory.write_f32(self.scales + off3 + 4, 1.0)
+        Memory.write_f32(self.scales + off3 + 8, 1.0)
+        Memory.write_f32(self.velocities + off3, 0.0)
+        Memory.write_f32(self.velocities + off3 + 4, 0.0)
+        Memory.write_f32(self.velocities + off3 + 8, 0.0)
+
+        return self.make_object(id)
+
+    fun object_at(self, id: i32) -> GameObject:
+        current_count: i32 = 0
+        if self.count_ptr != 0:
+            current_count = Memory.read_i32(self.count_ptr)
+        if id < 0 or id >= current_count:
+            return self.make_object(-1)
+        return self.make_object(id)
+
+    fun update_all(self, dt: f32):
+        if self.is_valid() == 0:
+            return
+        current_count: i32 = Memory.read_i32(self.count_ptr)
+        i: i32 = 0
+        while i < current_count:
+            off3: i64 = (i as i64) * 12
+            off4: i64 = (i as i64) * 4
+            if Memory.read_i32(self.active + off4) == 1:
+                px: f32 = Memory.read_f32(self.positions + off3)
+                py: f32 = Memory.read_f32(self.positions + off3 + 4)
+                pz: f32 = Memory.read_f32(self.positions + off3 + 8)
+                vx: f32 = Memory.read_f32(self.velocities + off3)
+                vy: f32 = Memory.read_f32(self.velocities + off3 + 4)
+                vz: f32 = Memory.read_f32(self.velocities + off3 + 8)
+                Memory.write_f32(self.positions + off3, px + vx * dt)
+                Memory.write_f32(self.positions + off3 + 4, py + vy * dt)
+                Memory.write_f32(self.positions + off3 + 8, pz + vz * dt)
+            i = i + 1
+
+    fun cleanup(self):
+        if self.count_ptr != 0:
+            Memory.free(self.count_ptr)
+        if self.names != 0:
+            Memory.free(self.names)
+        if self.active != 0:
+            Memory.free(self.active)
+        if self.positions != 0:
+            Memory.free(self.positions)
+        if self.rotations != 0:
+            Memory.free(self.rotations)
+        if self.scales != 0:
+            Memory.free(self.scales)
+        if self.velocities != 0:
+            Memory.free(self.velocities)
+        self.capacity = 0
+        self.count_ptr = 0
+        self.names = 0
+        self.active = 0
+        self.positions = 0
+        self.rotations = 0
+        self.scales = 0
+        self.velocities = 0
+
+attach GameObject:
+
+    fun is_valid(self) -> i32:
+        if self.id < 0:
+            return 0
+        if self.names == 0:
+            return 0
+        if self.active == 0:
+            return 0
+        if self.positions == 0:
+            return 0
+        if self.rotations == 0:
+            return 0
+        if self.scales == 0:
+            return 0
+        if self.velocities == 0:
+            return 0
+        if self.id >= self.count:
+            return 0
+        return 1
+
+    fun name(self) -> str:
+        if self.is_valid() == 0:
+            return ""
+        return Memory.read_ptr(self.names + (self.id as i64) * 8) as str
+
+    fun set_active(self, value: i32) -> GameObject:
+        if self.is_valid() == 0:
+            return self
+        Memory.write_i32(self.active + (self.id as i64) * 4, value)
+        return self
+
+    fun is_active(self) -> i32:
+        if self.is_valid() == 0:
+            return 0
+        return Memory.read_i32(self.active + (self.id as i64) * 4)
+
+    fun position(self, x: f32, y: f32, z: f32) -> GameObject:
+        if self.is_valid() == 0:
+            return self
+        off: i64 = (self.id as i64) * 12
+        Memory.write_f32(self.positions + off, x)
+        Memory.write_f32(self.positions + off + 4, y)
+        Memory.write_f32(self.positions + off + 8, z)
+        return self
+
+    fun rotation(self, x: f32, y: f32, z: f32) -> GameObject:
+        if self.is_valid() == 0:
+            return self
+        off: i64 = (self.id as i64) * 12
+        Memory.write_f32(self.rotations + off, x)
+        Memory.write_f32(self.rotations + off + 4, y)
+        Memory.write_f32(self.rotations + off + 8, z)
+        return self
+
+    fun scale(self, x: f32, y: f32, z: f32) -> GameObject:
+        if self.is_valid() == 0:
+            return self
+        off: i64 = (self.id as i64) * 12
+        Memory.write_f32(self.scales + off, x)
+        Memory.write_f32(self.scales + off + 4, y)
+        Memory.write_f32(self.scales + off + 8, z)
+        return self
+
+    fun velocity(self, x: f32, y: f32, z: f32) -> GameObject:
+        if self.is_valid() == 0:
+            return self
+        off: i64 = (self.id as i64) * 12
+        Memory.write_f32(self.velocities + off, x)
+        Memory.write_f32(self.velocities + off + 4, y)
+        Memory.write_f32(self.velocities + off + 8, z)
+        return self
+
+    fun x(self) -> f32:
+        if self.is_valid() == 0:
+            return 0.0
+        return Memory.read_f32(self.positions + (self.id as i64) * 12)
+
+    fun y(self) -> f32:
+        if self.is_valid() == 0:
+            return 0.0
+        return Memory.read_f32(self.positions + (self.id as i64) * 12 + 4)
+
+    fun z(self) -> f32:
+        if self.is_valid() == 0:
+            return 0.0
+        return Memory.read_f32(self.positions + (self.id as i64) * 12 + 8)
+
+    fun translate(self, x: f32, y: f32, z: f32) -> GameObject:
+        if self.is_valid() == 0:
+            return self
+        return self.position(self.x() + x, self.y() + y, self.z() + z)
+
+    fun update(self, dt: f32):
+        if self.is_active() == 0:
+            return
+        off: i64 = (self.id as i64) * 12
+        px: f32 = Memory.read_f32(self.positions + off)
+        py: f32 = Memory.read_f32(self.positions + off + 4)
+        pz: f32 = Memory.read_f32(self.positions + off + 8)
+        vx: f32 = Memory.read_f32(self.velocities + off)
+        vy: f32 = Memory.read_f32(self.velocities + off + 4)
+        vz: f32 = Memory.read_f32(self.velocities + off + 8)
+        Memory.write_f32(self.positions + off, px + vx * dt)
+        Memory.write_f32(self.positions + off + 4, py + vy * dt)
+        Memory.write_f32(self.positions + off + 8, pz + vz * dt)
+
+    fun model_matrix(self) -> Mat4:
+        if self.is_valid() == 0:
+            return Mat4.identity()
+        off: i64 = (self.id as i64) * 12
+        return Mat4.trs(
+            Memory.read_f32(self.positions + off),
+            Memory.read_f32(self.positions + off + 4),
+            Memory.read_f32(self.positions + off + 8),
+            Memory.read_f32(self.rotations + off),
+            Memory.read_f32(self.rotations + off + 4),
+            Memory.read_f32(self.rotations + off + 8),
+            Memory.read_f32(self.scales + off),
+            Memory.read_f32(self.scales + off + 4),
+            Memory.read_f32(self.scales + off + 8)
+        )

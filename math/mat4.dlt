@@ -1,0 +1,223 @@
+##############################
+# Frog - Mat4 (column-major, 4x4 f32)
+# Vulkan/OpenGL compatible layout (64 bytes)
+##############################
+
+struct Mat4:
+    m0:  f32 = 1.0
+    m1:  f32 = 0.0
+    m2:  f32 = 0.0
+    m3:  f32 = 0.0
+    m4:  f32 = 0.0
+    m5:  f32 = 1.0
+    m6:  f32 = 0.0
+    m7:  f32 = 0.0
+    m8:  f32 = 0.0
+    m9:  f32 = 0.0
+    m10: f32 = 1.0
+    m11: f32 = 0.0
+    m12: f32 = 0.0
+    m13: f32 = 0.0
+    m14: f32 = 0.0
+    m15: f32 = 1.0
+
+attach Mat4:
+
+    static fun identity() -> Mat4:
+        return Mat4()
+
+    static fun zero() -> Mat4:
+        m: Mat4 = Mat4()
+        m.m0 = 0.0
+        m.m5 = 0.0
+        m.m10 = 0.0
+        m.m15 = 0.0
+        return m
+
+    static fun translation(tx: f32, ty: f32, tz: f32) -> Mat4:
+        m: Mat4 = Mat4()
+        m.m12 = tx
+        m.m13 = ty
+        m.m14 = tz
+        return m
+
+    static fun scaling(sx: f32, sy: f32, sz: f32) -> Mat4:
+        m: Mat4 = Mat4()
+        m.m0 = sx
+        m.m5 = sy
+        m.m10 = sz
+        return m
+
+    static fun rotation_y(angle_deg: f32) -> Mat4:
+        pi: f32 = 3.14159265
+        rad: f32 = angle_deg * pi / 180.0
+        c: f32 = @cos(rad)
+        s: f32 = @sin(rad)
+        m: Mat4 = Mat4()
+        m.m0 = c
+        m.m2 = 0.0 - s
+        m.m8 = s
+        m.m10 = c
+        return m
+
+    static fun rotation_x(angle_deg: f32) -> Mat4:
+        pi: f32 = 3.14159265
+        rad: f32 = angle_deg * pi / 180.0
+        c: f32 = @cos(rad)
+        s: f32 = @sin(rad)
+        m: Mat4 = Mat4()
+        m.m5 = c
+        m.m6 = s
+        m.m9 = 0.0 - s
+        m.m10 = c
+        return m
+
+    static fun rotation_z(angle_deg: f32) -> Mat4:
+        pi: f32 = 3.14159265
+        rad: f32 = angle_deg * pi / 180.0
+        c: f32 = @cos(rad)
+        s: f32 = @sin(rad)
+        m: Mat4 = Mat4()
+        m.m0 = c
+        m.m1 = s
+        m.m4 = 0.0 - s
+        m.m5 = c
+        return m
+
+    # Combine translation, rotation (yxz order), scale into one TRS matrix.
+    static fun trs(tx: f32, ty: f32, tz: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32) -> Mat4:
+        pi: f32 = 3.14159265
+        ax: f32 = rx * pi / 180.0
+        ay: f32 = ry * pi / 180.0
+        az: f32 = rz * pi / 180.0
+        cx: f32 = @cos(ax)
+        sx_: f32 = @sin(ax)
+        cy: f32 = @cos(ay)
+        sy_: f32 = @sin(ay)
+        cz: f32 = @cos(az)
+        sz_: f32 = @sin(az)
+        # R = Ry * Rx * Rz
+        r0:  f32 = cy * cz + sy_ * sx_ * sz_
+        r1:  f32 = cx * sz_
+        r2:  f32 = 0.0 - sy_ * cz + cy * sx_ * sz_
+        r4:  f32 = 0.0 - cy * sz_ + sy_ * sx_ * cz
+        r5:  f32 = cx * cz
+        r6:  f32 = sy_ * sz_ + cy * sx_ * cz
+        r8:  f32 = sy_ * cx
+        r9:  f32 = 0.0 - sx_
+        r10: f32 = cy * cx
+        m: Mat4 = Mat4()
+        m.m0  = r0 * sx
+        m.m1  = r1 * sx
+        m.m2  = r2 * sx
+        m.m3  = 0.0
+        m.m4  = r4 * sy
+        m.m5  = r5 * sy
+        m.m6  = r6 * sy
+        m.m7  = 0.0
+        m.m8  = r8 * sz
+        m.m9  = r9 * sz
+        m.m10 = r10 * sz
+        m.m11 = 0.0
+        m.m12 = tx
+        m.m13 = ty
+        m.m14 = tz
+        m.m15 = 1.0
+        return m
+
+    fun mul(self, b: Mat4) -> Mat4:
+        r: Mat4 = Mat4()
+        r.m0  = self.m0 * b.m0  + self.m4 * b.m1  + self.m8  * b.m2  + self.m12 * b.m3
+        r.m1  = self.m1 * b.m0  + self.m5 * b.m1  + self.m9  * b.m2  + self.m13 * b.m3
+        r.m2  = self.m2 * b.m0  + self.m6 * b.m1  + self.m10 * b.m2  + self.m14 * b.m3
+        r.m3  = self.m3 * b.m0  + self.m7 * b.m1  + self.m11 * b.m2  + self.m15 * b.m3
+        r.m4  = self.m0 * b.m4  + self.m4 * b.m5  + self.m8  * b.m6  + self.m12 * b.m7
+        r.m5  = self.m1 * b.m4  + self.m5 * b.m5  + self.m9  * b.m6  + self.m13 * b.m7
+        r.m6  = self.m2 * b.m4  + self.m6 * b.m5  + self.m10 * b.m6  + self.m14 * b.m7
+        r.m7  = self.m3 * b.m4  + self.m7 * b.m5  + self.m11 * b.m6  + self.m15 * b.m7
+        r.m8  = self.m0 * b.m8  + self.m4 * b.m9  + self.m8  * b.m10 + self.m12 * b.m11
+        r.m9  = self.m1 * b.m8  + self.m5 * b.m9  + self.m9  * b.m10 + self.m13 * b.m11
+        r.m10 = self.m2 * b.m8  + self.m6 * b.m9  + self.m10 * b.m10 + self.m14 * b.m11
+        r.m11 = self.m3 * b.m8  + self.m7 * b.m9  + self.m11 * b.m10 + self.m15 * b.m11
+        r.m12 = self.m0 * b.m12 + self.m4 * b.m13 + self.m8  * b.m14 + self.m12 * b.m15
+        r.m13 = self.m1 * b.m12 + self.m5 * b.m13 + self.m9  * b.m14 + self.m13 * b.m15
+        r.m14 = self.m2 * b.m12 + self.m6 * b.m13 + self.m10 * b.m14 + self.m14 * b.m15
+        r.m15 = self.m3 * b.m12 + self.m7 * b.m13 + self.m11 * b.m14 + self.m15 * b.m15
+        return r
+
+    # Perspective projection (Vulkan-style: depth 0..1, y flipped in NDC is
+    # baked into the projection by negating m5).
+    static fun perspective(fovy_deg: f32, aspect: f32, znear: f32, zfar: f32) -> Mat4:
+        pi: f32 = 3.14159265
+        rad: f32 = fovy_deg * pi / 360.0
+        f: f32 = @cos(rad) / @sin(rad)
+        m: Mat4 = Mat4.zero()
+        m.m0  = f / aspect
+        m.m5  = 0.0 - f
+        m.m10 = zfar / (znear - zfar)
+        m.m11 = 0.0 - 1.0
+        m.m14 = (znear * zfar) / (znear - zfar)
+        return m
+
+    # Look-at view matrix. Camera at eye, looking at target, world up.
+    static fun look_at(ex: f32, ey: f32, ez: f32, tx: f32, ty: f32, tz: f32, ux: f32, uy: f32, uz: f32) -> Mat4:
+        # z = normalize(eye - target)
+        zx: f32 = ex - tx
+        zy: f32 = ey - ty
+        zz: f32 = ez - tz
+        zl: f32 = @sqrt(zx * zx + zy * zy + zz * zz)
+        if zl > 0.0001:
+            zx = zx / zl
+            zy = zy / zl
+            zz = zz / zl
+        # x = normalize(cross(up, z))
+        xx: f32 = uy * zz - uz * zy
+        xy: f32 = uz * zx - ux * zz
+        xz: f32 = ux * zy - uy * zx
+        xl: f32 = @sqrt(xx * xx + xy * xy + xz * xz)
+        if xl > 0.0001:
+            xx = xx / xl
+            xy = xy / xl
+            xz = xz / xl
+        # y = cross(z, x)
+        yx: f32 = zy * xz - zz * xy
+        yy: f32 = zz * xx - zx * xz
+        yz: f32 = zx * xy - zy * xx
+        m: Mat4 = Mat4()
+        m.m0  = xx
+        m.m1  = yx
+        m.m2  = zx
+        m.m3  = 0.0
+        m.m4  = xy
+        m.m5  = yy
+        m.m6  = zy
+        m.m7  = 0.0
+        m.m8  = xz
+        m.m9  = yz
+        m.m10 = zz
+        m.m11 = 0.0
+        m.m12 = 0.0 - (xx * ex + xy * ey + xz * ez)
+        m.m13 = 0.0 - (yx * ex + yy * ey + yz * ez)
+        m.m14 = 0.0 - (zx * ex + zy * ey + zz * ez)
+        m.m15 = 1.0
+        return m
+
+    fun write_to_ptr(self, ptr: i64):
+        if ptr == 0:
+            return
+        Memory.write_f32(ptr + 0, self.m0)
+        Memory.write_f32(ptr + 4, self.m1)
+        Memory.write_f32(ptr + 8, self.m2)
+        Memory.write_f32(ptr + 12, self.m3)
+        Memory.write_f32(ptr + 16, self.m4)
+        Memory.write_f32(ptr + 20, self.m5)
+        Memory.write_f32(ptr + 24, self.m6)
+        Memory.write_f32(ptr + 28, self.m7)
+        Memory.write_f32(ptr + 32, self.m8)
+        Memory.write_f32(ptr + 36, self.m9)
+        Memory.write_f32(ptr + 40, self.m10)
+        Memory.write_f32(ptr + 44, self.m11)
+        Memory.write_f32(ptr + 48, self.m12)
+        Memory.write_f32(ptr + 52, self.m13)
+        Memory.write_f32(ptr + 56, self.m14)
+        Memory.write_f32(ptr + 60, self.m15)

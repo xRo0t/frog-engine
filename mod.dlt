@@ -1,0 +1,61 @@
+##############################
+# Frog Engine - Module Manifest
+# Grows as phases land (see ROADMAP.md).
+##############################
+module frog
+
+import window
+requires vulkan
+
+# Phase 1: Math
+load frog/math/math_utils
+load frog/math/vec3
+load frog/math/mat4
+load frog/math/quat
+load frog/math/color
+
+# Phase 2: Core OOP shell
+load frog/core/time
+load frog/core/window
+load frog/core/app
+load frog/core/input
+
+# Phase 3: Scene objects
+load frog/scene/node
+load frog/scene/game_object
+
+# Phase 3.5: Early software rendering
+load frog/render/software_renderer
+
+# Phase 4: Independent Vulkan GPU rendering
+load frog/render/gpu_shaders
+load frog/render/gpu_vulkan_context
+load frog/render/gpu_swapchain
+load frog/render/gpu_render_pass
+load frog/render/gpu_renderer_core
+load frog/render/gpu_mesh
+load frog/render/gpu
+load frog/core/runtime
+load frog/core/engine
+
+# Benchmarks
+load frog/core/benchmark
+
+# Umbrella hub
+load frog/frog
+
+# Exports
+export Vec3, Mat4, Quat, Color
+export clamp, lerp, min_f32, max_f32, deg2rad, rad2deg
+export normalize_angle_deg, lerp_angle_deg, yaw_from_dir
+export rand01, rand_range, approx_atan, approx_atan2
+export Clock, AppWindow, App, Engine, Input
+export KEY_A, KEY_D, KEY_E, KEY_M, KEY_Q, KEY_S, KEY_W
+export KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN
+export KEY_ESCAPE, KEY_SPACE, KEY_SHIFT, KEY_CTRL
+export Node, Node3D, Camera3D, RootNode, FlycamNode, GoblinGroupNode, GoblinNode, EarthNode
+export node3d_create, camera3d_create, root_node_create, flycam_node_create
+export goblin_group_node_create, goblin_node_create, earth_node_create
+export Scene, GameObject, ObjectBench
+export SoftwareRenderer
+export init_engine_timer, engine_time_seconds

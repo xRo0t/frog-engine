@@ -1,0 +1,472 @@
+##############################
+# Frog - Node Tree
+# Base scene object model. Game-specific types extend Node.
+##############################
+
+struct Node:
+    id: i32 = -1
+    name: str = ""
+    active: i32 = 1
+    parent_ptr: i64 = 0
+    first_child_ptr: i64 = 0
+    next_sibling_ptr: i64 = 0
+    mesh_id: i32 = -1
+    pos_x: f32 = 0.0
+    pos_y: f32 = 0.0
+    pos_z: f32 = 0.0
+    rot_x: f32 = 0.0
+    rot_y: f32 = 0.0
+    rot_z: f32 = 0.0
+    scale_x: f32 = 1.0
+    scale_y: f32 = 1.0
+    scale_z: f32 = 1.0
+
+@heap struct RootNode extends Node:
+    marker: i32 = 0
+
+@heap struct Node3D extends Node:
+    body_type: i32 = 0
+    collision_type: i32 = 0
+    velocity_x: f32 = 0.0
+    velocity_y: f32 = 0.0
+    velocity_z: f32 = 0.0
+    mass: f32 = 1.0
+
+@heap struct Camera3D extends Node3D:
+    fov: f32 = 82.0
+    near_z: f32 = 0.1
+    far_z: f32 = 1000.0
+    current: i32 = 0
+
+@heap struct FlycamNode extends Node:
+    move_speed: f32 = 5.0
+    fast_mult: f32 = 2.0
+    yaw: f32 = 0.0
+    pitch: f32 = 0.0
+    captured: i32 = 1
+    look_ready: i32 = 0
+    aim_x: i32 = 0
+    aim_y: i32 = 0
+
+@heap struct GoblinGroupNode extends Node:
+    sum_x: f32 = 0.0
+    sum_z: f32 = 0.0
+    member_count: i32 = 0
+    leader_index: i32 = -1
+    leader_x: f32 = 0.0
+    leader_z: f32 = 0.0
+    center_x: f32 = 0.0
+    center_z: f32 = 0.0
+
+@heap struct GoblinNode extends Node:
+    home_x: f32 = 0.0
+    home_z: f32 = 0.0
+    yaw: f32 = 0.0
+    phase: i32 = 0
+    timer: f32 = 0.0
+    phase_tick: i32 = 0
+    dir_x: f32 = 0.0
+    dir_z: f32 = 0.0
+    group_id: i32 = -1
+    role: i32 = 0
+    social_timer: f32 = 0.0
+
+@heap struct EarthNode extends Node:
+    ground_id: i32 = -1
+    ground_size: f32 = 800.0
+    goblin_count: i32 = 100000
+    group_count: i32 = 220
+    spawn_radius: f32 = 360.0
+
+fun node_store_create(count: i32) -> i64:
+    if count <= 0:
+        return 0
+    return Memory.malloc_zeroed((count as i64) * 8)
+
+fun node_store_get(store: i64, index: i32) -> i64:
+    if store == 0:
+        return 0
+    if index < 0:
+        return 0
+    return Memory.read_i64(store + (index as i64) * 8)
+
+fun node_store_set(store: i64, index: i32, node_ptr: i64):
+    if store == 0:
+        return
+    if index < 0:
+        return
+    Memory.write_i64(store + (index as i64) * 8, node_ptr)
+
+fun node_store_destroy(store: i64, count: i32, destroy_nodes: i32):
+    if store == 0:
+        return
+    i: i32 = 0
+    ptr: i64 = 0
+    if destroy_nodes == 1:
+        while i < count:
+            ptr = node_store_get(store, i)
+            if ptr != 0:
+                Memory.free(ptr)
+            i = i + 1
+    Memory.free(store)
+
+fun node_destroy(node_ptr: i64):
+    if node_ptr != 0:
+        Memory.free(node_ptr)
+
+fun node_destroy_tree(node_ptr: i64):
+    if node_ptr == 0:
+        return
+    node: Node = node_ptr as Node
+    child_ptr: i64 = node.first_child_ptr
+    next_ptr: i64 = 0
+    while child_ptr != 0:
+        child: Node = child_ptr as Node
+        next_ptr = child.next_sibling_ptr
+        node_destroy_tree(child_ptr)
+        child_ptr = next_ptr
+    Memory.free(node_ptr)
+
+attach Node:
+
+    fun add_child(self, child_ptr: i64):
+        if child_ptr == 0:
+            return
+        child: Node = child_ptr as Node
+        child.parent_ptr = self as i64
+        child.next_sibling_ptr = self.first_child_ptr
+        self.first_child_ptr = child_ptr
+
+    fun set_position(self, px: f32, py: f32, pz: f32) -> Node:
+        self.pos_x = px
+        self.pos_y = py
+        self.pos_z = pz
+        return self
+
+    fun set_rotation(self, x: f32, y: f32, z: f32) -> Node:
+        self.rot_x = x
+        self.rot_y = y
+        self.rot_z = z
+        return self
+
+    fun set_scale(self, x: f32, y: f32, z: f32) -> Node:
+        self.scale_x = x
+        self.scale_y = y
+        self.scale_z = z
+        return self
+
+attach Node3D:
+
+    static fun create(name: str) -> Node3D:
+        return node3d_create(name)
+
+    fun add_child(self, child: Node3D):
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = self as i64
+        child.next_sibling_ptr = self.first_child_ptr
+        self.first_child_ptr = child as i64
+
+    fun add_child(self, child: Camera3D):
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = self as i64
+        child.next_sibling_ptr = self.first_child_ptr
+        self.first_child_ptr = child as i64
+
+    fun position(self, x: f32, y: f32, z: f32) -> Node3D:
+        self.pos_x = x
+        self.pos_y = y
+        self.pos_z = z
+        return self
+
+    fun rotation(self, x: f32, y: f32, z: f32) -> Node3D:
+        self.rot_x = x
+        self.rot_y = y
+        self.rot_z = z
+        return self
+
+    fun scale(self, x: f32, y: f32, z: f32) -> Node3D:
+        self.scale_x = x
+        self.scale_y = y
+        self.scale_z = z
+        return self
+
+    fun velocity(self, x: f32, y: f32, z: f32) -> Node3D:
+        self.velocity_x = x
+        self.velocity_y = y
+        self.velocity_z = z
+        return self
+
+    fun translate(self, x: f32, y: f32, z: f32) -> Node3D:
+        self.pos_x = self.pos_x + x
+        self.pos_y = self.pos_y + y
+        self.pos_z = self.pos_z + z
+        return self
+
+    fun rotate(self, x: f32, y: f32, z: f32) -> Node3D:
+        self.rot_x = self.rot_x + x
+        self.rot_y = self.rot_y + y
+        self.rot_z = self.rot_z + z
+        return self
+
+    fun as_static(self) -> Node3D:
+        self.body_type = 1
+        return self
+
+    fun as_dynamic(self) -> Node3D:
+        self.body_type = 0
+        return self
+
+    fun as_player(self) -> Node3D:
+        self.body_type = 2
+        return self
+
+    fun with_box_collision(self) -> Node3D:
+        self.collision_type = 1
+        return self
+
+    fun without_collision(self) -> Node3D:
+        self.collision_type = 0
+        return self
+
+    fun destroy(self):
+        node_destroy(self as i64)
+
+    fun destroy_tree(self):
+        node_destroy_tree(self as i64)
+
+attach Camera3D:
+
+    static fun create(name: str) -> Camera3D:
+        return camera3d_create(name)
+
+    fun position(self, x: f32, y: f32, z: f32) -> Camera3D:
+        self.pos_x = x
+        self.pos_y = y
+        self.pos_z = z
+        return self
+
+    fun rotation(self, x: f32, y: f32, z: f32) -> Camera3D:
+        self.rot_x = x
+        self.rot_y = y
+        self.rot_z = z
+        return self
+
+    fun set_fov(self, fov: f32) -> Camera3D:
+        self.fov = fov
+        return self
+
+    fun make_current(self) -> Camera3D:
+        self.current = 1
+        return self
+
+    fun destroy(self):
+        node_destroy(self as i64)
+
+attach RootNode:
+
+    fun destroy(self):
+        node_destroy(self as i64)
+
+attach FlycamNode:
+
+    fun destroy(self):
+        node_destroy(self as i64)
+
+attach EarthNode:
+
+    fun destroy(self):
+        node_destroy(self as i64)
+
+fun root_node_create(name: str, id: i32) -> RootNode:
+    node: RootNode = RootNode()
+    node.id = id
+    node.name = name
+    node.active = 1
+    node.parent_ptr = 0
+    node.first_child_ptr = 0
+    node.next_sibling_ptr = 0
+    node.mesh_id = -1
+    node.pos_x = 0.0
+    node.pos_y = 0.0
+    node.pos_z = 0.0
+    node.rot_x = 0.0
+    node.rot_y = 0.0
+    node.rot_z = 0.0
+    node.scale_x = 1.0
+    node.scale_y = 1.0
+    node.scale_z = 1.0
+    node.marker = 0
+    return node
+
+fun node3d_create(name: str) -> Node3D:
+    node: Node3D = Node3D()
+    node.id = -1
+    node.name = name
+    node.active = 1
+    node.parent_ptr = 0
+    node.first_child_ptr = 0
+    node.next_sibling_ptr = 0
+    node.mesh_id = -1
+    node.pos_x = 0.0
+    node.pos_y = 0.0
+    node.pos_z = 0.0
+    node.rot_x = 0.0
+    node.rot_y = 0.0
+    node.rot_z = 0.0
+    node.scale_x = 1.0
+    node.scale_y = 1.0
+    node.scale_z = 1.0
+    node.body_type = 0
+    node.collision_type = 0
+    node.velocity_x = 0.0
+    node.velocity_y = 0.0
+    node.velocity_z = 0.0
+    node.mass = 1.0
+    return node
+
+fun camera3d_create(name: str) -> Camera3D:
+    node: Camera3D = Camera3D()
+    node.id = -1
+    node.name = name
+    node.active = 1
+    node.parent_ptr = 0
+    node.first_child_ptr = 0
+    node.next_sibling_ptr = 0
+    node.mesh_id = -1
+    node.pos_x = 0.0
+    node.pos_y = 0.0
+    node.pos_z = 0.0
+    node.rot_x = 0.0
+    node.rot_y = 0.0
+    node.rot_z = 0.0
+    node.scale_x = 1.0
+    node.scale_y = 1.0
+    node.scale_z = 1.0
+    node.body_type = 0
+    node.collision_type = 0
+    node.velocity_x = 0.0
+    node.velocity_y = 0.0
+    node.velocity_z = 0.0
+    node.mass = 1.0
+    node.fov = 82.0
+    node.near_z = 0.1
+    node.far_z = 1000.0
+    node.current = 0
+    return node
+
+fun flycam_node_create(px: f32, py: f32, pz: f32) -> FlycamNode:
+    node: FlycamNode = FlycamNode()
+    node.id = 1
+    node.name = "Flycam"
+    node.active = 1
+    node.parent_ptr = 0
+    node.first_child_ptr = 0
+    node.next_sibling_ptr = 0
+    node.mesh_id = -1
+    node.pos_x = px
+    node.pos_y = py
+    node.pos_z = pz
+    node.rot_x = 0.0
+    node.rot_y = 0.0
+    node.rot_z = 0.0
+    node.scale_x = 1.0
+    node.scale_y = 1.0
+    node.scale_z = 1.0
+    node.move_speed = 5.0
+    node.fast_mult = 2.0
+    node.yaw = 0.0
+    node.pitch = 0.0
+    node.captured = 1
+    node.look_ready = 0
+    node.aim_x = 0
+    node.aim_y = 0
+    return node
+
+fun goblin_group_node_create(index: i32) -> GoblinGroupNode:
+    node: GoblinGroupNode = GoblinGroupNode()
+    node.id = index
+    node.name = "GoblinGroup"
+    node.active = 1
+    node.parent_ptr = 0
+    node.first_child_ptr = 0
+    node.next_sibling_ptr = 0
+    node.mesh_id = -1
+    node.pos_x = 0.0
+    node.pos_y = 0.0
+    node.pos_z = 0.0
+    node.rot_x = 0.0
+    node.rot_y = 0.0
+    node.rot_z = 0.0
+    node.scale_x = 1.0
+    node.scale_y = 1.0
+    node.scale_z = 1.0
+    node.sum_x = 0.0
+    node.sum_z = 0.0
+    node.member_count = 0
+    node.leader_index = -1
+    node.leader_x = 0.0
+    node.leader_z = 0.0
+    node.center_x = 0.0
+    node.center_z = 0.0
+    return node
+
+fun goblin_node_create(index: i32, mesh_id: i32, px: f32, pz: f32, group_id: i32) -> GoblinNode:
+    role: i32 = 0
+    if group_id >= 0:
+        role = 1
+    node: GoblinNode = GoblinNode()
+    node.id = index
+    node.name = "Goblin"
+    node.active = 1
+    node.parent_ptr = 0
+    node.first_child_ptr = 0
+    node.next_sibling_ptr = 0
+    node.mesh_id = mesh_id
+    node.pos_x = px
+    node.pos_y = 0.85
+    node.pos_z = pz
+    node.rot_x = 0.0
+    node.rot_y = 0.0
+    node.rot_z = 0.0
+    node.scale_x = 0.5
+    node.scale_y = 1.7
+    node.scale_z = 0.5
+    node.home_x = px
+    node.home_z = pz
+    node.yaw = 0.0
+    node.phase = 0
+    node.timer = 0.0
+    node.phase_tick = 0
+    node.dir_x = 0.0
+    node.dir_z = 0.0
+    node.group_id = group_id
+    node.role = role
+    node.social_timer = 0.0
+    return node
+
+fun earth_node_create() -> EarthNode:
+    node: EarthNode = EarthNode()
+    node.id = 2
+    node.name = "Earth"
+    node.active = 1
+    node.parent_ptr = 0
+    node.first_child_ptr = 0
+    node.next_sibling_ptr = 0
+    node.mesh_id = -1
+    node.pos_x = 0.0
+    node.pos_y = 0.0
+    node.pos_z = 0.0
+    node.rot_x = 0.0
+    node.rot_y = 0.0
+    node.rot_z = 0.0
+    node.scale_x = 1.0
+    node.scale_y = 1.0
+    node.scale_z = 1.0
+    node.ground_id = -1
+    node.ground_size = 800.0
+    node.goblin_count = 100000
+    node.group_count = 220
+    node.spawn_radius = 360.0
+    return node

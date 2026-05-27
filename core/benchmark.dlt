@@ -1,0 +1,138 @@
+##############################
+# Frog - Object Benchmark
+# Measures update cost through Frog's OOP scene API.
+##############################
+
+struct ObjectBench:
+    capacity: i32 = 0
+    count_ptr: i64 = 0
+    names: i64 = 0
+    active: i64 = 0
+    positions: i64 = 0
+    rotations: i64 = 0
+    scales: i64 = 0
+    velocities: i64 = 0
+    checksum: f32 = 0.0
+
+attach ObjectBench:
+
+    static fun create(count: i32) -> ObjectBench:
+        scene: Scene = Scene.create(count)
+        b: ObjectBench = ObjectBench(
+            capacity=scene.capacity,
+            count_ptr=scene.count_ptr,
+            names=scene.names,
+            active=scene.active,
+            positions=scene.positions,
+            rotations=scene.rotations,
+            scales=scene.scales,
+            velocities=scene.velocities,
+            checksum=0.0
+        )
+        if count <= 0:
+            return b
+        b.seed()
+        return b
+
+    fun scene(self) -> Scene:
+        return Scene(
+            capacity=self.capacity,
+            count_ptr=self.count_ptr,
+            names=self.names,
+            active=self.active,
+            positions=self.positions,
+            rotations=self.rotations,
+            scales=self.scales,
+            velocities=self.velocities
+        )
+
+    fun is_valid(self) -> i32:
+        scene: Scene = self.scene()
+        return scene.is_valid()
+
+    fun seed(self):
+        if self.is_valid() == 0:
+            return
+        scene: Scene = self.scene()
+        i: i32 = 0
+        while i < self.capacity:
+            x: f32 = rand_range(i, 17, 1, 0.0 - 100.0, 100.0)
+            z: f32 = rand_range(i, 17, 2, 0.0 - 100.0, 100.0)
+            vx: f32 = rand_range(i, 17, 3, 0.0 - 2.0, 2.0)
+            vz: f32 = rand_range(i, 17, 4, 0.0 - 2.0, 2.0)
+            obj: GameObject = scene.spawn("object")
+            obj.position(x, 0.0, z)
+            obj.velocity(vx, 0.0, vz)
+            i = i + 1
+
+    fun update_all(self, dt: f32):
+        if self.is_valid() == 0:
+            return
+        scene: Scene = self.scene()
+        scene.update_all(dt)
+
+        sum: f32 = 0.0
+        count: i32 = Memory.read_i32(self.count_ptr)
+        i: i32 = 0
+        while i < count:
+            off3: i64 = (i as i64) * 12
+            x: f32 = Memory.read_f32(self.positions + off3)
+            z: f32 = Memory.read_f32(self.positions + off3 + 8)
+            if x > 120.0:
+                x = 0.0 - 120.0
+            if x < 0.0 - 120.0:
+                x = 120.0
+            if z > 120.0:
+                z = 0.0 - 120.0
+            if z < 0.0 - 120.0:
+                z = 120.0
+            Memory.write_f32(self.positions + off3, x)
+            Memory.write_f32(self.positions + off3 + 8, z)
+            sum = sum + x * 0.001 + z * 0.002
+            i = i + 1
+        self.checksum = sum
+
+    fun run(self, iterations: i32) -> f64:
+        if self.is_valid() == 0:
+            return 0.0
+        start: f64 = engine_time_seconds()
+        i: i32 = 0
+        while i < iterations:
+            self.update_all(0.016667)
+            i = i + 1
+        finish: f64 = engine_time_seconds()
+        return finish - start
+
+    fun objects_per_second(self, elapsed: f64, iterations: i32) -> f64:
+        if elapsed <= 0.0:
+            return 0.0
+        count: i32 = 0
+        if self.count_ptr != 0:
+            count = Memory.read_i32(self.count_ptr)
+        total: i64 = (count as i64) * (iterations as i64)
+        return (total as f64) / elapsed
+
+    fun cleanup(self):
+        if self.count_ptr != 0:
+            Memory.free(self.count_ptr)
+        if self.names != 0:
+            Memory.free(self.names)
+        if self.active != 0:
+            Memory.free(self.active)
+        if self.positions != 0:
+            Memory.free(self.positions)
+        if self.rotations != 0:
+            Memory.free(self.rotations)
+        if self.scales != 0:
+            Memory.free(self.scales)
+        if self.velocities != 0:
+            Memory.free(self.velocities)
+        self.capacity = 0
+        self.count_ptr = 0
+        self.names = 0
+        self.active = 0
+        self.positions = 0
+        self.rotations = 0
+        self.scales = 0
+        self.velocities = 0
+        self.checksum = 0.0

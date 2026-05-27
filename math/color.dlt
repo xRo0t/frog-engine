@@ -1,0 +1,43 @@
+##############################
+# Frog - Color (RGBA)
+##############################
+
+struct Color:
+    r: f32 = 1.0
+    g: f32 = 1.0
+    b: f32 = 1.0
+    a: f32 = 1.0
+
+attach Color:
+
+    static fun rgba(r: f32, g: f32, b: f32, a: f32) -> Color:
+        c: Color = Color()
+        c.r = r
+        c.g = g
+        c.b = b
+        c.a = a
+        return c
+
+    static fun rgb(r: f32, g: f32, b: f32) -> Color:
+        return Color.rgba(r, g, b, 1.0)
+
+    static fun white() -> Color:
+        return Color.rgba(1.0, 1.0, 1.0, 1.0)
+
+    static fun black() -> Color:
+        return Color.rgba(0.0, 0.0, 0.0, 1.0)
+
+    static fun red() -> Color:
+        return Color.rgba(1.0, 0.0, 0.0, 1.0)
+
+    static fun green() -> Color:
+        return Color.rgba(0.0, 1.0, 0.0, 1.0)
+
+    static fun blue() -> Color:
+        return Color.rgba(0.0, 0.0, 1.0, 1.0)
+
+    static fun gray(v: f32) -> Color:
+        return Color.rgba(v, v, v, 1.0)
+
+    fun with_alpha(self, a: f32) -> Color:
+        return Color.rgba(self.r, self.g, self.b, a)

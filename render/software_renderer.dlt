@@ -1,0 +1,150 @@
+##############################
+# Frog - Software Renderer
+# Simple BGRA framebuffer renderer for early engine demos.
+##############################
+
+struct SoftwareRenderer:
+    width: i32 = 0
+    height: i32 = 0
+    pitch: i32 = 0
+    pixels: i64 = 0
+    valid: i32 = 0
+
+attach SoftwareRenderer:
+
+    static fun create(width: i32, height: i32) -> SoftwareRenderer:
+        r: SoftwareRenderer = SoftwareRenderer(width=0, height=0, pitch=0, pixels=0, valid=0)
+        if width <= 0 or height <= 0:
+            return r
+        r.width = width
+        r.height = height
+        r.pitch = width * 4
+        size: i64 = (width as i64) * (height as i64) * 4
+        r.pixels = Memory.malloc(size)
+        if r.pixels != 0:
+            r.valid = 1
+        return r
+
+    fun resize(self, width: i32, height: i32):
+        if width <= 0 or height <= 0:
+            if self.pixels != 0:
+                Memory.free(self.pixels)
+            self.width = 0
+            self.height = 0
+            self.pitch = 0
+            self.pixels = 0
+            self.valid = 0
+            return
+        if self.pixels != 0 and self.width == width and self.height == height:
+            return
+        if self.pixels != 0:
+            Memory.free(self.pixels)
+        self.width = width
+        self.height = height
+        self.pitch = width * 4
+        self.valid = 0
+        size: i64 = (width as i64) * (height as i64) * 4
+        self.pixels = Memory.malloc(size)
+        if self.pixels != 0:
+            self.valid = 1
+
+    fun clear(self, color: i32):
+        if self.valid == 0:
+            return
+        count: i64 = (self.width as i64) * (self.height as i64)
+        i: i64 = 0
+        addr: i64 = self.pixels
+        while i < count:
+            Memory.write_i32(addr, color)
+            addr = addr + 4
+            i = i + 1
+
+    fun fill_rect(self, x: i32, y: i32, width: i32, height: i32, color: i32):
+        if self.valid == 0:
+            return
+        if width <= 0 or height <= 0:
+            return
+
+        start_x: i32 = x
+        start_y: i32 = y
+        end_x: i32 = x + width
+        end_y: i32 = y + height
+
+        if start_x < 0:
+            start_x = 0
+        if start_y < 0:
+            start_y = 0
+        if end_x > self.width:
+            end_x = self.width
+        if end_y > self.height:
+            end_y = self.height
+        if start_x >= end_x or start_y >= end_y:
+            return
+
+        yy: i32 = start_y
+        xx: i32 = start_x
+        row: i64 = 0
+        while yy < end_y:
+            row = self.pixels + (yy as i64) * (self.pitch as i64)
+            xx = start_x
+            while xx < end_x:
+                Memory.write_i32(row + (xx as i64) * 4, color)
+                xx = xx + 1
+            yy = yy + 1
+
+    fun pixel(self, x: i32, y: i32, color: i32):
+        if self.valid == 0:
+            return
+        if x < 0 or y < 0:
+            return
+        if x >= self.width or y >= self.height:
+            return
+        Memory.write_i32(self.pixels + (y as i64) * (self.pitch as i64) + (x as i64) * 4, color)
+
+    fun line(self, x0_in: i32, y0_in: i32, x1: i32, y1: i32, color: i32):
+        if self.valid == 0:
+            return
+        x0: i32 = x0_in
+        y0: i32 = y0_in
+        dx: i32 = x1 - x0
+        if dx < 0:
+            dx = 0 - dx
+        dy: i32 = y1 - y0
+        if dy < 0:
+            dy = 0 - dy
+        sx: i32 = 1
+        if x0 >= x1:
+            sx = 0 - 1
+        sy: i32 = 1
+        if y0 >= y1:
+            sy = 0 - 1
+        err: i32 = dx - dy
+        e2: i32 = 0
+        done: i32 = 0
+
+        while done == 0:
+            self.pixel(x0, y0, color)
+            if x0 == x1 and y0 == y1:
+                done = 1
+            else:
+                e2 = err * 2
+                if e2 > (0 - dy):
+                    err = err - dy
+                    x0 = x0 + sx
+                if e2 < dx:
+                    err = err + dx
+                    y0 = y0 + sy
+
+    fun present_handle(self, hwnd: i64) -> i32:
+        if self.valid == 0:
+            return 0
+        return window_present_framebuffer(hwnd, self.pixels, self.width, self.height, self.pitch)
+
+    fun destroy(self):
+        if self.pixels != 0:
+            Memory.free(self.pixels)
+        self.width = 0
+        self.height = 0
+        self.pitch = 0
+        self.pixels = 0
+        self.valid = 0

@@ -1,0 +1,66 @@
+##############################
+# Frog - Quaternion (x, y, z, w)
+##############################
+
+struct Quat:
+    x: f32 = 0.0
+    y: f32 = 0.0
+    z: f32 = 0.0
+    w: f32 = 1.0
+
+attach Quat:
+
+    static fun identity() -> Quat:
+        return Quat()
+
+    static fun make(x: f32, y: f32, z: f32, w: f32) -> Quat:
+        q: Quat = Quat()
+        q.x = x
+        q.y = y
+        q.z = z
+        q.w = w
+        return q
+
+    # Axis-angle rotation. axis should be normalized; angle in degrees.
+    static fun from_axis_angle(ax: f32, ay: f32, az: f32, angle_deg: f32) -> Quat:
+        pi: f32 = 3.14159265
+        half: f32 = angle_deg * pi / 360.0
+        s: f32 = @sin(half)
+        return Quat.make(ax * s, ay * s, az * s, @cos(half))
+
+    # Euler (deg) in yaw-pitch-roll order (y, x, z).
+    static fun from_euler_deg(yaw: f32, pitch: f32, roll: f32) -> Quat:
+        pi: f32 = 3.14159265
+        cy: f32 = @cos(yaw   * pi / 360.0)
+        sy: f32 = @sin(yaw   * pi / 360.0)
+        cp: f32 = @cos(pitch * pi / 360.0)
+        sp: f32 = @sin(pitch * pi / 360.0)
+        cr: f32 = @cos(roll  * pi / 360.0)
+        sr: f32 = @sin(roll  * pi / 360.0)
+        q: Quat = Quat()
+        q.w = cr * cp * cy + sr * sp * sy
+        q.x = cr * sp * cy + sr * cp * sy
+        q.y = cr * cp * sy - sr * sp * cy
+        q.z = sr * cp * cy - cr * sp * sy
+        return q
+
+    fun mul(self, b: Quat) -> Quat:
+        r: Quat = Quat()
+        r.x = self.w * b.x + self.x * b.w + self.y * b.z - self.z * b.y
+        r.y = self.w * b.y - self.x * b.z + self.y * b.w + self.z * b.x
+        r.z = self.w * b.z + self.x * b.y - self.y * b.x + self.z * b.w
+        r.w = self.w * b.w - self.x * b.x - self.y * b.y - self.z * b.z
+        return r
+
+    fun conjugate(self) -> Quat:
+        return Quat.make(0.0 - self.x, 0.0 - self.y, 0.0 - self.z, self.w)
+
+    fun length(self) -> f32:
+        return @sqrt(self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w)
+
+    fun normalize(self) -> Quat:
+        l: f32 = self.length()
+        if l < 0.0001:
+            return Quat.identity()
+        inv: f32 = 1.0 / l
+        return Quat.make(self.x * inv, self.y * inv, self.z * inv, self.w * inv)

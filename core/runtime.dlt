@@ -1,0 +1,118 @@
+##############################
+# Frog - Engine Runtime
+# Owns window, Vulkan state, swapchain, render pass, and renderer.
+##############################
+
+@heap struct EngineRuntime:
+    app: App = App()
+    ctx: VulkanContext = VulkanContext()
+    swapchain: Swapchain = Swapchain()
+    render_pass: RenderPass = RenderPass()
+    renderer: Renderer = Renderer.create()
+    width: i32 = 0
+    height: i32 = 0
+    ready_flag: i32 = 0
+    vsync_enabled: i32 = 1
+
+attach EngineRuntime:
+
+    static fun create(title: str, width: i32, height: i32) -> EngineRuntime:
+        return EngineRuntime.create(title, width, height, 1)
+
+    static fun create(title: str, width: i32, height: i32, vsync: i32) -> EngineRuntime:
+        sync: i32 = 1
+        if vsync == 0:
+            sync = 0
+        runtime: EngineRuntime = EngineRuntime(width=width, height=height, ready_flag=0, vsync_enabled=sync)
+        runtime.app = App.create(title, width, height)
+
+        ctx: VulkanContext = VulkanContext()
+        if ctx.init(runtime.app.handle()) == 0:
+            print("GPU context init failed")
+            runtime.app.shutdown()
+            return runtime
+        runtime.ctx = ctx
+
+        swapchain: Swapchain = Swapchain()
+        if swapchain.init(ctx.vk_instance, ctx.vk_physical_device, ctx.vk_device, ctx.vk_surface, width, height, ctx.graphics_family, ctx.present_family, sync) == 0:
+            print("GPU swapchain init failed")
+            ctx.cleanup()
+            runtime.app.shutdown()
+            return runtime
+        runtime.swapchain = swapchain
+
+        vert_shader: EmbeddedShader = get_generic_vert_shader()
+        frag_shader: EmbeddedShader = get_generic_frag_shader()
+        render_pass: RenderPass = RenderPass()
+        if render_pass.init(ctx.vk_device, swapchain.format, swapchain.image_count, swapchain.image_views, swapchain.depth_view, width, height, ctx.graphics_family, vert_shader.data, vert_shader.size, frag_shader.data, frag_shader.size) == 0:
+            print("GPU render pass init failed")
+            swapchain.cleanup(ctx.vk_instance, ctx.vk_device)
+            ctx.cleanup()
+            runtime.app.shutdown()
+            return runtime
+        runtime.render_pass = render_pass
+
+        renderer: Renderer = Renderer.create()
+        renderer.init(ctx.vk_device, ctx.vk_physical_device, ctx.vk_graphics_queue, ctx.vk_present_queue)
+        runtime.renderer = renderer
+        runtime.ready_flag = 1
+        return runtime
+
+    fun ready(self) -> i32:
+        return self.ready_flag
+
+    fun running(self) -> i32:
+        if self.ready_flag == 0:
+            return 0
+        return self.app.running()
+
+    fun begin_frame(self) -> f32:
+        return self.app.begin_frame()
+
+    fun capture_mouse(self):
+        self.app.capture_mouse()
+
+    fun release_mouse(self):
+        self.app.release_mouse()
+
+    fun center_mouse(self):
+        self.app.center_mouse()
+
+    fun mouse_x(self) -> i32:
+        return self.app.mouse_x()
+
+    fun mouse_y(self) -> i32:
+        return self.app.mouse_y()
+
+    fun active_renderer(self) -> Renderer:
+        return self.renderer
+
+    fun upload_plane_mesh(self) -> i32:
+        return self.renderer.upload_plane_mesh()
+
+    fun upload_cube_mesh(self) -> i32:
+        return self.renderer.upload_cube_mesh()
+
+    fun register_instance(self, source_mesh: i32) -> i32:
+        return self.renderer.register_instance(source_mesh)
+
+    fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
+        self.renderer.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
+
+    fun render_flycam(self, camera: FlycamNode):
+        self.renderer.render_camera_frame(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height)
+
+    fun render_camera(self, camera: Camera3D):
+        self.renderer.render_camera_frame(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height)
+
+    fun shutdown(self):
+        if self.ready_flag == 0:
+            return
+        self.release_mouse()
+        vkDeviceWaitIdle(self.ctx.vk_device)
+        self.renderer.cleanup()
+        self.render_pass.cleanup(self.ctx.vk_device)
+        self.swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
+        self.ctx.cleanup()
+        self.app.shutdown()
+        self.ready_flag = 0
