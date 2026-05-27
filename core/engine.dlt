@@ -3,83 +3,117 @@
 # Public application entry point.
 ##############################
 
-@heap struct Engine:
-    title: str = "Frog Engine"
-    width: i32 = 1280
-    height: i32 = 720
-    scene: Scene = Scene()
-    has_scene: i32 = 0
-    runtime: EngineRuntime = EngineRuntime()
-    vsync_enabled: i32 = 1
+struct DisplayWindow:
+    _placeholder: i32 = 0
+
+struct Properties:
+    _placeholder: i32 = 0
+
+struct EngineScene:
+    _placeholder: i32 = 0
+
+struct Engine:
+    _placeholder: i32 = 0
+    static window: DisplayWindow = DisplayWindow()
+    static properties: Properties = Properties()
+    static scene: EngineScene = EngineScene()
+
+static g_engine_title: str = "Frog Engine"
+static g_engine_width: i32 = 1280
+static g_engine_height: i32 = 720
+static g_engine_scene: Scene = Scene()
+static g_engine_has_scene: i32 = 0
+static g_engine_runtime: EngineRuntime = EngineRuntime()
+static g_engine_vsync_enabled: i32 = 1
+
+attach DisplayWindow:
+
+    static fun create(title: str, width: i32, height: i32):
+        g_engine_title = title
+        g_engine_width = width
+        g_engine_height = height
+        g_engine_scene = Scene()
+        g_engine_has_scene = 0
+        g_engine_runtime = EngineRuntime()
+        g_engine_vsync_enabled = 1
+
+    static fun width() -> i32:
+        return g_engine_width
+
+    static fun height() -> i32:
+        return g_engine_height
+
+attach Properties:
+
+    static fun set_vsync(enabled: i32):
+        if enabled == 0:
+            g_engine_vsync_enabled = 0
+        else:
+            g_engine_vsync_enabled = 1
+
+    static fun vsync() -> i32:
+        return g_engine_vsync_enabled
+
+attach EngineScene:
+
+    static fun set(scene: Scene):
+        g_engine_scene = scene
+        g_engine_has_scene = 1
+
+    static fun destroy():
+        Engine.destroy_scene()
 
 attach Engine:
 
-    static fun create(title: str, width: i32, height: i32) -> Engine:
-        return Engine(title=title, width=width, height=height, has_scene=0, vsync_enabled=1)
-
-    fun set_scene(self, scene: Scene):
-        self.scene = scene
-        self.has_scene = 1
-
-    fun set_vsync(self, enabled: i32) -> Engine:
-        if enabled == 0:
-            self.vsync_enabled = 0
-        else:
-            self.vsync_enabled = 1
-        return self
-
-    fun vsync(self) -> i32:
-        return self.vsync_enabled
-
-    fun start(self) -> i32:
-        if self.runtime.ready() == 1:
+    static fun start() -> i32:
+        if g_engine_runtime.ready() == 1:
             return 1
-        self.runtime = EngineRuntime.create(self.title, self.width, self.height, self.vsync_enabled)
-        return self.runtime.ready()
+        g_engine_runtime = EngineRuntime.create(g_engine_title, g_engine_width, g_engine_height, g_engine_vsync_enabled)
+        return g_engine_runtime.ready()
 
-    fun running(self) -> i32:
-        return self.runtime.running()
+    static fun running() -> i32:
+        return g_engine_runtime.running()
 
-    fun begin_frame(self) -> f32:
-        return self.runtime.begin_frame()
+    static fun begin_frame() -> f32:
+        return g_engine_runtime.begin_frame()
 
-    fun capture_mouse(self):
-        self.runtime.capture_mouse()
+    static fun capture_mouse():
+        g_engine_runtime.capture_mouse()
 
-    fun release_mouse(self):
-        self.runtime.release_mouse()
+    static fun release_mouse():
+        g_engine_runtime.release_mouse()
 
-    fun center_mouse(self):
-        self.runtime.center_mouse()
+    static fun center_mouse():
+        g_engine_runtime.center_mouse()
 
-    fun mouse_x(self) -> i32:
-        return self.runtime.mouse_x()
+    static fun mouse_x() -> i32:
+        return g_engine_runtime.mouse_x()
 
-    fun mouse_y(self) -> i32:
-        return self.runtime.mouse_y()
+    static fun mouse_y() -> i32:
+        return g_engine_runtime.mouse_y()
 
-    fun upload_plane_mesh(self) -> i32:
-        return self.runtime.upload_plane_mesh()
+    static fun upload_plane_mesh() -> i32:
+        return g_engine_runtime.upload_plane_mesh()
 
-    fun upload_cube_mesh(self) -> i32:
-        return self.runtime.upload_cube_mesh()
+    static fun upload_cube_mesh() -> i32:
+        return g_engine_runtime.upload_cube_mesh()
 
-    fun register_instance(self, source_mesh: i32) -> i32:
-        return self.runtime.register_instance(source_mesh)
+    static fun register_instance(source_mesh: i32) -> i32:
+        return g_engine_runtime.register_instance(source_mesh)
 
-    fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
-        self.runtime.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
+    static fun set_transform(mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
+        g_engine_runtime.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
 
-    fun render_flycam(self, camera: FlycamNode):
-        self.runtime.render_flycam(camera)
+    static fun render_flycam(camera: FlycamNode):
+        g_engine_runtime.render_flycam(camera)
 
-    fun render_camera(self, camera: Camera3D):
-        self.runtime.render_camera(camera)
+    static fun render_camera(camera: Camera3D):
+        g_engine_runtime.render_camera(camera)
 
-    fun destroy_scene(self):
-        if self.has_scene == 1:
-            self.scene.destroy()
-            self.has_scene = 0
+    static fun destroy_scene():
+        if g_engine_has_scene == 1:
+            g_engine_scene.destroy()
+            g_engine_has_scene = 0
 
-    fun shutdown(self):
-        self.runtime.shutdown()
+    static fun shutdown():
+        g_engine_runtime.shutdown()

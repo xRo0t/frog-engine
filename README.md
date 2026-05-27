@@ -36,8 +36,9 @@ Current local shape:
 - `AppWindow`, `Clock`, `App`, and `Input` provide the first app shell.
 - `Scene` + `GameObject` provide OOP user code over packed object storage.
 - `SoftwareRenderer` provides a basic framebuffer renderer for early demos.
-- `Engine` owns the public lifecycle and hides the Vulkan runtime backend.
-- `Engine.set_vsync(1/0)` controls synced vs uncapped swapchain presentation.
+- `Engine` owns the public static lifecycle and hides the Vulkan runtime backend.
+- `Engine.window`, `Engine.properties`, and `Engine.scene` group public setup APIs.
+- `Engine.properties.set_vsync(1/0)` controls synced vs uncapped swapchain presentation.
 - `ObjectBench` measures update throughput before rendering.
 
 Vulkan rendering is available through the `Engine` facade while lower-level

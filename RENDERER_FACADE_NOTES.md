@@ -8,15 +8,17 @@ Vulkan objects behind a clean high-level Frog API.
 The public game-facing API is now `Engine`:
 
 ```dolet
-engine: Engine = Engine.create("Frog Game", 1280, 720)
-engine.set_vsync(1)
-if engine.start() == 1:
-    mesh: i32 = engine.upload_cube_mesh()
-    engine.render_camera(camera)
-    engine.shutdown()
+Engine.window.create("Frog Game", 1280, 720)
+Engine.properties.set_vsync(1)
+if Engine.start() == 1:
+    mesh: i32 = Engine.upload_cube_mesh()
+    Engine.render_camera(camera)
+    Engine.shutdown()
 ```
 
-`Engine` owns the game-facing lifecycle. Internally it holds `EngineRuntime`,
+`Engine` owns the game-facing lifecycle through a single static runtime.
+Public configuration is grouped under namespaces such as `Engine.window`,
+`Engine.properties`, and `Engine.scene`. Internally it stores `EngineRuntime`,
 which owns the window, Vulkan context, swapchain, render pass, and renderer.
 `Renderer` wraps `GpuRendererCore`. Regular gameplay code should use `Engine`;
 the lower-level types remain runtime/backend plumbing.
@@ -118,24 +120,24 @@ These were fixed before enabling the facade:
 Longer term, the renderer API should become:
 
 ```dolet
-engine: Engine = Engine.create("Frog Game", 1280, 720)
+Engine.window.create("Frog Game", 1280, 720)
 scene: Scene = Scene.create()
 camera: Camera3D = Camera3D.create("camera")
 
-renderer: Renderer3D = Renderer3D.create(engine.app)
+renderer: Renderer3D = Renderer3D.create()
 model: Model = renderer.load_model("assets/character.gltf")
 
 player: Node3D = Node3D.create("player")
 player.set_model(model)
 scene.add_child(player)
 
-while engine.running():
-    dt: f32 = engine.begin_frame()
+while Engine.running():
+    dt: f32 = Engine.begin_frame()
     scene.update(dt)
     renderer.render(scene, camera)
 
 renderer.destroy()
-engine.shutdown()
+Engine.shutdown()
 ```
 
 Until then, keep the Vulkan context/swapchain/render pass in the Frog package
