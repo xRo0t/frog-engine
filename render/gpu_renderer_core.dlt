@@ -4,6 +4,11 @@
 # Queries Scene for renderable entities
 ##############################
 
+struct GpuBufferUpload:
+    handle: i64 = 0
+    memory: i64 = 0
+    ok: i32 = 0
+
 struct GpuRendererCore:
     device:            i64 = 0
     phys_device:       i64 = 0
@@ -13,6 +18,9 @@ struct GpuRendererCore:
     vb_handles:        i64 = 0
     vb_memories:       i64 = 0
     vb_vert_counts:    i64 = 0
+    ib_handles:        i64 = 0
+    ib_memories:       i64 = 0
+    ib_index_counts:   i64 = 0
     model_matrices:    i64 = 0
     vb_count:          i32 = 0
     vb_capacity:       i32 = 0
@@ -33,6 +41,9 @@ attach GpuRendererCore:
         self.vb_handles = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.vb_memories = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.vb_vert_counts = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.ib_handles = Memory.malloc_zeroed(self.vb_capacity * 8)
+        self.ib_memories = Memory.malloc_zeroed(self.vb_capacity * 8)
+        self.ib_index_counts = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.model_matrices = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.vb_count = 0
         # Pre-allocate scratch buffers (eliminates malloc/free per draw)
@@ -46,54 +57,66 @@ attach GpuRendererCore:
         new_handles: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_memories: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_vert_counts: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_ib_handles: i64 = Memory.malloc_zeroed(new_cap * 8)
+        new_ib_memories: i64 = Memory.malloc_zeroed(new_cap * 8)
+        new_ib_counts: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_matrices: i64 = Memory.malloc_zeroed(new_cap * 8)
         Memory.copy(new_handles, self.vb_handles, self.vb_capacity * 8)
         Memory.copy(new_memories, self.vb_memories, self.vb_capacity * 8)
         Memory.copy(new_vert_counts, self.vb_vert_counts, self.vb_capacity * 4)
+        Memory.copy(new_ib_handles, self.ib_handles, self.vb_capacity * 8)
+        Memory.copy(new_ib_memories, self.ib_memories, self.vb_capacity * 8)
+        Memory.copy(new_ib_counts, self.ib_index_counts, self.vb_capacity * 4)
         Memory.copy(new_matrices, self.model_matrices, self.vb_capacity * 8)
         Memory.free(self.vb_handles)
         Memory.free(self.vb_memories)
         Memory.free(self.vb_vert_counts)
+        Memory.free(self.ib_handles)
+        Memory.free(self.ib_memories)
+        Memory.free(self.ib_index_counts)
         Memory.free(self.model_matrices)
         self.vb_handles = new_handles
         self.vb_memories = new_memories
         self.vb_vert_counts = new_vert_counts
+        self.ib_handles = new_ib_handles
+        self.ib_memories = new_ib_memories
+        self.ib_index_counts = new_ib_counts
         self.model_matrices = new_matrices
         self.vb_capacity = new_cap
 
-    fun upload_mesh(self, vertices: i64, vertex_count: i32) -> i32:
-        if self.initialized == 0:
-            return 0 - 1
-        if self.vb_count >= self.vb_capacity:
-            self._grow_vb_arrays()
-        data_size: i64 = vertex_count * 24
+    fun _upload_buffer(self, data: i64, data_size: i64, usage: i32) -> GpuBufferUpload:
+        if data == 0:
+            return GpuBufferUpload()
+        if data_size <= 0:
+            return GpuBufferUpload()
         # Create buffer (VkBufferCreateInfo = 56 bytes)
         buf_ci: i64 = Memory.malloc_zeroed(56)
         if buf_ci == 0:
-            return 0 - 1
+            return GpuBufferUpload()
         Memory.write_i32(buf_ci, 12)
         Memory.write_ptr(buf_ci + 8, 0)
         Memory.write_i32(buf_ci + 16, 0)
         Memory.write_i64(buf_ci + 24, data_size)
-        Memory.write_i32(buf_ci + 32, 128)
+        Memory.write_i32(buf_ci + 32, usage)
         Memory.write_i32(buf_ci + 36, 0)
         Memory.write_i32(buf_ci + 40, 0)
         Memory.write_ptr(buf_ci + 48, 0)
         buf_ptr: i64 = Memory.malloc_zeroed(8)
         if buf_ptr == 0:
             Memory.free(buf_ci)
-            return 0 - 1
+            return GpuBufferUpload()
         buf_r: i32 = vkCreateBuffer(self.device, buf_ci, 0, buf_ptr)
         buf: i64 = Memory.read_ptr(buf_ptr)
         Memory.free(buf_ptr)
         Memory.free(buf_ci)
         if buf_r != 0:
-            return 0 - 1
+            return GpuBufferUpload()
 
         # Get memory requirements
         mem_req: i64 = Memory.malloc_zeroed(24)
         if mem_req == 0:
-            return 0 - 1
+            vkDestroyBuffer(self.device, buf, 0)
+            return GpuBufferUpload()
         vkGetBufferMemoryRequirements(self.device, buf, mem_req)
         req_size: i64 = Memory.read_i64(mem_req)
         req_bits: i32 = Memory.read_i32(mem_req + 16)
@@ -102,7 +125,8 @@ attach GpuRendererCore:
         # Find memory type (host visible + host coherent)
         mem_props: i64 = Memory.malloc_zeroed(520)
         if mem_props == 0:
-            return 0 - 1
+            vkDestroyBuffer(self.device, buf, 0)
+            return GpuBufferUpload()
         vkGetPhysicalDeviceMemoryProperties(self.phys_device, mem_props)
         type_count: i32 = Memory.read_i32(mem_props)
         mem_type_idx: i32 = 0 - 1
@@ -122,12 +146,14 @@ attach GpuRendererCore:
             ti = ti + 1
         Memory.free(mem_props)
         if mem_type_idx < 0:
-            return 0 - 1
+            vkDestroyBuffer(self.device, buf, 0)
+            return GpuBufferUpload()
 
         # Allocate device memory
         alloc_info: i64 = Memory.malloc_zeroed(32)
         if alloc_info == 0:
-            return 0 - 1
+            vkDestroyBuffer(self.device, buf, 0)
+            return GpuBufferUpload()
         Memory.set(alloc_info, 0, 32)
         Memory.write_i32(alloc_info, 5)
         Memory.write_ptr(alloc_info + 8, 0)
@@ -136,31 +162,80 @@ attach GpuRendererCore:
         mem_ptr: i64 = Memory.malloc_zeroed(8)
         if mem_ptr == 0:
             Memory.free(alloc_info)
-            return 0 - 1
+            vkDestroyBuffer(self.device, buf, 0)
+            return GpuBufferUpload()
         alloc_r: i32 = vkAllocateMemory(self.device, alloc_info, 0, mem_ptr)
         mem: i64 = Memory.read_ptr(mem_ptr)
         Memory.free(mem_ptr)
         Memory.free(alloc_info)
         if alloc_r != 0:
-            return 0 - 1
+            vkDestroyBuffer(self.device, buf, 0)
+            return GpuBufferUpload()
 
         # Bind and map
         vkBindBufferMemory(self.device, buf, mem, 0)
         data_pp: i64 = Memory.malloc_zeroed(8)
         if data_pp == 0:
-            return 0 - 1
+            vkDestroyBuffer(self.device, buf, 0)
+            vkFreeMemory(self.device, mem, 0)
+            return GpuBufferUpload()
         vkMapMemory(self.device, mem, 0, data_size, 0, data_pp)
         mapped: i64 = Memory.read_ptr(data_pp)
         Memory.free(data_pp)
         if mapped != 0:
-            Memory.copy(mapped, vertices, data_size)
+            Memory.copy(mapped, data, data_size)
         vkUnmapMemory(self.device, mem)
 
+        return GpuBufferUpload(handle=buf, memory=mem, ok=1)
+
+    fun upload_mesh(self, vertices: i64, vertex_count: i32) -> i32:
+        if self.initialized == 0:
+            return 0 - 1
+        if self.vb_count >= self.vb_capacity:
+            self._grow_vb_arrays()
+        data_size: i64 = vertex_count * 24
+        uploaded: GpuBufferUpload = self._upload_buffer(vertices, data_size, 128)
+        if uploaded.ok == 0:
+            return 0 - 1
         # Store
         idx: i32 = self.vb_count
-        Memory.write_ptr(self.vb_handles + idx * 8, buf)
-        Memory.write_ptr(self.vb_memories + idx * 8, mem)
+        Memory.write_ptr(self.vb_handles + idx * 8, uploaded.handle)
+        Memory.write_ptr(self.vb_memories + idx * 8, uploaded.memory)
         Memory.write_i32(self.vb_vert_counts + idx * 4, vertex_count)
+        Memory.write_ptr(self.ib_handles + idx * 8, 0)
+        Memory.write_ptr(self.ib_memories + idx * 8, 0)
+        Memory.write_i32(self.ib_index_counts + idx * 4, 0)
+        Memory.write_ptr(self.model_matrices + idx * 8, 0)
+        self.vb_count = idx + 1
+        return idx
+
+    fun upload_indexed_mesh(self, vertices: i64, vertex_count: i32, indices: i64, index_count: i32) -> i32:
+        if self.initialized == 0:
+            return 0 - 1
+        if vertex_count <= 0:
+            return 0 - 1
+        if index_count <= 0:
+            return 0 - 1
+        if self.vb_count >= self.vb_capacity:
+            self._grow_vb_arrays()
+        vb_size: i64 = (vertex_count as i64) * 24
+        ib_size: i64 = (index_count as i64) * 4
+        uploaded_vb: GpuBufferUpload = self._upload_buffer(vertices, vb_size, 128)
+        if uploaded_vb.ok == 0:
+            return 0 - 1
+        uploaded_ib: GpuBufferUpload = self._upload_buffer(indices, ib_size, 64)
+        if uploaded_ib.ok == 0:
+            vkDestroyBuffer(self.device, uploaded_vb.handle, 0)
+            vkFreeMemory(self.device, uploaded_vb.memory, 0)
+            return 0 - 1
+
+        idx: i32 = self.vb_count
+        Memory.write_ptr(self.vb_handles + idx * 8, uploaded_vb.handle)
+        Memory.write_ptr(self.vb_memories + idx * 8, uploaded_vb.memory)
+        Memory.write_i32(self.vb_vert_counts + idx * 4, vertex_count)
+        Memory.write_ptr(self.ib_handles + idx * 8, uploaded_ib.handle)
+        Memory.write_ptr(self.ib_memories + idx * 8, uploaded_ib.memory)
+        Memory.write_i32(self.ib_index_counts + idx * 4, index_count)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
         self.vb_count = idx + 1
         return idx
@@ -179,9 +254,14 @@ attach GpuRendererCore:
         # Copy VkBuffer handle (shared), set memory to 0 (don't free on cleanup)
         src_handle: i64 = Memory.read_ptr(self.vb_handles + src_vb_idx * 8)
         src_vc: i32 = Memory.read_i32(self.vb_vert_counts + src_vb_idx * 4)
+        src_ib_handle: i64 = Memory.read_ptr(self.ib_handles + src_vb_idx * 8)
+        src_ic: i32 = Memory.read_i32(self.ib_index_counts + src_vb_idx * 4)
         Memory.write_ptr(self.vb_handles + idx * 8, src_handle)
         Memory.write_ptr(self.vb_memories + idx * 8, 0)
         Memory.write_i32(self.vb_vert_counts + idx * 4, src_vc)
+        Memory.write_ptr(self.ib_handles + idx * 8, src_ib_handle)
+        Memory.write_ptr(self.ib_memories + idx * 8, 0)
+        Memory.write_i32(self.ib_index_counts + idx * 4, src_ic)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
         self.vb_count = idx + 1
         return idx
@@ -349,11 +429,14 @@ attach GpuRendererCore:
                 # Pre-allocate MVP scratch (reused, not freed per draw)
                 mvp_scratch: i64 = Memory.malloc_zeroed(64)
                 last_bound: i64 = 0
+                last_index_bound: i64 = 0
 
                 mi: i32 = 0
                 while mi < self.vb_count:
                     vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
                     vc: i32 = Memory.read_i32(self.vb_vert_counts + mi * 4)
+                    ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
+                    ic: i32 = Memory.read_i32(self.ib_index_counts + mi * 4)
                     if vb_handle != 0:
                         if vc > 0:
                             model_ptr: i64 = 0
@@ -373,7 +456,16 @@ attach GpuRendererCore:
                                     vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
                                     last_bound = vb_handle
 
-                                vkCmdDraw(cmd, vc, 1, 0, 0)
+                                if ib_handle != 0:
+                                    if ic > 0:
+                                        if ib_handle != last_index_bound:
+                                            vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
+                                            last_index_bound = ib_handle
+                                        vkCmdDrawIndexed(cmd, ic, 1, 0, 0, 0)
+                                    else:
+                                        vkCmdDraw(cmd, vc, 1, 0, 0)
+                                else:
+                                    vkCmdDraw(cmd, vc, 1, 0, 0)
                     mi = mi + 1
 
                 if mvp_scratch != 0:
@@ -400,6 +492,12 @@ attach GpuRendererCore:
                     if vb != 0:
                         vkDestroyBuffer(self.device, vb, 0)
                     vkFreeMemory(self.device, vm, 0)
+                im: i64 = Memory.read_ptr(self.ib_memories + vi * 8)
+                if im != 0:
+                    ib: i64 = Memory.read_ptr(self.ib_handles + vi * 8)
+                    if ib != 0:
+                        vkDestroyBuffer(self.device, ib, 0)
+                    vkFreeMemory(self.device, im, 0)
                 if self.model_matrices != 0:
                     model_ptr: i64 = Memory.read_ptr(self.model_matrices + vi * 8)
                     if model_ptr != 0:
@@ -411,6 +509,12 @@ attach GpuRendererCore:
             Memory.free(self.vb_memories)
         if self.vb_vert_counts != 0:
             Memory.free(self.vb_vert_counts)
+        if self.ib_handles != 0:
+            Memory.free(self.ib_handles)
+        if self.ib_memories != 0:
+            Memory.free(self.ib_memories)
+        if self.ib_index_counts != 0:
+            Memory.free(self.ib_index_counts)
         if self.model_matrices != 0:
             Memory.free(self.model_matrices)
         if self.scratch_vb_arr != 0:

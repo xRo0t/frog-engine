@@ -15,6 +15,8 @@ fun gpu_wv(buf: i64, off: i64, px: f32, py: f32, pz: f32, cr: f32, cg: f32, cb: 
 struct GpuMeshData:
     vertices: i64 = 0
     vertex_count: i32 = 0
+    indices: i64 = 0
+    index_count: i32 = 0
 
 fun gltf_json_f32_at(values: JsonValue, index: i32, fallback: f32) -> f32:
     if values.is_array() == 0:
@@ -123,6 +125,7 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
         return GpuMeshData()
 
     total_vertices: i32 = 0
+    total_indices: i32 = 0
     mi: i32 = 0
     mesh_count: i32 = meshes.size()
     while mi < mesh_count:
@@ -131,13 +134,20 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
         pi: i32 = 0
         while pi < prims.size():
             prim: JsonValue = prims.at(pi)
+            attrs: JsonValue = prim.get("attributes")
+            pos_id: i32 = attrs.get_i32("POSITION")
+            pos_accessor: JsonValue = accessors.at(pos_id)
             indices_id: i32 = prim.get_i32("indices")
             idx_accessor: JsonValue = accessors.at(indices_id)
-            total_vertices = total_vertices + idx_accessor.get_i32("count")
+            total_vertices = total_vertices + pos_accessor.get_i32("count")
+            total_indices = total_indices + idx_accessor.get_i32("count")
             pi = pi + 1
         mi = mi + 1
 
     if total_vertices <= 0:
+        Memory.free(bin)
+        return GpuMeshData()
+    if total_indices <= 0:
         Memory.free(bin)
         return GpuMeshData()
 
@@ -145,8 +155,15 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
     if out == 0:
         Memory.free(bin)
         return GpuMeshData()
+    out_indices: i64 = Memory.malloc_zeroed((total_indices as i64) * 4)
+    if out_indices == 0:
+        Memory.free(out)
+        Memory.free(bin)
+        return GpuMeshData()
 
     out_off: i64 = 0
+    index_off: i64 = 0
+    vertex_base: i32 = 0
     mi = 0
     while mi < mesh_count:
         mesh2: JsonValue = meshes.at(mi)
@@ -161,6 +178,8 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
 
             pos_offset: i64 = gltf_accessor_data_offset(accessors, buffer_views, pos_id)
             pos_stride: i32 = gltf_accessor_stride(accessors, buffer_views, pos_id, 12)
+            pos_accessor2: JsonValue = accessors.at(pos_id)
+            pos_count: i32 = pos_accessor2.get_i32("count")
             idx_offset: i64 = gltf_accessor_data_offset(accessors, buffer_views, indices_id2)
             idx_accessor2: JsonValue = accessors.at(indices_id2)
             idx_count: i32 = idx_accessor2.get_i32("count")
@@ -175,18 +194,25 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
             cg: f32 = gltf_material_color(materials, material_id, 1)
             cb: f32 = gltf_material_color(materials, material_id, 2)
 
+            vi: i32 = 0
+            while vi < pos_count:
+                pos_addr2: i64 = pos_offset + ((vi as i64) * (pos_stride as i64))
+                out_off = gltf_write_position_vertex(out, out_off, bin, pos_addr2, cr, cg, cb)
+                vi = vi + 1
+
             ii: i32 = 0
             while ii < idx_count:
                 vertex_index: i32 = gltf_read_index(bin, idx_offset + ((ii as i64) * (idx_stride as i64)), idx_type)
-                pos_addr: i64 = pos_offset + ((vertex_index as i64) * (pos_stride as i64))
-                out_off = gltf_write_position_vertex(out, out_off, bin, pos_addr, cr, cg, cb)
+                Memory.write_i32(out_indices + index_off, vertex_base + vertex_index)
+                index_off = index_off + 4
                 ii = ii + 1
 
+            vertex_base = vertex_base + pos_count
             pi2 = pi2 + 1
         mi = mi + 1
 
     Memory.free(bin)
-    return GpuMeshData(vertices=out, vertex_count=total_vertices)
+    return GpuMeshData(vertices=out, vertex_count=total_vertices, indices=out_indices, index_count=total_indices)
 
 fun gpu_make_cube_vertices() -> i64:
     buf: i64 = Memory.malloc_zeroed(864)

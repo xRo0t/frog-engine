@@ -227,9 +227,18 @@ attach GpuRendererCore:
             return -1
         if mesh.vertex_count <= 0:
             Memory.free(mesh.vertices)
+            if mesh.indices != 0:
+                Memory.free(mesh.indices)
             return -1
-        mesh_id: i32 = self.upload_mesh(mesh.vertices, mesh.vertex_count)
+        mesh_id: i32 = -1
+        if mesh.indices != 0:
+            if mesh.index_count > 0:
+                mesh_id = self.upload_indexed_mesh(mesh.vertices, mesh.vertex_count, mesh.indices, mesh.index_count)
+        if mesh_id < 0:
+            mesh_id = self.upload_mesh(mesh.vertices, mesh.vertex_count)
         Memory.free(mesh.vertices)
+        if mesh.indices != 0:
+            Memory.free(mesh.indices)
         return mesh_id
 
     fun render_camera_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: FlycamNode, width: i32, height: i32):
