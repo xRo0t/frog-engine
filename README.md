@@ -39,6 +39,7 @@ Current local shape:
 - `Engine` owns the public static lifecycle and hides the Vulkan runtime backend.
 - `Engine.window`, `Engine.properties`, and `Engine.scene` group public setup APIs.
 - `Engine.properties.set_vsync(1/0)` controls synced vs uncapped swapchain presentation.
+- `Assets` groups public resource loading APIs for models, textures, audio, and shaders.
 - `ObjectBench` measures update throughput before rendering.
 
 Vulkan rendering is available through the `Engine` facade while lower-level
@@ -46,6 +47,7 @@ runtime/backend types remain internal package plumbing.
 
 ## Dependencies
 
+- `json` package - general JSON parsing for glTF metadata
 - `vulkan` package - Vulkan C API bindings
 - `window` package - Win32 window + vulkan surface
 

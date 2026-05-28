@@ -230,6 +230,10 @@ attach Node3D:
         self.collision_type = 0
         return self
 
+    fun set_model(self, model: Model3D) -> Node3D:
+        self.mesh_id = model.mesh_id
+        return self
+
     fun destroy(self):
         node_destroy(self as i64)
 

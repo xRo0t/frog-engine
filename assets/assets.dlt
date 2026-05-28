@@ -1,0 +1,62 @@
+##############################
+# Frog - Assets
+# Public resource loading facade.
+##############################
+
+static g_assets_root: str = "assets"
+
+attach Assets:
+
+    static fun mount(root: str):
+        g_assets_root = root
+
+    static fun root() -> str:
+        return g_assets_root
+
+    static fun resolve(path: str) -> str:
+        if PathOps.is_absolute(path):
+            return PathOps.resolve_path(path)
+        joined: str = PathOps.join_path(g_assets_root, path)
+        return PathOps.resolve_path(joined)
+
+attach AssetModels:
+
+    static fun load(path: str) -> Model3D:
+        resolved: str = Assets.resolve(path)
+        format: str = "gltf"
+        if Str.ends_with(path, ".glb"):
+            format = "glb"
+        if Str.ends_with(path, ".gltf") == false:
+            if Str.ends_with(path, ".glb") == false:
+                found_other: i32 = 0
+                if PathOps.exists(resolved):
+                    found_other = 1
+                return Model3D(path=path, resolved_path=resolved, format="unknown", mesh_id=-1, found=found_other, parsed=0, ready=0, error="unsupported model format")
+        return GltfLoader.load(path, resolved, format)
+
+attach AssetTextures:
+
+    static fun load(path: str) -> Texture2D:
+        resolved: str = Assets.resolve(path)
+        found: i32 = 0
+        if PathOps.exists(resolved):
+            found = 1
+        return Texture2D(path=path, resolved_path=resolved, found=found, ready=0)
+
+attach AssetAudio:
+
+    static fun load(path: str) -> AudioClip:
+        resolved: str = Assets.resolve(path)
+        found: i32 = 0
+        if PathOps.exists(resolved):
+            found = 1
+        return AudioClip(path=path, resolved_path=resolved, found=found, ready=0)
+
+attach AssetShaders:
+
+    static fun load(path: str) -> Shader:
+        resolved: str = Assets.resolve(path)
+        found: i32 = 0
+        if PathOps.exists(resolved):
+            found = 1
+        return Shader(path=path, resolved_path=resolved, found=found, ready=0)

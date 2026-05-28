@@ -98,6 +98,15 @@ attach Engine:
     static fun upload_cube_mesh() -> i32:
         return g_engine_runtime.upload_cube_mesh()
 
+    static fun upload_model_mesh(model: Model3D) -> i32:
+        return g_engine_runtime.upload_model_mesh(model)
+
+    static fun upload_model(path: str) -> i32:
+        return g_engine_runtime.upload_model(path)
+
+    static fun upload_model_or_cube(path: str) -> i32:
+        return g_engine_runtime.upload_model_or_cube(path)
+
     static fun register_instance(source_mesh: i32) -> i32:
         return g_engine_runtime.register_instance(source_mesh)
 

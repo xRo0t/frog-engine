@@ -93,6 +93,19 @@ attach EngineRuntime:
     fun upload_cube_mesh(self) -> i32:
         return self.renderer.upload_cube_mesh()
 
+    fun upload_model_mesh(self, model: Model3D) -> i32:
+        return self.renderer.upload_model_mesh(model)
+
+    fun upload_model(self, path: str) -> i32:
+        return self.renderer.upload_model(path)
+
+    fun upload_model_or_cube(self, path: str) -> i32:
+        mesh_id: i32 = self.upload_model(path)
+        if mesh_id < 0:
+            print(@"Model load failed: {path}; using cube fallback")
+            mesh_id = self.upload_cube_mesh()
+        return mesh_id
+
     fun register_instance(self, source_mesh: i32) -> i32:
         return self.renderer.register_instance(source_mesh)
 

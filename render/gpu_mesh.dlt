@@ -12,6 +12,182 @@ fun gpu_wv(buf: i64, off: i64, px: f32, py: f32, pz: f32, cr: f32, cg: f32, cb: 
     Memory.write_f32(buf + off + 20, cb)
     return off + 24
 
+struct GpuMeshData:
+    vertices: i64 = 0
+    vertex_count: i32 = 0
+
+fun gltf_json_f32_at(values: JsonValue, index: i32, fallback: f32) -> f32:
+    if values.is_array() == 0:
+        return fallback
+    item: JsonValue = values.at(index)
+    if item.exists() == 0:
+        return fallback
+    return item.as_f64() as f32
+
+fun gltf_material_color(materials: JsonValue, material_index: i32, component: i32) -> f32:
+    if material_index < 0:
+        return 0.35
+    material: JsonValue = materials.at(material_index)
+    if material.exists() == 0:
+        return 0.35
+    pbr: JsonValue = material.get("pbrMetallicRoughness")
+    factor: JsonValue = pbr.get("baseColorFactor")
+    value: f32 = gltf_json_f32_at(factor, component, 0.35)
+    if value < 0.12:
+        value = 0.12
+    return value
+
+fun gltf_accessor_data_offset(accessors: JsonValue, buffer_views: JsonValue, accessor_index: i32) -> i64:
+    accessor: JsonValue = accessors.at(accessor_index)
+    view_index: i32 = accessor.get_i32("bufferView")
+    view: JsonValue = buffer_views.at(view_index)
+    offset: i64 = view.get_i64("byteOffset")
+    offset = offset + accessor.get_i64("byteOffset")
+    return offset
+
+fun gltf_accessor_stride(accessors: JsonValue, buffer_views: JsonValue, accessor_index: i32, fallback: i32) -> i32:
+    accessor: JsonValue = accessors.at(accessor_index)
+    view_index: i32 = accessor.get_i32("bufferView")
+    view: JsonValue = buffer_views.at(view_index)
+    stride: i32 = view.get_i32("byteStride")
+    if stride <= 0:
+        return fallback
+    return stride
+
+fun gltf_read_index(data: i64, offset: i64, index_type: i32) -> i32:
+    if index_type == 5125:
+        return Memory.read_i32(data + offset)
+    if index_type == 5123:
+        v16: i32 = Memory.read_i16(data + offset) as i32
+        if v16 < 0:
+            v16 = v16 + 65536
+        return v16
+    if index_type == 5121:
+        v8: i32 = Memory.read_i8(data + offset) as i32
+        if v8 < 0:
+            v8 = v8 + 256
+        return v8
+    return 0
+
+fun gltf_write_position_vertex(out: i64, out_off: i64, bin: i64, pos_addr: i64, cr: f32, cg: f32, cb: f32) -> i64:
+    raw_x: f32 = Memory.read_f32(bin + pos_addr)
+    raw_y: f32 = Memory.read_f32(bin + pos_addr + 4)
+    raw_z: f32 = Memory.read_f32(bin + pos_addr + 8)
+    px: f32 = raw_x
+    py: f32 = raw_z * 0.5 - 0.5
+    pz: f32 = (0.0 - raw_y) * 2.0
+    return gpu_wv(out, out_off, px, py, pz, cr, cg, cb)
+
+fun gltf_load_binary_buffer(gltf_path: str, root: JsonValue) -> i64:
+    buffers: JsonValue = root.get("buffers")
+    if buffers.size() <= 0:
+        return 0
+    first: JsonValue = buffers.at(0)
+    uri: str = first.get_str("uri")
+    if Memory.strlen(uri) == 0:
+        return 0
+    dir: str = PathOps.get_directory(gltf_path)
+    bin_path: str = PathOps.join_path(dir, uri)
+    file: File = File.open_cwd(bin_path, "r")
+    if file.is_valid() == false:
+        return 0
+    size: i64 = file.get_size()
+    if size <= 0:
+        file.close()
+        return 0
+    data: i64 = Memory.malloc_zeroed(size)
+    if data == 0:
+        file.close()
+        return 0
+    file.read_bytes(data, size as i32)
+    file.close()
+    return data
+
+fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
+    if Str.equals(model.format, "gltf") == false:
+        return GpuMeshData()
+
+    doc: JsonDocument = model.doc
+    if doc.valid() == 0:
+        doc = Json.parse_file(model.resolved_path)
+    if doc.valid() == 0:
+        return GpuMeshData()
+
+    root: JsonValue = doc.root
+    accessors: JsonValue = root.get("accessors")
+    buffer_views: JsonValue = root.get("bufferViews")
+    meshes: JsonValue = root.get("meshes")
+    materials: JsonValue = root.get("materials")
+    bin: i64 = gltf_load_binary_buffer(model.resolved_path, root)
+    if bin == 0:
+        return GpuMeshData()
+
+    total_vertices: i32 = 0
+    mi: i32 = 0
+    mesh_count: i32 = meshes.size()
+    while mi < mesh_count:
+        mesh: JsonValue = meshes.at(mi)
+        prims: JsonValue = mesh.get("primitives")
+        pi: i32 = 0
+        while pi < prims.size():
+            prim: JsonValue = prims.at(pi)
+            indices_id: i32 = prim.get_i32("indices")
+            idx_accessor: JsonValue = accessors.at(indices_id)
+            total_vertices = total_vertices + idx_accessor.get_i32("count")
+            pi = pi + 1
+        mi = mi + 1
+
+    if total_vertices <= 0:
+        Memory.free(bin)
+        return GpuMeshData()
+
+    out: i64 = Memory.malloc_zeroed((total_vertices as i64) * 24)
+    if out == 0:
+        Memory.free(bin)
+        return GpuMeshData()
+
+    out_off: i64 = 0
+    mi = 0
+    while mi < mesh_count:
+        mesh2: JsonValue = meshes.at(mi)
+        prims2: JsonValue = mesh2.get("primitives")
+        pi2: i32 = 0
+        while pi2 < prims2.size():
+            prim2: JsonValue = prims2.at(pi2)
+            attrs: JsonValue = prim2.get("attributes")
+            pos_id: i32 = attrs.get_i32("POSITION")
+            indices_id2: i32 = prim2.get_i32("indices")
+            material_id: i32 = prim2.get_i32("material")
+
+            pos_offset: i64 = gltf_accessor_data_offset(accessors, buffer_views, pos_id)
+            pos_stride: i32 = gltf_accessor_stride(accessors, buffer_views, pos_id, 12)
+            idx_offset: i64 = gltf_accessor_data_offset(accessors, buffer_views, indices_id2)
+            idx_accessor2: JsonValue = accessors.at(indices_id2)
+            idx_count: i32 = idx_accessor2.get_i32("count")
+            idx_type: i32 = idx_accessor2.get_i32("componentType")
+            idx_stride: i32 = 4
+            if idx_type == 5123:
+                idx_stride = 2
+            elif idx_type == 5121:
+                idx_stride = 1
+
+            cr: f32 = gltf_material_color(materials, material_id, 0)
+            cg: f32 = gltf_material_color(materials, material_id, 1)
+            cb: f32 = gltf_material_color(materials, material_id, 2)
+
+            ii: i32 = 0
+            while ii < idx_count:
+                vertex_index: i32 = gltf_read_index(bin, idx_offset + ((ii as i64) * (idx_stride as i64)), idx_type)
+                pos_addr: i64 = pos_offset + ((vertex_index as i64) * (pos_stride as i64))
+                out_off = gltf_write_position_vertex(out, out_off, bin, pos_addr, cr, cg, cb)
+                ii = ii + 1
+
+            pi2 = pi2 + 1
+        mi = mi + 1
+
+    Memory.free(bin)
+    return GpuMeshData(vertices=out, vertex_count=total_vertices)
+
 fun gpu_make_cube_vertices() -> i64:
     buf: i64 = Memory.malloc_zeroed(864)
     if buf == 0:

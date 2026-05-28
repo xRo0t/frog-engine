@@ -1,0 +1,59 @@
+##############################
+# Frog - Asset Types
+##############################
+
+struct AssetModels:
+    _placeholder: i32 = 0
+
+struct AssetTextures:
+    _placeholder: i32 = 0
+
+struct AssetAudio:
+    _placeholder: i32 = 0
+
+struct AssetShaders:
+    _placeholder: i32 = 0
+
+struct Assets:
+    _placeholder: i32 = 0
+    static models: AssetModels = AssetModels()
+    static textures: AssetTextures = AssetTextures()
+    static audio: AssetAudio = AssetAudio()
+    static shaders: AssetShaders = AssetShaders()
+
+struct Model3D:
+    path: str = ""
+    resolved_path: str = ""
+    format: str = ""
+    doc: JsonDocument = JsonDocument()
+    mesh_id: i32 = -1
+    mesh_count: i32 = 0
+    node_count: i32 = 0
+    material_count: i32 = 0
+    found: i32 = 0
+    parsed: i32 = 0
+    ready: i32 = 0
+    error: str = ""
+
+struct Texture2D:
+    path: str = ""
+    resolved_path: str = ""
+    width: i32 = 0
+    height: i32 = 0
+    found: i32 = 0
+    ready: i32 = 0
+    error: str = ""
+
+struct AudioClip:
+    path: str = ""
+    resolved_path: str = ""
+    found: i32 = 0
+    ready: i32 = 0
+    error: str = ""
+
+struct Shader:
+    path: str = ""
+    resolved_path: str = ""
+    found: i32 = 0
+    ready: i32 = 0
+    error: str = ""
