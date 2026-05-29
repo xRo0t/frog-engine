@@ -6,12 +6,19 @@
 fun gpu_set_transform(ren: GpuRendererCore, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
     if mesh_id < 0:
         return
-    mat_ptr: i64 = Memory.malloc_zeroed(64)
+    if mesh_id >= ren.vb_count:
+        return
+    if ren.model_matrices == 0:
+        return
+    mat_ptr: i64 = Memory.read_ptr(ren.model_matrices + mesh_id * 8)
+    if mat_ptr == 0:
+        mat_ptr = Memory.malloc_zeroed(64)
     if mat_ptr == 0:
         return
     m: Mat4 = Mat4.trs(x, y, z, rx, ry, rz, sx, sy, sz)
     m.write_to_ptr(mat_ptr)
-    ren.set_model_matrix(mesh_id, mat_ptr)
+    if Memory.read_ptr(ren.model_matrices + mesh_id * 8) == 0:
+        ren.set_model_matrix(mesh_id, mat_ptr)
 
 fun gpu_camera_view(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32) -> i64:
     pi: f32 = 3.14159265
@@ -176,6 +183,12 @@ attach Renderer:
 
     fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         self.core.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
+
+    fun set_render_stats(self, enabled: i32):
+        self.core.set_render_stats(enabled)
+
+    fun set_instance_culling(self, enabled: i32):
+        self.core.set_instance_culling(enabled)
 
     fun render_camera_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: FlycamNode, width: i32, height: i32):
         self.core.render_camera_frame(render_pass, swapchain, ctx, camera, width, height)

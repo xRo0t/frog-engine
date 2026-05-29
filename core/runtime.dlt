@@ -112,6 +112,12 @@ attach EngineRuntime:
     fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         self.renderer.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
 
+    fun set_render_stats(self, enabled: i32):
+        self.renderer.set_render_stats(enabled)
+
+    fun set_instance_culling(self, enabled: i32):
+        self.renderer.set_instance_culling(enabled)
+
     fun render_flycam(self, camera: FlycamNode):
         self.renderer.render_camera_frame(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height)
 

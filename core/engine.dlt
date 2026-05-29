@@ -9,6 +9,9 @@ struct DisplayWindow:
 struct Properties:
     _placeholder: i32 = 0
 
+struct Debug:
+    _placeholder: i32 = 0
+
 struct EngineScene:
     _placeholder: i32 = 0
 
@@ -16,6 +19,7 @@ struct Engine:
     _placeholder: i32 = 0
     static window: DisplayWindow = DisplayWindow()
     static properties: Properties = Properties()
+    static debug: Debug = Debug()
     static scene: EngineScene = EngineScene()
 
 static g_engine_title: str = "Frog Engine"
@@ -25,6 +29,8 @@ static g_engine_scene: Scene = Scene()
 static g_engine_has_scene: i32 = 0
 static g_engine_runtime: EngineRuntime = EngineRuntime()
 static g_engine_vsync_enabled: i32 = 1
+static g_engine_render_stats_enabled: i32 = 0
+static g_engine_instance_culling_enabled: i32 = 0
 
 attach DisplayWindow:
 
@@ -36,6 +42,8 @@ attach DisplayWindow:
         g_engine_has_scene = 0
         g_engine_runtime = EngineRuntime()
         g_engine_vsync_enabled = 1
+        g_engine_render_stats_enabled = 0
+        g_engine_instance_culling_enabled = 0
 
     static fun width() -> i32:
         return g_engine_width
@@ -54,6 +62,30 @@ attach Properties:
     static fun vsync() -> i32:
         return g_engine_vsync_enabled
 
+    static fun set_instance_culling(enabled: i32):
+        if enabled == 0:
+            g_engine_instance_culling_enabled = 0
+        else:
+            g_engine_instance_culling_enabled = 1
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_instance_culling(g_engine_instance_culling_enabled)
+
+    static fun instance_culling() -> i32:
+        return g_engine_instance_culling_enabled
+
+attach Debug:
+
+    static fun render_stats(enabled: i32):
+        if enabled == 0:
+            g_engine_render_stats_enabled = 0
+        else:
+            g_engine_render_stats_enabled = 1
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_render_stats(g_engine_render_stats_enabled)
+
+    static fun render_stats_enabled() -> i32:
+        return g_engine_render_stats_enabled
+
 attach EngineScene:
 
     static fun set(scene: Scene):
@@ -69,6 +101,9 @@ attach Engine:
         if g_engine_runtime.ready() == 1:
             return 1
         g_engine_runtime = EngineRuntime.create(g_engine_title, g_engine_width, g_engine_height, g_engine_vsync_enabled)
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_render_stats(g_engine_render_stats_enabled)
+            g_engine_runtime.set_instance_culling(g_engine_instance_culling_enabled)
         return g_engine_runtime.ready()
 
     static fun running() -> i32:

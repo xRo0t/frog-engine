@@ -9,6 +9,46 @@ struct GpuBufferUpload:
     memory: i64 = 0
     ok: i32 = 0
 
+fun _frog_abs_f32(v: f32) -> f32:
+    if v < 0.0:
+        return 0.0 - v
+    return v
+
+fun _frog_instance_visible(vp: i64, model: i64) -> i32:
+    if vp == 0:
+        return 1
+    if model == 0:
+        return 0
+
+    x: f32 = Memory.read_f32(model + 48)
+    y: f32 = Memory.read_f32(model + 52)
+    z: f32 = Memory.read_f32(model + 56)
+
+    cx: f32 = Memory.read_f32(vp + 0) * x + Memory.read_f32(vp + 16) * y + Memory.read_f32(vp + 32) * z + Memory.read_f32(vp + 48)
+    cy: f32 = Memory.read_f32(vp + 4) * x + Memory.read_f32(vp + 20) * y + Memory.read_f32(vp + 36) * z + Memory.read_f32(vp + 52)
+    cz: f32 = Memory.read_f32(vp + 8) * x + Memory.read_f32(vp + 24) * y + Memory.read_f32(vp + 40) * z + Memory.read_f32(vp + 56)
+    cw: f32 = Memory.read_f32(vp + 12) * x + Memory.read_f32(vp + 28) * y + Memory.read_f32(vp + 44) * z + Memory.read_f32(vp + 60)
+
+    scale_hint: f32 = _frog_abs_f32(Memory.read_f32(model + 0)) + _frog_abs_f32(Memory.read_f32(model + 20)) + _frog_abs_f32(Memory.read_f32(model + 40)) + 2.0
+    bounds: f32 = scale_hint * 2.5
+    limit: f32 = _frog_abs_f32(cw) * 1.08 + bounds
+
+    if cw < 0.0 - bounds:
+        return 0
+    if cx < 0.0 - limit:
+        return 0
+    if cx > limit:
+        return 0
+    if cy < 0.0 - limit:
+        return 0
+    if cy > limit:
+        return 0
+    if cz < 0.0 - bounds:
+        return 0
+    if cz > _frog_abs_f32(cw) + bounds:
+        return 0
+    return 1
+
 struct GpuRendererCore:
     device:            i64 = 0
     phys_device:       i64 = 0
@@ -22,6 +62,9 @@ struct GpuRendererCore:
     ib_memories:       i64 = 0
     ib_index_counts:   i64 = 0
     model_matrices:    i64 = 0
+    instance_buffer:   i64 = 0
+    instance_memory:   i64 = 0
+    instance_capacity: i32 = 0
     vb_count:          i32 = 0
     vb_capacity:       i32 = 0
     initialized:       i32 = 0
@@ -29,6 +72,14 @@ struct GpuRendererCore:
     # Pre-allocated scratch buffers for render loop
     scratch_vb_arr:    i64 = 0
     scratch_off_arr:   i64 = 0
+    scratch_inst_vb_arr:  i64 = 0
+    scratch_inst_off_arr: i64 = 0
+    instance_culling_enabled: i32 = 0
+    debug_render_stats_enabled: i32 = 0
+    debug_frame_count: i32 = 0
+    debug_draw_calls: i32 = 0
+    debug_indexed_draw_calls: i32 = 0
+    debug_visible_instances: i32 = 0
 
 attach GpuRendererCore:
 
@@ -49,8 +100,43 @@ attach GpuRendererCore:
         # Pre-allocate scratch buffers (eliminates malloc/free per draw)
         self.scratch_vb_arr = Memory.malloc_zeroed(8)
         self.scratch_off_arr = Memory.malloc_zeroed(8)
+        self.scratch_inst_vb_arr = Memory.malloc_zeroed(8)
+        self.scratch_inst_off_arr = Memory.malloc_zeroed(8)
         Memory.write_i64(self.scratch_off_arr, 0)
+        Memory.write_i64(self.scratch_inst_off_arr, 0)
+        self.instance_culling_enabled = 0
         self.initialized = 1
+
+    fun set_instance_culling(self, enabled: i32):
+        if enabled == 0:
+            self.instance_culling_enabled = 0
+        else:
+            self.instance_culling_enabled = 1
+
+    fun set_render_stats(self, enabled: i32):
+        if enabled == 0:
+            self.debug_render_stats_enabled = 0
+        else:
+            self.debug_render_stats_enabled = 1
+            self.debug_frame_count = 0
+            self.debug_draw_calls = 0
+            self.debug_indexed_draw_calls = 0
+            self.debug_visible_instances = 0
+
+    fun _debug_record_frame(self):
+        if self.debug_render_stats_enabled == 0:
+            return
+        self.debug_frame_count = self.debug_frame_count + 1
+        if self.debug_frame_count >= 120:
+            mesh_count: i32 = self.vb_count
+            instance_count: i32 = self.debug_visible_instances
+            draw_count: i32 = self.debug_draw_calls
+            indexed_count: i32 = self.debug_indexed_draw_calls
+            print(@"[frog.render] frames=120 meshes={mesh_count} instances={instance_count} draws={draw_count} indexed={indexed_count}")
+            self.debug_frame_count = 0
+            self.debug_draw_calls = 0
+            self.debug_indexed_draw_calls = 0
+            self.debug_visible_instances = 0
 
     fun _grow_vb_arrays(self) -> void:
         new_cap: i32 = self.vb_capacity * 2
@@ -187,6 +273,39 @@ attach GpuRendererCore:
         vkUnmapMemory(self.device, mem)
 
         return GpuBufferUpload(handle=buf, memory=mem, ok=1)
+
+    fun _ensure_instance_capacity(self, needed: i32) -> i32:
+        if needed <= 0:
+            return 0
+        if self.instance_capacity >= needed:
+            if self.instance_buffer != 0:
+                if self.instance_memory != 0:
+                    return 1
+
+        new_cap: i32 = self.instance_capacity
+        if new_cap <= 0:
+            new_cap = 1024
+        while new_cap < needed:
+            new_cap = new_cap * 2
+
+        size: i64 = (new_cap as i64) * 64
+        zeros: i64 = Memory.malloc_zeroed(size)
+        if zeros == 0:
+            return 0
+        uploaded: GpuBufferUpload = self._upload_buffer(zeros, size, 128)
+        Memory.free(zeros)
+        if uploaded.ok == 0:
+            return 0
+
+        if self.instance_buffer != 0:
+            vkDestroyBuffer(self.device, self.instance_buffer, 0)
+        if self.instance_memory != 0:
+            vkFreeMemory(self.device, self.instance_memory, 0)
+
+        self.instance_buffer = uploaded.handle
+        self.instance_memory = uploaded.memory
+        self.instance_capacity = new_cap
+        return 1
 
     fun upload_mesh(self, vertices: i64, vertex_count: i32) -> i32:
         if self.initialized == 0:
@@ -347,6 +466,7 @@ attach GpuRendererCore:
         vkQueuePresentKHR(present_queue, pi)
 
         self.current_frame = (self.current_frame + 1) % rp.max_frames
+        self._debug_record_frame()
 
     fun _record_commands(self, cmd: i64, framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32) -> void:
         # Begin command buffer
@@ -426,10 +546,25 @@ attach GpuRendererCore:
                     if cam_proj != 0:
                         vp_mat = multiply_4x4_matrices(cam_proj, cam_view)
 
-                # Pre-allocate MVP scratch (reused, not freed per draw)
-                mvp_scratch: i64 = Memory.malloc_zeroed(64)
+                instance_ready: i32 = self._ensure_instance_capacity(self.vb_count)
+                mapped_instances: i64 = 0
+                instance_map_pp: i64 = 0
+                if instance_ready == 1:
+                    instance_map_pp = Memory.malloc_zeroed(8)
+                    if instance_map_pp != 0:
+                        vkMapMemory(self.device, self.instance_memory, 0, (self.instance_capacity as i64) * 64, 0, instance_map_pp)
+                        mapped_instances = Memory.read_ptr(instance_map_pp)
+                        Memory.free(instance_map_pp)
+
+                if vp_mat != 0:
+                    vkCmdPushConstants(cmd, rp.vk_pipeline_layout, 1, 0, 64, vp_mat)
+
                 last_bound: i64 = 0
                 last_index_bound: i64 = 0
+                instance_write: i32 = 0
+                frame_draw_calls: i32 = 0
+                frame_indexed_draw_calls: i32 = 0
+                frame_visible_instances: i32 = 0
 
                 mi: i32 = 0
                 while mi < self.vb_count:
@@ -437,39 +572,89 @@ attach GpuRendererCore:
                     vc: i32 = Memory.read_i32(self.vb_vert_counts + mi * 4)
                     ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
                     ic: i32 = Memory.read_i32(self.ib_index_counts + mi * 4)
-                    if vb_handle != 0:
-                        if vc > 0:
-                            model_ptr: i64 = 0
+                    model_ptr: i64 = 0
+                    if self.model_matrices != 0:
+                        model_ptr = Memory.read_ptr(self.model_matrices + mi * 8)
+
+                    if mapped_instances == 0:
+                        mi = mi + 1
+                    elif vb_handle == 0:
+                        mi = mi + 1
+                    elif vc <= 0:
+                        mi = mi + 1
+                    elif model_ptr == 0:
+                        mi = mi + 1
+                    else:
+                        group_start: i32 = instance_write
+                        group_count: i32 = 0
+                        gi: i32 = mi
+                        while gi < self.vb_count:
+                            g_vb: i64 = Memory.read_ptr(self.vb_handles + gi * 8)
+                            g_vc: i32 = Memory.read_i32(self.vb_vert_counts + gi * 4)
+                            g_ib: i64 = Memory.read_ptr(self.ib_handles + gi * 8)
+                            g_ic: i32 = Memory.read_i32(self.ib_index_counts + gi * 4)
+                            g_model: i64 = 0
                             if self.model_matrices != 0:
-                                model_ptr = Memory.read_ptr(self.model_matrices + mi * 8)
-
-                            if model_ptr != 0:
-                                # Compute MVP into scratch buffer (no alloc)
-                                if vp_mat != 0:
-                                    if mvp_scratch != 0:
-                                        _frog_multiply_4x4_into(vp_mat, model_ptr, mvp_scratch)
-                                        vkCmdPushConstants(cmd, rp.vk_pipeline_layout, 1, 0, 64, mvp_scratch)
-
-                                # Skip rebind if same VkBuffer as previous draw
-                                if vb_handle != last_bound:
-                                    Memory.write_ptr(self.scratch_vb_arr, vb_handle)
-                                    vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
-                                    last_bound = vb_handle
-
-                                if ib_handle != 0:
-                                    if ic > 0:
-                                        if ib_handle != last_index_bound:
-                                            vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
-                                            last_index_bound = ib_handle
-                                        vkCmdDrawIndexed(cmd, ic, 1, 0, 0, 0)
+                                g_model = Memory.read_ptr(self.model_matrices + gi * 8)
+                            if g_vb != vb_handle:
+                                break
+                            elif g_vc != vc:
+                                break
+                            elif g_ib != ib_handle:
+                                break
+                            elif g_ic != ic:
+                                break
+                            elif g_model == 0:
+                                break
+                            else:
+                                visible: i32 = 1
+                                if self.instance_culling_enabled == 1:
+                                    visible = _frog_instance_visible(vp_mat, g_model)
+                                if visible == 1:
+                                    instance_dst: i64 = mapped_instances + ((instance_write as i64) * 64)
+                                    if vp_mat != 0:
+                                        _frog_multiply_4x4_into(vp_mat, g_model, instance_dst)
                                     else:
-                                        vkCmdDraw(cmd, vc, 1, 0, 0)
-                                else:
-                                    vkCmdDraw(cmd, vc, 1, 0, 0)
-                    mi = mi + 1
+                                        Memory.copy(instance_dst, g_model, 64)
+                                    instance_write = instance_write + 1
+                                    group_count = group_count + 1
+                                gi = gi + 1
 
-                if mvp_scratch != 0:
-                    Memory.free(mvp_scratch)
+                        if group_count > 0:
+                            if vb_handle != last_bound:
+                                Memory.write_ptr(self.scratch_vb_arr, vb_handle)
+                                vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
+                                last_bound = vb_handle
+
+                            Memory.write_ptr(self.scratch_inst_vb_arr, self.instance_buffer)
+                            Memory.write_i64(self.scratch_inst_off_arr, (group_start as i64) * 64)
+                            vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
+
+                            if ib_handle != 0:
+                                if ic > 0:
+                                    if ib_handle != last_index_bound:
+                                        vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
+                                        last_index_bound = ib_handle
+                                    vkCmdDrawIndexed(cmd, ic, group_count, 0, 0, 0)
+                                    frame_draw_calls = frame_draw_calls + 1
+                                    frame_indexed_draw_calls = frame_indexed_draw_calls + 1
+                                else:
+                                    vkCmdDraw(cmd, vc, group_count, 0, 0)
+                                    frame_draw_calls = frame_draw_calls + 1
+                            else:
+                                vkCmdDraw(cmd, vc, group_count, 0, 0)
+                                frame_draw_calls = frame_draw_calls + 1
+                            frame_visible_instances = frame_visible_instances + group_count
+
+                        mi = gi
+
+                if self.debug_render_stats_enabled == 1:
+                    self.debug_draw_calls = self.debug_draw_calls + frame_draw_calls
+                    self.debug_indexed_draw_calls = self.debug_indexed_draw_calls + frame_indexed_draw_calls
+                    self.debug_visible_instances = self.debug_visible_instances + frame_visible_instances
+
+                if mapped_instances != 0:
+                    vkUnmapMemory(self.device, self.instance_memory)
                 if vp_mat != 0:
                     Memory.free(vp_mat)
 
@@ -517,11 +702,20 @@ attach GpuRendererCore:
             Memory.free(self.ib_index_counts)
         if self.model_matrices != 0:
             Memory.free(self.model_matrices)
+        if self.instance_buffer != 0:
+            vkDestroyBuffer(self.device, self.instance_buffer, 0)
+        if self.instance_memory != 0:
+            vkFreeMemory(self.device, self.instance_memory, 0)
         if self.scratch_vb_arr != 0:
             Memory.free(self.scratch_vb_arr)
         if self.scratch_off_arr != 0:
             Memory.free(self.scratch_off_arr)
+        if self.scratch_inst_vb_arr != 0:
+            Memory.free(self.scratch_inst_vb_arr)
+        if self.scratch_inst_off_arr != 0:
+            Memory.free(self.scratch_inst_off_arr)
         self.vb_count = 0
+        self.instance_capacity = 0
         self.initialized = 0
 
 # Pointer-based 4x4 matrix multiply (column-major f32)
