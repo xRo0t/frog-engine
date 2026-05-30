@@ -1,5 +1,29 @@
 # Texture System for Frog Engine — Updated Plan
 
+## ✅ حالة التنفيذ (مكتمل)
+
+تم تنفيذ نظام الـ textures بالكامل عبر عدة ريبوهات:
+
+- **compiler** (`f56d4fe`): إصلاح bug تهيئة الـ global initializers تحت `main()` معرّف من المستخدم.
+- **image** (`3cca55e`): PNG decoder كامل (inflate + كل الفلاتر + كل color types) — `PNG.load`.
+- **vulkan** (`8bdbfbe`): إضافة دوال الـ texture/descriptor للـ import lib (`vulkan-1.def`/`.lib`).
+- **frog**:
+  - `c79d6a4`: vertex format صار 32 byte (pos+color+UV) + شيدرات SPIR-V جديدة (sampler2D).
+  - `626d4b3`: رفع الصور للـ GPU، descriptor sets، 1×1 white fallback، والـ API العام.
+
+### الـ API النهائي
+```dolet
+mesh_id: i32 = Engine.upload_model("models/x.gltf")
+tex_id:  i32 = Engine.upload_texture("textures/x.png")   # يحمّل PNG ويرفعه للـ GPU
+inst:    i32 = Engine.register_instance(mesh_id)
+Engine.bind_texture(inst, tex_id)                        # يربط texture بالـ instance
+```
+الميشات بدون texture تستخدم 1×1 white fallback تلقائياً (ألوانها ما تتأثر).
+
+> **ملاحظة**: كود الـ GPU يكمبّل ويـ link بنجاح. التحقق البصري النهائي يتم بتشغيل اللعبة.
+
+---
+
 ## ما اكتشفناه
 
 ### مكتبة `image` الموجودة
