@@ -1,0 +1,16 @@
+# Editor / IDE
+.vscode/
+.idea/
+
+# Build artifacts
+*.exe
+*.obj
+*.o
+*.mlir
+*.ll
+
+# Local scratch / generated
+_*/
+*.tmp
+*.bak
+__pycache__/
