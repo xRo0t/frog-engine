@@ -347,20 +347,20 @@ attach RenderPass:
         Memory.write_ptr(stages + 88, 0)
 
         # Vertex input:
-        # binding 0: pos(3f) + color(3f), per vertex, stride 24
+        # binding 0: pos(3f) + color(3f) + uv(2f), per vertex, stride 32
         # binding 1: MVP matrix as four vec4 columns, per instance, stride 64
         bind: i64 = Memory.malloc_zeroed(24)
         if bind == 0:
             Memory.free(stages)
             return 0
         Memory.write_i32(bind, 0)
-        Memory.write_i32(bind + 4, 24)
+        Memory.write_i32(bind + 4, 32)
         Memory.write_i32(bind + 8, 0)
         Memory.write_i32(bind + 12, 1)
         Memory.write_i32(bind + 16, 64)
         Memory.write_i32(bind + 20, 1)
 
-        attrs: i64 = Memory.malloc_zeroed(96)
+        attrs: i64 = Memory.malloc_zeroed(112)
         if attrs == 0:
             Memory.free(stages)
             Memory.free(bind)
@@ -392,6 +392,11 @@ attach RenderPass:
         Memory.write_i32(attrs + 84, 1)
         Memory.write_i32(attrs + 88, 109)
         Memory.write_i32(attrs + 92, 48)
+        # UV attr (loc=6, binding=0, R32G32_SFLOAT=103, offset=24)
+        Memory.write_i32(attrs + 96, 6)
+        Memory.write_i32(attrs + 100, 0)
+        Memory.write_i32(attrs + 104, 103)
+        Memory.write_i32(attrs + 108, 24)
 
         vi_ci: i64 = Memory.malloc_zeroed(48)
         if vi_ci == 0:
@@ -404,7 +409,7 @@ attach RenderPass:
         Memory.write_i32(vi_ci + 16, 0)
         Memory.write_i32(vi_ci + 20, 2)
         Memory.write_ptr(vi_ci + 24, bind)
-        Memory.write_i32(vi_ci + 32, 6)
+        Memory.write_i32(vi_ci + 32, 7)
         Memory.write_ptr(vi_ci + 40, attrs)
 
         # Input assembly (32 bytes)

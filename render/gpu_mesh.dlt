@@ -3,14 +3,16 @@
 # CPU-side vertex generation for the independent Vulkan backend.
 ##############################
 
-fun gpu_wv(buf: i64, off: i64, px: f32, py: f32, pz: f32, cr: f32, cg: f32, cb: f32) -> i64:
+fun gpu_wv(buf: i64, off: i64, px: f32, py: f32, pz: f32, cr: f32, cg: f32, cb: f32, u: f32, v: f32) -> i64:
     Memory.write_f32(buf + off, px)
     Memory.write_f32(buf + off + 4, py)
     Memory.write_f32(buf + off + 8, pz)
     Memory.write_f32(buf + off + 12, cr)
     Memory.write_f32(buf + off + 16, cg)
     Memory.write_f32(buf + off + 20, cb)
-    return off + 24
+    Memory.write_f32(buf + off + 24, u)
+    Memory.write_f32(buf + off + 28, v)
+    return off + 32
 
 struct GpuMeshData:
     vertices: i64 = 0
@@ -71,14 +73,14 @@ fun gltf_read_index(data: i64, offset: i64, index_type: i32) -> i32:
         return v8
     return 0
 
-fun gltf_write_position_vertex(out: i64, out_off: i64, bin: i64, pos_addr: i64, cr: f32, cg: f32, cb: f32) -> i64:
+fun gltf_write_position_vertex(out: i64, out_off: i64, bin: i64, pos_addr: i64, cr: f32, cg: f32, cb: f32, u: f32, v: f32) -> i64:
     raw_x: f32 = Memory.read_f32(bin + pos_addr)
     raw_y: f32 = Memory.read_f32(bin + pos_addr + 4)
     raw_z: f32 = Memory.read_f32(bin + pos_addr + 8)
     px: f32 = raw_x
     py: f32 = raw_z * 0.5 - 0.5
     pz: f32 = (0.0 - raw_y) * 2.0
-    return gpu_wv(out, out_off, px, py, pz, cr, cg, cb)
+    return gpu_wv(out, out_off, px, py, pz, cr, cg, cb, u, v)
 
 fun gltf_load_binary_buffer(gltf_path: str, root: JsonValue) -> i64:
     buffers: JsonValue = root.get("buffers")
@@ -151,7 +153,7 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
         Memory.free(bin)
         return GpuMeshData()
 
-    out: i64 = Memory.malloc_zeroed((total_vertices as i64) * 24)
+    out: i64 = Memory.malloc_zeroed((total_vertices as i64) * 32)
     if out == 0:
         Memory.free(bin)
         return GpuMeshData()
@@ -194,10 +196,26 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
             cg: f32 = gltf_material_color(materials, material_id, 1)
             cb: f32 = gltf_material_color(materials, material_id, 2)
 
+            # TEXCOORD_0 (UV) accessor — optional. -1 => no UVs (use 0,0).
+            uv_id: i32 = attrs.get_i32("TEXCOORD_0")
+            uv_offset: i64 = 0
+            uv_stride: i32 = 8
+            uv_present: i32 = 0
+            if uv_id >= 0:
+                uv_offset = gltf_accessor_data_offset(accessors, buffer_views, uv_id)
+                uv_stride = gltf_accessor_stride(accessors, buffer_views, uv_id, 8)
+                uv_present = 1
+
             vi: i32 = 0
             while vi < pos_count:
                 pos_addr2: i64 = pos_offset + ((vi as i64) * (pos_stride as i64))
-                out_off = gltf_write_position_vertex(out, out_off, bin, pos_addr2, cr, cg, cb)
+                u: f32 = 0.0
+                v: f32 = 0.0
+                if uv_present == 1:
+                    uv_addr: i64 = uv_offset + ((vi as i64) * (uv_stride as i64))
+                    u = Memory.read_f32(bin + uv_addr)
+                    v = Memory.read_f32(bin + uv_addr + 4)
+                out_off = gltf_write_position_vertex(out, out_off, bin, pos_addr2, cr, cg, cb, u, v)
                 vi = vi + 1
 
             ii: i32 = 0
@@ -215,67 +233,67 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
     return GpuMeshData(vertices=out, vertex_count=total_vertices, indices=out_indices, index_count=total_indices)
 
 fun gpu_make_cube_vertices() -> i64:
-    buf: i64 = Memory.malloc_zeroed(864)
+    buf: i64 = Memory.malloc_zeroed(1152)
     if buf == 0:
         return 0
     hx: f32 = 0.5
     hy: f32 = 0.5
     hz: f32 = 0.5
     off: i64 = 0
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, hz, 1.0, 0.0, 0.0)
-    off = gpu_wv(buf, off, hx, hy, hz, 1.0, 0.0, 0.0)
-    off = gpu_wv(buf, off, hx, 0.0 - hy, hz, 1.0, 0.0, 0.0)
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, hz, 1.0, 0.0, 0.0)
-    off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 1.0, 0.0, 0.0)
-    off = gpu_wv(buf, off, hx, hy, hz, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, hz, 1.0, 0.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, hy, hz, 1.0, 0.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, 0.0 - hy, hz, 1.0, 0.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, hz, 1.0, 0.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 1.0, 0.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, hy, hz, 1.0, 0.0, 0.0, 0.0, 0.0)
 
-    off = gpu_wv(buf, off, hx, 0.0 - hy, 0.0 - hz, 0.0, 1.0, 0.0)
-    off = gpu_wv(buf, off, 0.0 - hx, hy, 0.0 - hz, 0.0, 1.0, 0.0)
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, 0.0 - hz, 0.0, 1.0, 0.0)
-    off = gpu_wv(buf, off, hx, 0.0 - hy, 0.0 - hz, 0.0, 1.0, 0.0)
-    off = gpu_wv(buf, off, hx, hy, 0.0 - hz, 0.0, 1.0, 0.0)
-    off = gpu_wv(buf, off, 0.0 - hx, hy, 0.0 - hz, 0.0, 1.0, 0.0)
+    off = gpu_wv(buf, off, hx, 0.0 - hy, 0.0 - hz, 0.0, 1.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, hy, 0.0 - hz, 0.0, 1.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, 0.0 - hz, 0.0, 1.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, 0.0 - hy, 0.0 - hz, 0.0, 1.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, hy, 0.0 - hz, 0.0, 1.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, hy, 0.0 - hz, 0.0, 1.0, 0.0, 0.0, 0.0)
 
-    off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 0.0, 0.0, 1.0)
-    off = gpu_wv(buf, off, hx, hy, 0.0 - hz, 0.0, 0.0, 1.0)
-    off = gpu_wv(buf, off, hx, hy, hz, 0.0, 0.0, 1.0)
-    off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 0.0, 0.0, 1.0)
-    off = gpu_wv(buf, off, 0.0 - hx, hy, 0.0 - hz, 0.0, 0.0, 1.0)
-    off = gpu_wv(buf, off, hx, hy, 0.0 - hz, 0.0, 0.0, 1.0)
+    off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 0.0, 0.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, hy, 0.0 - hz, 0.0, 0.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, hy, hz, 0.0, 0.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 0.0, 0.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, hy, 0.0 - hz, 0.0, 0.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, hy, 0.0 - hz, 0.0, 0.0, 1.0, 0.0, 0.0)
 
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, 0.0 - hz, 1.0, 1.0, 0.0)
-    off = gpu_wv(buf, off, hx, 0.0 - hy, hz, 1.0, 1.0, 0.0)
-    off = gpu_wv(buf, off, hx, 0.0 - hy, 0.0 - hz, 1.0, 1.0, 0.0)
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, 0.0 - hz, 1.0, 1.0, 0.0)
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, hz, 1.0, 1.0, 0.0)
-    off = gpu_wv(buf, off, hx, 0.0 - hy, hz, 1.0, 1.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, 0.0 - hz, 1.0, 1.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, 0.0 - hy, hz, 1.0, 1.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, 0.0 - hy, 0.0 - hz, 1.0, 1.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, 0.0 - hz, 1.0, 1.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, hz, 1.0, 1.0, 0.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, 0.0 - hy, hz, 1.0, 1.0, 0.0, 0.0, 0.0)
 
-    off = gpu_wv(buf, off, hx, 0.0 - hy, hz, 1.0, 0.0, 1.0)
-    off = gpu_wv(buf, off, hx, hy, 0.0 - hz, 1.0, 0.0, 1.0)
-    off = gpu_wv(buf, off, hx, 0.0 - hy, 0.0 - hz, 1.0, 0.0, 1.0)
-    off = gpu_wv(buf, off, hx, 0.0 - hy, hz, 1.0, 0.0, 1.0)
-    off = gpu_wv(buf, off, hx, hy, hz, 1.0, 0.0, 1.0)
-    off = gpu_wv(buf, off, hx, hy, 0.0 - hz, 1.0, 0.0, 1.0)
+    off = gpu_wv(buf, off, hx, 0.0 - hy, hz, 1.0, 0.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, hy, 0.0 - hz, 1.0, 0.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, 0.0 - hy, 0.0 - hz, 1.0, 0.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, 0.0 - hy, hz, 1.0, 0.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, hy, hz, 1.0, 0.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, hy, 0.0 - hz, 1.0, 0.0, 1.0, 0.0, 0.0)
 
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, 0.0 - hz, 0.0, 1.0, 1.0)
-    off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 0.0, 1.0, 1.0)
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, hz, 0.0, 1.0, 1.0)
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, 0.0 - hz, 0.0, 1.0, 1.0)
-    off = gpu_wv(buf, off, 0.0 - hx, hy, 0.0 - hz, 0.0, 1.0, 1.0)
-    off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 0.0, 1.0, 1.0)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, 0.0 - hz, 0.0, 1.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 0.0, 1.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, hz, 0.0, 1.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, 0.0 - hz, 0.0, 1.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, hy, 0.0 - hz, 0.0, 1.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 0.0, 1.0, 1.0, 0.0, 0.0)
     return buf
 
 fun gpu_make_plane_vertices() -> i64:
-    buf: i64 = Memory.malloc_zeroed(144)
+    buf: i64 = Memory.malloc_zeroed(192)
     if buf == 0:
         return 0
     hx: f32 = 0.5
     hz: f32 = 0.5
     off: i64 = 0
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0, 0.0 - hz, 0.45, 0.45, 0.45)
-    off = gpu_wv(buf, off, hx, 0.0, hz, 0.45, 0.45, 0.45)
-    off = gpu_wv(buf, off, hx, 0.0, 0.0 - hz, 0.45, 0.45, 0.45)
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0, 0.0 - hz, 0.45, 0.45, 0.45)
-    off = gpu_wv(buf, off, 0.0 - hx, 0.0, hz, 0.45, 0.45, 0.45)
-    off = gpu_wv(buf, off, hx, 0.0, hz, 0.45, 0.45, 0.45)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0, 0.0 - hz, 0.45, 0.45, 0.45, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, 0.0, hz, 0.45, 0.45, 0.45, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, 0.0, 0.0 - hz, 0.45, 0.45, 0.45, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0, 0.0 - hz, 0.45, 0.45, 0.45, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - hx, 0.0, hz, 0.45, 0.45, 0.45, 0.0, 0.0)
+    off = gpu_wv(buf, off, hx, 0.0, hz, 0.45, 0.45, 0.45, 0.0, 0.0)
     return buf

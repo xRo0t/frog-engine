@@ -312,7 +312,7 @@ attach GpuRendererCore:
             return 0 - 1
         if self.vb_count >= self.vb_capacity:
             self._grow_vb_arrays()
-        data_size: i64 = vertex_count * 24
+        data_size: i64 = vertex_count * 32
         uploaded: GpuBufferUpload = self._upload_buffer(vertices, data_size, 128)
         if uploaded.ok == 0:
             return 0 - 1
@@ -337,7 +337,7 @@ attach GpuRendererCore:
             return 0 - 1
         if self.vb_count >= self.vb_capacity:
             self._grow_vb_arrays()
-        vb_size: i64 = (vertex_count as i64) * 24
+        vb_size: i64 = (vertex_count as i64) * 32
         ib_size: i64 = (index_count as i64) * 4
         uploaded_vb: GpuBufferUpload = self._upload_buffer(vertices, vb_size, 128)
         if uploaded_vb.ok == 0:
