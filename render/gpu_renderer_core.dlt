@@ -64,6 +64,11 @@ struct GpuRendererCore:
     model_matrices:    i64 = 0
     instance_buffer:   i64 = 0
     instance_memory:   i64 = 0
+    # Per-frame instance buffers (one per frame-in-flight) to avoid a
+    # CPU/GPU race: frame N must not overwrite the buffer frame N-1 is still
+    # reading. Slot 0 mirrors instance_buffer/instance_memory for back-compat.
+    instance_buffers:  i64 = 0    # VkBuffer[FROG_INSTANCE_SLOTS]
+    instance_memories: i64 = 0    # VkDeviceMemory[FROG_INSTANCE_SLOTS]
     instance_capacity: i32 = 0
     vb_count:          i32 = 0
     vb_capacity:       i32 = 0
@@ -316,9 +321,23 @@ attach GpuRendererCore:
     fun _ensure_instance_capacity(self, needed: i32) -> i32:
         if needed <= 0:
             return 0
+        # Two instance buffers (one per frame-in-flight). Allocate the slot
+        # array once.
+        if self.instance_buffers == 0:
+            self.instance_buffers = Memory.malloc_zeroed(2 * 8)
+            self.instance_memories = Memory.malloc_zeroed(2 * 8)
+
         if self.instance_capacity >= needed:
-            if self.instance_buffer != 0:
-                if self.instance_memory != 0:
+            if self.instance_buffers != 0:
+                ok_all: i32 = 1
+                si: i32 = 0
+                while si < 2:
+                    if Memory.read_ptr(self.instance_buffers + si * 8) == 0:
+                        ok_all = 0
+                    if Memory.read_ptr(self.instance_memories + si * 8) == 0:
+                        ok_all = 0
+                    si = si + 1
+                if ok_all == 1:
                     return 1
 
         new_cap: i32 = self.instance_capacity
@@ -331,18 +350,27 @@ attach GpuRendererCore:
         zeros: i64 = Memory.malloc_zeroed(size)
         if zeros == 0:
             return 0
-        uploaded: GpuBufferUpload = self._upload_buffer(zeros, size, 128)
+
+        slot: i32 = 0
+        while slot < 2:
+            uploaded: GpuBufferUpload = self._upload_buffer(zeros, size, 128)
+            if uploaded.ok == 0:
+                Memory.free(zeros)
+                return 0
+            old_buf: i64 = Memory.read_ptr(self.instance_buffers + slot * 8)
+            old_mem: i64 = Memory.read_ptr(self.instance_memories + slot * 8)
+            if old_buf != 0:
+                vkDestroyBuffer(self.device, old_buf, 0)
+            if old_mem != 0:
+                vkFreeMemory(self.device, old_mem, 0)
+            Memory.write_ptr(self.instance_buffers + slot * 8, uploaded.handle)
+            Memory.write_ptr(self.instance_memories + slot * 8, uploaded.memory)
+            slot = slot + 1
         Memory.free(zeros)
-        if uploaded.ok == 0:
-            return 0
 
-        if self.instance_buffer != 0:
-            vkDestroyBuffer(self.device, self.instance_buffer, 0)
-        if self.instance_memory != 0:
-            vkFreeMemory(self.device, self.instance_memory, 0)
-
-        self.instance_buffer = uploaded.handle
-        self.instance_memory = uploaded.memory
+        # Keep the legacy single-buffer fields pointing at slot 0.
+        self.instance_buffer = Memory.read_ptr(self.instance_buffers)
+        self.instance_memory = Memory.read_ptr(self.instance_memories)
         self.instance_capacity = new_cap
         return 1
 
@@ -641,14 +669,28 @@ attach GpuRendererCore:
                         vp_mat = multiply_4x4_matrices(cam_proj, cam_view)
 
                 instance_ready: i32 = self._ensure_instance_capacity(self.vb_count)
+                # Select this frame's instance buffer slot (double-buffered to
+                # avoid overwriting the buffer a previous in-flight frame is
+                # still reading).
+                inst_slot: i32 = self.current_frame
+                if inst_slot < 0:
+                    inst_slot = 0
+                if inst_slot > 1:
+                    inst_slot = 1
+                frame_inst_buf: i64 = 0
+                frame_inst_mem: i64 = 0
+                if self.instance_buffers != 0:
+                    frame_inst_buf = Memory.read_ptr(self.instance_buffers + inst_slot * 8)
+                    frame_inst_mem = Memory.read_ptr(self.instance_memories + inst_slot * 8)
                 mapped_instances: i64 = 0
                 instance_map_pp: i64 = 0
                 if instance_ready == 1:
-                    instance_map_pp = Memory.malloc_zeroed(8)
-                    if instance_map_pp != 0:
-                        vkMapMemory(self.device, self.instance_memory, 0, (self.instance_capacity as i64) * 64, 0, instance_map_pp)
-                        mapped_instances = Memory.read_ptr(instance_map_pp)
-                        Memory.free(instance_map_pp)
+                    if frame_inst_mem != 0:
+                        instance_map_pp = Memory.malloc_zeroed(8)
+                        if instance_map_pp != 0:
+                            vkMapMemory(self.device, frame_inst_mem, 0, (self.instance_capacity as i64) * 64, 0, instance_map_pp)
+                            mapped_instances = Memory.read_ptr(instance_map_pp)
+                            Memory.free(instance_map_pp)
 
                 if vp_mat != 0:
                     vkCmdPushConstants(cmd, rp.vk_pipeline_layout, 1, 0, 64, vp_mat)
@@ -729,7 +771,7 @@ attach GpuRendererCore:
                                 vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
                                 last_bound = vb_handle
 
-                            Memory.write_ptr(self.scratch_inst_vb_arr, self.instance_buffer)
+                            Memory.write_ptr(self.scratch_inst_vb_arr, frame_inst_buf)
                             Memory.write_i64(self.scratch_inst_off_arr, (group_start as i64) * 64)
                             vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
 
@@ -766,7 +808,7 @@ attach GpuRendererCore:
                     self.debug_visible_instances = self.debug_visible_instances + frame_visible_instances
 
                 if mapped_instances != 0:
-                    vkUnmapMemory(self.device, self.instance_memory)
+                    vkUnmapMemory(self.device, frame_inst_mem)
                 if vp_mat != 0:
                     Memory.free(vp_mat)
 
@@ -814,10 +856,29 @@ attach GpuRendererCore:
             Memory.free(self.ib_index_counts)
         if self.model_matrices != 0:
             Memory.free(self.model_matrices)
-        if self.instance_buffer != 0:
-            vkDestroyBuffer(self.device, self.instance_buffer, 0)
-        if self.instance_memory != 0:
-            vkFreeMemory(self.device, self.instance_memory, 0)
+        # Destroy per-frame instance buffers (slot 0 mirrors the legacy
+        # instance_buffer field, so free via the array only to avoid a
+        # double free).
+        if self.instance_buffers != 0:
+            isl: i32 = 0
+            while isl < 2:
+                ib_buf: i64 = Memory.read_ptr(self.instance_buffers + isl * 8)
+                if ib_buf != 0:
+                    vkDestroyBuffer(self.device, ib_buf, 0)
+                ib_mem: i64 = Memory.read_ptr(self.instance_memories + isl * 8)
+                if ib_mem != 0:
+                    vkFreeMemory(self.device, ib_mem, 0)
+                isl = isl + 1
+            Memory.free(self.instance_buffers)
+            if self.instance_memories != 0:
+                Memory.free(self.instance_memories)
+            self.instance_buffer = 0
+            self.instance_memory = 0
+        else:
+            if self.instance_buffer != 0:
+                vkDestroyBuffer(self.device, self.instance_buffer, 0)
+            if self.instance_memory != 0:
+                vkFreeMemory(self.device, self.instance_memory, 0)
         if self.scratch_vb_arr != 0:
             Memory.free(self.scratch_vb_arr)
         if self.scratch_off_arr != 0:
