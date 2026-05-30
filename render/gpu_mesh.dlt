@@ -77,9 +77,11 @@ fun gltf_write_position_vertex(out: i64, out_off: i64, bin: i64, pos_addr: i64, 
     raw_x: f32 = Memory.read_f32(bin + pos_addr)
     raw_y: f32 = Memory.read_f32(bin + pos_addr + 4)
     raw_z: f32 = Memory.read_f32(bin + pos_addr + 8)
+    # Uniform axis remap (this content is authored Z-up): keep real
+    # proportions — no per-axis squash/stretch. raw_z -> up, raw_y -> depth.
     px: f32 = raw_x
-    py: f32 = raw_z * 0.5 - 0.5
-    pz: f32 = (0.0 - raw_y) * 2.0
+    py: f32 = raw_z
+    pz: f32 = 0.0 - raw_y
     return gpu_wv(out, out_off, px, py, pz, cr, cg, cb, u, v)
 
 fun gltf_load_binary_buffer(gltf_path: str, root: JsonValue) -> i64:

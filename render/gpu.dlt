@@ -20,6 +20,27 @@ fun gpu_set_transform(ren: GpuRendererCore, mesh_id: i32, x: f32, y: f32, z: f32
     if Memory.read_ptr(ren.model_matrices + mesh_id * 8) == 0:
         ren.set_model_matrix(mesh_id, mat_ptr)
 
+# Set a mesh's model matrix directly from a 64-byte (16 x f32) column-major
+# matrix at `src`. Used for view-locked objects (e.g. an FPS viewmodel) where
+# the caller has already composed camera_world * local.
+fun gpu_set_model_matrix_raw(ren: GpuRendererCore, mesh_id: i32, src: i64):
+    if mesh_id < 0:
+        return
+    if mesh_id >= ren.vb_count:
+        return
+    if ren.model_matrices == 0:
+        return
+    if src == 0:
+        return
+    mat_ptr: i64 = Memory.read_ptr(ren.model_matrices + mesh_id * 8)
+    if mat_ptr == 0:
+        mat_ptr = Memory.malloc_zeroed(64)
+    if mat_ptr == 0:
+        return
+    Memory.copy(mat_ptr, src, 64)
+    if Memory.read_ptr(ren.model_matrices + mesh_id * 8) == 0:
+        ren.set_model_matrix(mesh_id, mat_ptr)
+
 fun gpu_camera_view(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32) -> i64:
     pi: f32 = 3.14159265
     rad_x: f32 = pitch * pi / 180.0
@@ -200,6 +221,9 @@ attach Renderer:
     fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         self.core.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
 
+    fun set_model_matrix_raw(self, mesh_id: i32, src: i64):
+        self.core.set_model_matrix_raw(mesh_id, src)
+
     fun set_render_stats(self, enabled: i32):
         self.core.set_render_stats(enabled)
 
@@ -233,6 +257,9 @@ attach GpuRendererCore:
 
     fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         gpu_set_transform(self, mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
+
+    fun set_model_matrix_raw(self, mesh_id: i32, src: i64):
+        gpu_set_model_matrix_raw(self, mesh_id, src)
 
     fun upload_plane_mesh(self) -> i32:
         verts: i64 = gpu_make_plane_vertices()
