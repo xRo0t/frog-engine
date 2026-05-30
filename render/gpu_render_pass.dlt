@@ -14,6 +14,9 @@ struct RenderPass:
     framebuffer_count:    i32 = 0
     vert_shader_module:   i64 = 0
     frag_shader_module:   i64 = 0
+    # Texture descriptor objects (combined image sampler, fragment stage)
+    desc_set_layout:      i64 = 0
+    desc_pool:            i64 = 0
     # Sync
     image_available_sems: i64 = 0
     render_finished_sems: i64 = 0
@@ -139,7 +142,61 @@ attach RenderPass:
         if self.frag_shader_module == 0:
             return 0
 
-        # 3. Create pipeline layout with push constants (64 bytes, kept for render paths that need it)
+        # 2b. Descriptor set layout: binding 0 = combined image sampler, fragment stage.
+        # VkDescriptorSetLayoutBinding (24 bytes): binding(0), descriptorType(4),
+        # descriptorCount(8), stageFlags(12), pImmutableSamplers(16).
+        dsl_bind: i64 = Memory.malloc_zeroed(24)
+        if dsl_bind == 0:
+            return 0
+        Memory.write_i32(dsl_bind, 0)        # binding 0
+        Memory.write_i32(dsl_bind + 4, 1)    # COMBINED_IMAGE_SAMPLER
+        Memory.write_i32(dsl_bind + 8, 1)    # descriptorCount
+        Memory.write_i32(dsl_bind + 12, 16)  # STAGE_FRAGMENT
+        # VkDescriptorSetLayoutCreateInfo (sType = 32):
+        #  0 sType, 8 pNext, 16 flags, 20 bindingCount, 24 pBindings
+        dsl_ci: i64 = Memory.malloc_zeroed(32)
+        if dsl_ci == 0:
+            Memory.free(dsl_bind)
+            return 0
+        Memory.write_i32(dsl_ci, 32)
+        Memory.write_i32(dsl_ci + 20, 1)
+        Memory.write_ptr(dsl_ci + 24, dsl_bind)
+        dsl_ptr: i64 = Memory.malloc_zeroed(8)
+        dsl_r: i32 = vkCreateDescriptorSetLayout(device, dsl_ci, 0, dsl_ptr)
+        self.desc_set_layout = Memory.read_ptr(dsl_ptr)
+        Memory.free(dsl_ptr)
+        Memory.free(dsl_ci)
+        Memory.free(dsl_bind)
+        if dsl_r != 0:
+            return 0
+
+        # 2c. Descriptor pool sized for many combined image samplers.
+        # VkDescriptorPoolSize (8 bytes): type(0), descriptorCount(4)
+        dps: i64 = Memory.malloc_zeroed(8)
+        if dps == 0:
+            return 0
+        Memory.write_i32(dps, 1)             # COMBINED_IMAGE_SAMPLER
+        Memory.write_i32(dps + 4, 1024)      # descriptorCount
+        # VkDescriptorPoolCreateInfo (sType = 33):
+        #  0 sType, 8 pNext, 16 flags, 20 maxSets, 24 poolSizeCount, 32 pPoolSizes
+        dp_ci: i64 = Memory.malloc_zeroed(40)
+        if dp_ci == 0:
+            Memory.free(dps)
+            return 0
+        Memory.write_i32(dp_ci, 33)
+        Memory.write_i32(dp_ci + 20, 1024)   # maxSets
+        Memory.write_i32(dp_ci + 24, 1)      # poolSizeCount
+        Memory.write_ptr(dp_ci + 32, dps)
+        dp_ptr: i64 = Memory.malloc_zeroed(8)
+        dp_r: i32 = vkCreateDescriptorPool(device, dp_ci, 0, dp_ptr)
+        self.desc_pool = Memory.read_ptr(dp_ptr)
+        Memory.free(dp_ptr)
+        Memory.free(dp_ci)
+        Memory.free(dps)
+        if dp_r != 0:
+            return 0
+
+        # 3. Create pipeline layout: descriptor set 0 + push constants (64 bytes VP).
         pc_range: i64 = Memory.malloc_zeroed(12)
         if pc_range == 0:
             return 0
@@ -147,27 +204,33 @@ attach RenderPass:
         Memory.write_i32(pc_range + 4, 0)
         Memory.write_i32(pc_range + 8, 64)
 
+        dsl_arr: i64 = Memory.malloc_zeroed(8)
+        Memory.write_ptr(dsl_arr, self.desc_set_layout)
+
         pl_ci: i64 = Memory.malloc_zeroed(48)
         if pl_ci == 0:
             Memory.free(pc_range)
+            Memory.free(dsl_arr)
             return 0
         Memory.write_i32(pl_ci, 30)
         Memory.write_ptr(pl_ci + 8, 0)
         Memory.write_i32(pl_ci + 16, 0)
-        Memory.write_i32(pl_ci + 20, 0)
-        Memory.write_ptr(pl_ci + 24, 0)
+        Memory.write_i32(pl_ci + 20, 1)         # setLayoutCount
+        Memory.write_ptr(pl_ci + 24, dsl_arr)   # pSetLayouts
         Memory.write_i32(pl_ci + 32, 1)
         Memory.write_ptr(pl_ci + 40, pc_range)
 
         pl_ptr: i64 = Memory.malloc_zeroed(8)
         if pl_ptr == 0:
             Memory.free(pc_range)
+            Memory.free(dsl_arr)
             Memory.free(pl_ci)
             return 0
         pl_result: i32 = vkCreatePipelineLayout(device, pl_ci, 0, pl_ptr)
         self.vk_pipeline_layout = Memory.read_ptr(pl_ptr)
         Memory.free(pl_ptr)
         Memory.free(pc_range)
+        Memory.free(dsl_arr)
         Memory.free(pl_ci)
         if pl_result != 0:
             return 0
@@ -299,6 +362,52 @@ attach RenderPass:
         self._init_frame_structs()
 
         return 1
+
+    # Allocate a descriptor set for a texture and write its image view + sampler
+    # into binding 0. Returns the VkDescriptorSet (0 on failure).
+    fun make_texture_descriptor(self, device: i64, view: i64, sampler: i64) -> i64:
+        if self.desc_pool == 0:
+            return 0
+        if self.desc_set_layout == 0:
+            return 0
+        # VkDescriptorSetAllocateInfo (sType = 34):
+        #  0 sType, 8 pNext, 16 descriptorPool, 24 descriptorSetCount, 32 pSetLayouts
+        layout_arr: i64 = Memory.malloc_zeroed(8)
+        Memory.write_ptr(layout_arr, self.desc_set_layout)
+        ai: i64 = Memory.malloc_zeroed(40)
+        Memory.write_i32(ai, 34)
+        Memory.write_ptr(ai + 16, self.desc_pool)
+        Memory.write_i32(ai + 24, 1)
+        Memory.write_ptr(ai + 32, layout_arr)
+        set_ptr: i64 = Memory.malloc_zeroed(8)
+        ar: i32 = vkAllocateDescriptorSets(device, ai, set_ptr)
+        dset: i64 = Memory.read_ptr(set_ptr)
+        Memory.free(set_ptr)
+        Memory.free(ai)
+        Memory.free(layout_arr)
+        if ar != 0:
+            return 0
+
+        # VkDescriptorImageInfo (24 bytes): sampler(0), imageView(8), imageLayout(16)
+        img_info: i64 = Memory.malloc_zeroed(24)
+        Memory.write_ptr(img_info, sampler)
+        Memory.write_ptr(img_info + 8, view)
+        Memory.write_i32(img_info + 16, 5)   # SHADER_READ_ONLY_OPTIMAL
+        # VkWriteDescriptorSet (sType = 35):
+        #  0 sType, 8 pNext, 16 dstSet, 24 dstBinding, 28 dstArrayElement,
+        # 32 descriptorCount, 36 descriptorType, 40 pImageInfo, 48 pBufferInfo, 56 pTexelBufferView
+        wds: i64 = Memory.malloc_zeroed(64)
+        Memory.write_i32(wds, 35)
+        Memory.write_ptr(wds + 16, dset)
+        Memory.write_i32(wds + 24, 0)        # dstBinding
+        Memory.write_i32(wds + 28, 0)        # dstArrayElement
+        Memory.write_i32(wds + 32, 1)        # descriptorCount
+        Memory.write_i32(wds + 36, 1)        # COMBINED_IMAGE_SAMPLER
+        Memory.write_ptr(wds + 40, img_info)
+        vkUpdateDescriptorSets(device, 1, wds, 0, 0)
+        Memory.free(wds)
+        Memory.free(img_info)
+        return dset
 
     fun _create_shader_module(self, device: i64, code: i64, size: i64) -> i64:
         sm_ci: i64 = Memory.malloc_zeroed(40)
@@ -626,6 +735,10 @@ attach RenderPass:
             vkDestroyPipeline(device, self.vk_pipeline, 0)
         if self.vk_pipeline_layout != 0:
             vkDestroyPipelineLayout(device, self.vk_pipeline_layout, 0)
+        if self.desc_pool != 0:
+            vkDestroyDescriptorPool(device, self.desc_pool, 0)
+        if self.desc_set_layout != 0:
+            vkDestroyDescriptorSetLayout(device, self.desc_set_layout, 0)
         if self.vert_shader_module != 0:
             vkDestroyShaderModule(device, self.vert_shader_module, 0)
         if self.frag_shader_module != 0:

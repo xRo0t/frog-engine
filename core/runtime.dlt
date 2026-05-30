@@ -41,8 +41,8 @@ attach EngineRuntime:
             return runtime
         runtime.swapchain = swapchain
 
-        vert_shader: EmbeddedShader = get_generic_vert_shader()
-        frag_shader: EmbeddedShader = get_generic_frag_shader()
+        vert_shader: EmbeddedShader = get_textured_vert_shader()
+        frag_shader: EmbeddedShader = get_textured_frag_shader()
         render_pass: RenderPass = RenderPass()
         if render_pass.init(ctx.vk_device, swapchain.format, swapchain.image_count, swapchain.image_views, swapchain.depth_view, width, height, ctx.graphics_family, vert_shader.data, vert_shader.size, frag_shader.data, frag_shader.size) == 0:
             print("GPU render pass init failed")
@@ -108,6 +108,21 @@ attach EngineRuntime:
 
     fun register_instance(self, source_mesh: i32) -> i32:
         return self.renderer.register_instance(source_mesh)
+
+    # Load a PNG via the image package, upload it to the GPU, and return a
+    # texture id (-1 on failure). Resolves the path through Assets.
+    fun upload_texture(self, path: str) -> i32:
+        resolved: str = Assets.resolve(path)
+        img: Image = PNG.load(resolved)
+        if img.is_valid() == 0:
+            print(@"Texture load failed: {path}")
+            return 0 - 1
+        tid: i32 = self.renderer.upload_texture_image(self.render_pass, self.render_pass.vk_command_pool, img)
+        img.free()
+        return tid
+
+    fun bind_texture(self, mesh_id: i32, tex_id: i32):
+        self.renderer.bind_texture(mesh_id, tex_id)
 
     fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         self.renderer.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)

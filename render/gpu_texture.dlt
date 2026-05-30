@@ -1,0 +1,420 @@
+##############################
+# Frog Engine — GPU Texture
+# Uploads an RGBA8 Image to a sampled Vulkan texture:
+#   staging buffer -> VkImage (OPTIMAL) -> image view + sampler.
+# Layout transitions via vkCmdPipelineBarrier; copy via vkCmdCopyBufferToImage.
+# One-shot command buffer recorded on the existing command pool.
+##############################
+
+struct GpuTexture:
+    image:    i64 = 0
+    memory:   i64 = 0
+    view:     i64 = 0
+    sampler:  i64 = 0
+    width:    i32 = 0
+    height:   i32 = 0
+    ok:       i32 = 0
+
+# ---- low-level helpers -------------------------------------------------
+
+# Pick a memory type index matching type_bits and the requested property flags.
+fun gpu_tex_find_mem_type(phys_device: i64, type_bits: i32, want_flags: i32) -> i32:
+    mem_props: i64 = Memory.malloc_zeroed(520)
+    if mem_props == 0:
+        return 0 - 1
+    vkGetPhysicalDeviceMemoryProperties(phys_device, mem_props)
+    type_count: i32 = Memory.read_i32(mem_props)
+    found: i32 = 0 - 1
+    ti: i32 = 0
+    while ti < type_count:
+        bit_check: i32 = 1
+        shift: i32 = 0
+        while shift < ti:
+            bit_check = bit_check * 2
+            shift = shift + 1
+        supported: i32 = (type_bits / bit_check) - (type_bits / (bit_check * 2)) * 2
+        if supported == 1:
+            flags: i32 = Memory.read_i32(mem_props + 4 + ti * 8)
+            if (flags & want_flags) == want_flags:
+                found = ti
+                ti = type_count
+        ti = ti + 1
+    Memory.free(mem_props)
+    return found
+
+# Create a host-visible staging buffer holding `size` bytes copied from `data`.
+# Returns a GpuBufferUpload-like pair via two out pointers (buf_out, mem_out).
+fun gpu_tex_make_staging(device: i64, phys_device: i64, data: i64, size: i64, buf_out: i64, mem_out: i64) -> i32:
+    Memory.write_ptr(buf_out, 0)
+    Memory.write_ptr(mem_out, 0)
+    buf_ci: i64 = Memory.malloc_zeroed(56)
+    if buf_ci == 0:
+        return 0
+    Memory.write_i32(buf_ci, 12)
+    Memory.write_i64(buf_ci + 24, size)
+    Memory.write_i32(buf_ci + 32, 1)   # USAGE_TRANSFER_SRC
+    Memory.write_i32(buf_ci + 36, 0)
+    bp: i64 = Memory.malloc_zeroed(8)
+    r: i32 = vkCreateBuffer(device, buf_ci, 0, bp)
+    buf: i64 = Memory.read_ptr(bp)
+    Memory.free(bp)
+    Memory.free(buf_ci)
+    if r != 0:
+        return 0
+
+    mem_req: i64 = Memory.malloc_zeroed(24)
+    vkGetBufferMemoryRequirements(device, buf, mem_req)
+    req_size: i64 = Memory.read_i64(mem_req)
+    req_bits: i32 = Memory.read_i32(mem_req + 16)
+    Memory.free(mem_req)
+
+    # host visible (2) | host coherent (4) = 6
+    mt: i32 = gpu_tex_find_mem_type(phys_device, req_bits, 6)
+    if mt < 0:
+        vkDestroyBuffer(device, buf, 0)
+        return 0
+
+    ai: i64 = Memory.malloc_zeroed(32)
+    Memory.write_i32(ai, 5)
+    Memory.write_i64(ai + 16, req_size)
+    Memory.write_i32(ai + 24, mt)
+    mp: i64 = Memory.malloc_zeroed(8)
+    ar: i32 = vkAllocateMemory(device, ai, 0, mp)
+    mem: i64 = Memory.read_ptr(mp)
+    Memory.free(mp)
+    Memory.free(ai)
+    if ar != 0:
+        vkDestroyBuffer(device, buf, 0)
+        return 0
+
+    vkBindBufferMemory(device, buf, mem, 0)
+    pp: i64 = Memory.malloc_zeroed(8)
+    vkMapMemory(device, mem, 0, size, 0, pp)
+    mapped: i64 = Memory.read_ptr(pp)
+    Memory.free(pp)
+    if mapped != 0:
+        Memory.copy(mapped, data, size)
+    vkUnmapMemory(device, mem)
+
+    Memory.write_ptr(buf_out, buf)
+    Memory.write_ptr(mem_out, mem)
+    return 1
+
+# Create a device-local VkImage (R8G8B8A8_SRGB, OPTIMAL, sampled+transfer_dst).
+# Writes the image + memory to out pointers. Returns 1 on success.
+fun gpu_tex_make_image(device: i64, phys_device: i64, width: i32, height: i32, img_out: i64, mem_out: i64) -> i32:
+    Memory.write_ptr(img_out, 0)
+    Memory.write_ptr(mem_out, 0)
+
+    # VkImageCreateInfo (sType = 14). Layout (offsets):
+    #  0 sType, 8 pNext, 16 flags, 20 imageType, 24 format,
+    # 28 extent.width, 32 extent.height, 36 extent.depth,
+    # 40 mipLevels, 44 arrayLayers, 48 samples, 52 tiling,
+    # 56 usage, 60 sharingMode, 64 queueFamilyIndexCount,
+    # 72 pQueueFamilyIndices, 80 initialLayout
+    ci: i64 = Memory.malloc_zeroed(88)
+    if ci == 0:
+        return 0
+    Memory.write_i32(ci, 14)
+    Memory.write_i32(ci + 20, 1)         # IMAGE_TYPE_2D
+    Memory.write_i32(ci + 24, 43)        # FORMAT_R8G8B8A8_SRGB
+    Memory.write_i32(ci + 28, width)
+    Memory.write_i32(ci + 32, height)
+    Memory.write_i32(ci + 36, 1)         # depth
+    Memory.write_i32(ci + 40, 1)         # mipLevels
+    Memory.write_i32(ci + 44, 1)         # arrayLayers
+    Memory.write_i32(ci + 48, 1)         # SAMPLE_COUNT_1
+    Memory.write_i32(ci + 52, 0)         # TILING_OPTIMAL
+    Memory.write_i32(ci + 56, 6)         # USAGE_TRANSFER_DST(2) | SAMPLED(4)
+    Memory.write_i32(ci + 60, 0)         # SHARING_EXCLUSIVE
+    Memory.write_i32(ci + 80, 0)         # INITIAL_LAYOUT_UNDEFINED
+
+    ip: i64 = Memory.malloc_zeroed(8)
+    r: i32 = vkCreateImage(device, ci, 0, ip)
+    img: i64 = Memory.read_ptr(ip)
+    Memory.free(ip)
+    Memory.free(ci)
+    if r != 0:
+        return 0
+
+    mem_req: i64 = Memory.malloc_zeroed(24)
+    vkGetImageMemoryRequirements(device, img, mem_req)
+    req_size: i64 = Memory.read_i64(mem_req)
+    req_bits: i32 = Memory.read_i32(mem_req + 16)
+    Memory.free(mem_req)
+
+    # device local = 1
+    mt: i32 = gpu_tex_find_mem_type(phys_device, req_bits, 1)
+    if mt < 0:
+        vkDestroyImage(device, img, 0)
+        return 0
+
+    ai: i64 = Memory.malloc_zeroed(32)
+    Memory.write_i32(ai, 5)
+    Memory.write_i64(ai + 16, req_size)
+    Memory.write_i32(ai + 24, mt)
+    mp: i64 = Memory.malloc_zeroed(8)
+    ar: i32 = vkAllocateMemory(device, ai, 0, mp)
+    mem: i64 = Memory.read_ptr(mp)
+    Memory.free(mp)
+    Memory.free(ai)
+    if ar != 0:
+        vkDestroyImage(device, img, 0)
+        return 0
+
+    vkBindImageMemory(device, img, mem, 0)
+    Memory.write_ptr(img_out, img)
+    Memory.write_ptr(mem_out, mem)
+    return 1
+
+# Begin a one-shot primary command buffer on the given pool.
+fun gpu_tex_begin_oneshot(device: i64, cmd_pool: i64) -> i64:
+    cb_ai: i64 = Memory.malloc_zeroed(40)
+    Memory.write_i32(cb_ai, 40)          # sType ALLOCATE_INFO
+    Memory.write_ptr(cb_ai + 16, cmd_pool)
+    Memory.write_i32(cb_ai + 24, 0)      # LEVEL_PRIMARY
+    Memory.write_i32(cb_ai + 28, 1)      # count
+    cb_pp: i64 = Memory.malloc_zeroed(8)
+    ar: i32 = vkAllocateCommandBuffers(device, cb_ai, cb_pp)
+    cmd: i64 = Memory.read_ptr(cb_pp)
+    Memory.free(cb_pp)
+    Memory.free(cb_ai)
+    if ar != 0:
+        return 0
+    bi: i64 = Memory.malloc_zeroed(64)
+    Memory.write_i32(bi, 42)             # sType BEGIN_INFO
+    Memory.write_i32(bi + 16, 1)         # ONE_TIME_SUBMIT
+    vkBeginCommandBuffer(cmd, bi)
+    Memory.free(bi)
+    return cmd
+
+# End + submit the one-shot command buffer, wait idle, then free it.
+fun gpu_tex_end_oneshot(device: i64, cmd_pool: i64, gfx_queue: i64, cmd: i64):
+    vkEndCommandBuffer(cmd)
+    cmd_arr: i64 = Memory.malloc_zeroed(8)
+    Memory.write_ptr(cmd_arr, cmd)
+    si: i64 = Memory.malloc_zeroed(72)
+    Memory.write_i32(si, 4)              # sType SUBMIT_INFO
+    Memory.write_i32(si + 40, 1)         # commandBufferCount
+    Memory.write_ptr(si + 48, cmd_arr)
+    vkQueueSubmit(gfx_queue, 1, si, 0)
+    vkQueueWaitIdle(gfx_queue)
+    Memory.free(si)
+    Memory.free(cmd_arr)
+    free_arr: i64 = Memory.malloc_zeroed(8)
+    Memory.write_ptr(free_arr, cmd)
+    vkFreeCommandBuffers(device, cmd_pool, 1, free_arr)
+    Memory.free(free_arr)
+
+# Record an image layout transition barrier on `cmd`.
+# VkImageMemoryBarrier (sType = 45). Offsets:
+#  0 sType, 8 pNext, 16 srcAccessMask, 20 dstAccessMask,
+# 24 oldLayout, 28 newLayout, 32 srcQueueFamilyIndex, 36 dstQueueFamilyIndex,
+# 40 image, 48 subresourceRange { aspectMask(48), baseMipLevel(52),
+#   levelCount(56), baseArrayLayer(60), layerCount(64) }  => 72 bytes
+fun gpu_tex_barrier(cmd: i64, image: i64, old_layout: i32, new_layout: i32, src_access: i32, dst_access: i32, src_stage: i64, dst_stage: i64):
+    b: i64 = Memory.malloc_zeroed(72)
+    if b == 0:
+        return
+    Memory.write_i32(b, 45)
+    Memory.write_i32(b + 16, src_access)
+    Memory.write_i32(b + 20, dst_access)
+    Memory.write_i32(b + 24, old_layout)
+    Memory.write_i32(b + 28, new_layout)
+    Memory.write_i32(b + 32, 0 - 1)     # QUEUE_FAMILY_IGNORED
+    Memory.write_i32(b + 36, 0 - 1)
+    Memory.write_ptr(b + 40, image)
+    Memory.write_i32(b + 48, 1)         # ASPECT_COLOR
+    Memory.write_i32(b + 52, 0)         # baseMipLevel
+    Memory.write_i32(b + 56, 1)         # levelCount
+    Memory.write_i32(b + 60, 0)         # baseArrayLayer
+    Memory.write_i32(b + 64, 1)         # layerCount
+    vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, 0, 0, 0, 1, b)
+    Memory.free(b)
+
+# Copy the staging buffer into the image (full extent).
+# VkBufferImageCopy (56 bytes). Offsets:
+#  0 bufferOffset, 8 bufferRowLength, 12 bufferImageHeight,
+# 16 imageSubresource { aspectMask(16), mipLevel(20), baseArrayLayer(24), layerCount(28) },
+# 32 imageOffset { x(32), y(36), z(40) }, 44 imageExtent { w(44), h(48), d(52) }
+fun gpu_tex_copy(cmd: i64, staging: i64, image: i64, width: i32, height: i32):
+    region: i64 = Memory.malloc_zeroed(56)
+    if region == 0:
+        return
+    Memory.write_i32(region + 16, 1)    # ASPECT_COLOR
+    Memory.write_i32(region + 28, 1)    # layerCount
+    Memory.write_i32(region + 44, width)
+    Memory.write_i32(region + 48, height)
+    Memory.write_i32(region + 52, 1)    # depth
+    # dstImageLayout = TRANSFER_DST_OPTIMAL (7)
+    vkCmdCopyBufferToImage(cmd, staging, image, 7, 1, region)
+    Memory.free(region)
+
+# Create a VkImageView (2D, R8G8B8A8_SRGB) for the texture image.
+fun gpu_tex_make_view(device: i64, image: i64) -> i64:
+    # VkImageViewCreateInfo (sType = 15). Offsets:
+    #  0 sType, 8 pNext, 16 flags, 24 image, 32 viewType, 36 format,
+    # 40 components {r,g,b,a = 40,44,48,52}, 56 subresourceRange
+    #   { aspectMask(56), baseMipLevel(60), levelCount(64), baseArrayLayer(68), layerCount(72) } => 80 bytes
+    ci: i64 = Memory.malloc_zeroed(80)
+    if ci == 0:
+        return 0
+    Memory.write_i32(ci, 15)
+    Memory.write_ptr(ci + 24, image)
+    Memory.write_i32(ci + 32, 1)        # VIEW_TYPE_2D
+    Memory.write_i32(ci + 36, 43)       # FORMAT_R8G8B8A8_SRGB
+    Memory.write_i32(ci + 56, 1)        # ASPECT_COLOR
+    Memory.write_i32(ci + 60, 0)
+    Memory.write_i32(ci + 64, 1)        # levelCount
+    Memory.write_i32(ci + 68, 0)
+    Memory.write_i32(ci + 72, 1)        # layerCount
+    vp: i64 = Memory.malloc_zeroed(8)
+    r: i32 = vkCreateImageView(device, ci, 0, vp)
+    view: i64 = Memory.read_ptr(vp)
+    Memory.free(vp)
+    Memory.free(ci)
+    if r != 0:
+        return 0
+    return view
+
+# Create a linear sampler with repeat addressing.
+fun gpu_tex_make_sampler(device: i64) -> i64:
+    # VkSamplerCreateInfo (sType = 31). Offsets:
+    #  0 sType, 8 pNext, 16 flags, 20 magFilter, 24 minFilter, 28 mipmapMode,
+    # 32 addressModeU, 36 addressModeV, 40 addressModeW, 44 mipLodBias(f32),
+    # 48 anisotropyEnable, 52 maxAnisotropy(f32), 56 compareEnable, 60 compareOp,
+    # 64 minLod(f32), 68 maxLod(f32), 72 borderColor, 76 unnormalizedCoordinates  => 80 bytes
+    ci: i64 = Memory.malloc_zeroed(80)
+    if ci == 0:
+        return 0
+    Memory.write_i32(ci, 31)
+    Memory.write_i32(ci + 20, 1)        # magFilter LINEAR
+    Memory.write_i32(ci + 24, 1)        # minFilter LINEAR
+    Memory.write_i32(ci + 28, 0)        # mipmapMode NEAREST
+    Memory.write_i32(ci + 32, 0)        # addressU REPEAT
+    Memory.write_i32(ci + 36, 0)        # addressV REPEAT
+    Memory.write_i32(ci + 40, 0)        # addressW REPEAT
+    Memory.write_i32(ci + 48, 0)        # anisotropyEnable false
+    Memory.write_f32(ci + 52, 1.0)      # maxAnisotropy
+    Memory.write_i32(ci + 56, 0)        # compareEnable false
+    Memory.write_i32(ci + 60, 0)        # compareOp NEVER
+    Memory.write_f32(ci + 64, 0.0)      # minLod
+    Memory.write_f32(ci + 68, 0.0)      # maxLod
+    Memory.write_i32(ci + 72, 0)        # borderColor
+    Memory.write_i32(ci + 76, 0)        # unnormalizedCoordinates false
+    sp: i64 = Memory.malloc_zeroed(8)
+    r: i32 = vkCreateSampler(device, ci, 0, sp)
+    samp: i64 = Memory.read_ptr(sp)
+    Memory.free(sp)
+    Memory.free(ci)
+    if r != 0:
+        return 0
+    return samp
+
+# ---- public upload --------------------------------------------------------
+
+# Upload raw RGBA8 pixel data (width*height*4 bytes) to a sampled GpuTexture.
+fun gpu_texture_upload_rgba(device: i64, phys_device: i64, gfx_queue: i64, cmd_pool: i64, pixels: i64, width: i32, height: i32) -> GpuTexture:
+    tex: GpuTexture = GpuTexture()
+    if pixels == 0:
+        return tex
+    if width <= 0:
+        return tex
+    if height <= 0:
+        return tex
+
+    size: i64 = (width as i64) * (height as i64) * 4
+
+    buf_out: i64 = Memory.malloc_zeroed(8)
+    mem_out: i64 = Memory.malloc_zeroed(8)
+    if gpu_tex_make_staging(device, phys_device, pixels, size, buf_out, mem_out) == 0:
+        Memory.free(buf_out)
+        Memory.free(mem_out)
+        return tex
+    staging: i64 = Memory.read_ptr(buf_out)
+    staging_mem: i64 = Memory.read_ptr(mem_out)
+    Memory.free(buf_out)
+    Memory.free(mem_out)
+
+    img_out: i64 = Memory.malloc_zeroed(8)
+    imem_out: i64 = Memory.malloc_zeroed(8)
+    if gpu_tex_make_image(device, phys_device, width, height, img_out, imem_out) == 0:
+        Memory.free(img_out)
+        Memory.free(imem_out)
+        vkDestroyBuffer(device, staging, 0)
+        vkFreeMemory(device, staging_mem, 0)
+        return tex
+    image: i64 = Memory.read_ptr(img_out)
+    image_mem: i64 = Memory.read_ptr(imem_out)
+    Memory.free(img_out)
+    Memory.free(imem_out)
+
+    # Record: UNDEFINED -> TRANSFER_DST, copy, TRANSFER_DST -> SHADER_READ_ONLY
+    cmd: i64 = gpu_tex_begin_oneshot(device, cmd_pool)
+    if cmd == 0:
+        vkDestroyImage(device, image, 0)
+        vkFreeMemory(device, image_mem, 0)
+        vkDestroyBuffer(device, staging, 0)
+        vkFreeMemory(device, staging_mem, 0)
+        return tex
+
+    # UNDEFINED(0) -> TRANSFER_DST_OPTIMAL(7): srcAccess 0, dstAccess TRANSFER_WRITE(0x1000=4096)
+    # stages: TOP_OF_PIPE(1) -> TRANSFER(0x1000=4096)
+    gpu_tex_barrier(cmd, image, 0, 7, 0, 4096, 1, 4096)
+    gpu_tex_copy(cmd, staging, image, width, height)
+    # TRANSFER_DST_OPTIMAL(7) -> SHADER_READ_ONLY_OPTIMAL(5):
+    # srcAccess TRANSFER_WRITE(4096), dstAccess SHADER_READ(0x20=32)
+    # stages: TRANSFER(4096) -> FRAGMENT_SHADER(0x80=128)
+    gpu_tex_barrier(cmd, image, 7, 5, 4096, 32, 4096, 128)
+    gpu_tex_end_oneshot(device, cmd_pool, gfx_queue, cmd)
+
+    vkDestroyBuffer(device, staging, 0)
+    vkFreeMemory(device, staging_mem, 0)
+
+    view: i64 = gpu_tex_make_view(device, image)
+    sampler: i64 = gpu_tex_make_sampler(device)
+    if view == 0:
+        vkDestroyImage(device, image, 0)
+        vkFreeMemory(device, image_mem, 0)
+        return tex
+    if sampler == 0:
+        vkDestroyImageView(device, view, 0)
+        vkDestroyImage(device, image, 0)
+        vkFreeMemory(device, image_mem, 0)
+        return tex
+
+    tex.image = image
+    tex.memory = image_mem
+    tex.view = view
+    tex.sampler = sampler
+    tex.width = width
+    tex.height = height
+    tex.ok = 1
+    return tex
+
+# Upload an image package Image (RGBA8) to a GpuTexture.
+fun gpu_texture_upload_image(device: i64, phys_device: i64, gfx_queue: i64, cmd_pool: i64, img: Image) -> GpuTexture:
+    if img.is_valid() == 0:
+        return GpuTexture()
+    return gpu_texture_upload_rgba(device, phys_device, gfx_queue, cmd_pool, img.data, img.width, img.height)
+
+# Create a 1x1 opaque white texture (fallback for untextured meshes).
+fun gpu_texture_make_white(device: i64, phys_device: i64, gfx_queue: i64, cmd_pool: i64) -> GpuTexture:
+    px: i64 = Memory.malloc_zeroed(4)
+    Memory.write_i8(px, 255 as i8)
+    Memory.write_i8(px + 1, 255 as i8)
+    Memory.write_i8(px + 2, 255 as i8)
+    Memory.write_i8(px + 3, 255 as i8)
+    tex: GpuTexture = gpu_texture_upload_rgba(device, phys_device, gfx_queue, cmd_pool, px, 1, 1)
+    Memory.free(px)
+    return tex
+
+fun gpu_texture_destroy(device: i64, tex: GpuTexture):
+    if tex.sampler != 0:
+        vkDestroySampler(device, tex.sampler, 0)
+    if tex.view != 0:
+        vkDestroyImageView(device, tex.view, 0)
+    if tex.image != 0:
+        vkDestroyImage(device, tex.image, 0)
+    if tex.memory != 0:
+        vkFreeMemory(device, tex.memory, 0)

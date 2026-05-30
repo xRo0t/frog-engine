@@ -181,6 +181,22 @@ attach Renderer:
     fun register_instance(self, source_mesh: i32) -> i32:
         return self.core.register_instance(source_mesh)
 
+    # Upload a decoded RGBA Image to the GPU and register it as a texture.
+    # Returns a texture id, or -1 on failure. Needs the render pass (for the
+    # descriptor set) and a command pool (for the upload commands).
+    fun upload_texture_image(self, rp: RenderPass, cmd_pool: i64, img: Image) -> i32:
+        gtex: GpuTexture = gpu_texture_upload_image(self.core.device, self.core.phys_device, self.core.gfx_queue, cmd_pool, img)
+        if gtex.ok == 0:
+            return 0 - 1
+        tid: i32 = self.core.register_texture(rp, gtex)
+        if tid < 0:
+            gpu_texture_destroy(self.core.device, gtex)
+            return 0 - 1
+        return tid
+
+    fun bind_texture(self, mesh_id: i32, tex_id: i32):
+        self.core.bind_texture(mesh_id, tex_id)
+
     fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         self.core.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
 

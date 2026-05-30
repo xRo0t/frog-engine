@@ -74,12 +74,24 @@ struct GpuRendererCore:
     scratch_off_arr:   i64 = 0
     scratch_inst_vb_arr:  i64 = 0
     scratch_inst_off_arr: i64 = 0
+    scratch_desc_arr:     i64 = 0
     instance_culling_enabled: i32 = 0
     debug_render_stats_enabled: i32 = 0
     debug_frame_count: i32 = 0
     debug_draw_calls: i32 = 0
     debug_indexed_draw_calls: i32 = 0
     debug_visible_instances: i32 = 0
+    # Texture registry
+    tex_views:      i64 = 0    # VkImageView[]
+    tex_samplers:   i64 = 0    # VkSampler[]
+    tex_images:     i64 = 0    # VkImage[]
+    tex_memories:   i64 = 0    # VkDeviceMemory[]
+    tex_desc_sets:  i64 = 0    # VkDescriptorSet[]
+    tex_count:      i32 = 0
+    tex_capacity:   i32 = 0
+    mesh_tex_ids:   i64 = 0    # mesh_id -> texture_id (-1 = white fallback)
+    white_desc_set: i64 = 0    # descriptor set for the 1x1 white fallback
+    white_tex_id:   i32 = -1
 
 attach GpuRendererCore:
 
@@ -97,11 +109,28 @@ attach GpuRendererCore:
         self.ib_index_counts = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.model_matrices = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.vb_count = 0
+        # Texture registry
+        self.tex_capacity = 256
+        self.tex_views = Memory.malloc_zeroed(self.tex_capacity * 8)
+        self.tex_samplers = Memory.malloc_zeroed(self.tex_capacity * 8)
+        self.tex_images = Memory.malloc_zeroed(self.tex_capacity * 8)
+        self.tex_memories = Memory.malloc_zeroed(self.tex_capacity * 8)
+        self.tex_desc_sets = Memory.malloc_zeroed(self.tex_capacity * 8)
+        self.tex_count = 0
+        # mesh_id -> texture_id, default -1 (white fallback)
+        self.mesh_tex_ids = Memory.malloc_zeroed(self.vb_capacity * 4)
+        mti: i32 = 0
+        while mti < self.vb_capacity:
+            Memory.write_i32(self.mesh_tex_ids + mti * 4, 0 - 1)
+            mti = mti + 1
+        self.white_desc_set = 0
+        self.white_tex_id = 0 - 1
         # Pre-allocate scratch buffers (eliminates malloc/free per draw)
         self.scratch_vb_arr = Memory.malloc_zeroed(8)
         self.scratch_off_arr = Memory.malloc_zeroed(8)
         self.scratch_inst_vb_arr = Memory.malloc_zeroed(8)
         self.scratch_inst_off_arr = Memory.malloc_zeroed(8)
+        self.scratch_desc_arr = Memory.malloc_zeroed(8)
         Memory.write_i64(self.scratch_off_arr, 0)
         Memory.write_i64(self.scratch_inst_off_arr, 0)
         self.instance_culling_enabled = 0
@@ -147,6 +176,11 @@ attach GpuRendererCore:
         new_ib_memories: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_ib_counts: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_matrices: i64 = Memory.malloc_zeroed(new_cap * 8)
+        new_mesh_tex: i64 = Memory.malloc_zeroed(new_cap * 4)
+        mti2: i32 = 0
+        while mti2 < new_cap:
+            Memory.write_i32(new_mesh_tex + mti2 * 4, 0 - 1)
+            mti2 = mti2 + 1
         Memory.copy(new_handles, self.vb_handles, self.vb_capacity * 8)
         Memory.copy(new_memories, self.vb_memories, self.vb_capacity * 8)
         Memory.copy(new_vert_counts, self.vb_vert_counts, self.vb_capacity * 4)
@@ -154,6 +188,8 @@ attach GpuRendererCore:
         Memory.copy(new_ib_memories, self.ib_memories, self.vb_capacity * 8)
         Memory.copy(new_ib_counts, self.ib_index_counts, self.vb_capacity * 4)
         Memory.copy(new_matrices, self.model_matrices, self.vb_capacity * 8)
+        if self.mesh_tex_ids != 0:
+            Memory.copy(new_mesh_tex, self.mesh_tex_ids, self.vb_capacity * 4)
         Memory.free(self.vb_handles)
         Memory.free(self.vb_memories)
         Memory.free(self.vb_vert_counts)
@@ -161,6 +197,8 @@ attach GpuRendererCore:
         Memory.free(self.ib_memories)
         Memory.free(self.ib_index_counts)
         Memory.free(self.model_matrices)
+        if self.mesh_tex_ids != 0:
+            Memory.free(self.mesh_tex_ids)
         self.vb_handles = new_handles
         self.vb_memories = new_memories
         self.vb_vert_counts = new_vert_counts
@@ -168,6 +206,7 @@ attach GpuRendererCore:
         self.ib_memories = new_ib_memories
         self.ib_index_counts = new_ib_counts
         self.model_matrices = new_matrices
+        self.mesh_tex_ids = new_mesh_tex
         self.vb_capacity = new_cap
 
     fun _upload_buffer(self, data: i64, data_size: i64, usage: i32) -> GpuBufferUpload:
@@ -398,6 +437,60 @@ attach GpuRendererCore:
                 Memory.free(old_ptr)
         Memory.write_ptr(self.model_matrices + vb_idx * 8, mat_ptr)
 
+    # Register an uploaded GpuTexture, creating its descriptor set via the render
+    # pass. Returns the texture id (index into the registry) or -1 on failure.
+    fun register_texture(self, rp: RenderPass, tex: GpuTexture) -> i32:
+        if tex.ok == 0:
+            return 0 - 1
+        if self.tex_count >= self.tex_capacity:
+            return 0 - 1
+        dset: i64 = rp.make_texture_descriptor(self.device, tex.view, tex.sampler)
+        if dset == 0:
+            return 0 - 1
+        idx: i32 = self.tex_count
+        Memory.write_ptr(self.tex_views + idx * 8, tex.view)
+        Memory.write_ptr(self.tex_samplers + idx * 8, tex.sampler)
+        Memory.write_ptr(self.tex_images + idx * 8, tex.image)
+        Memory.write_ptr(self.tex_memories + idx * 8, tex.memory)
+        Memory.write_ptr(self.tex_desc_sets + idx * 8, dset)
+        self.tex_count = idx + 1
+        return idx
+
+    # Ensure the 1x1 white fallback texture exists (lazy init). Returns its id.
+    fun ensure_white_texture(self, rp: RenderPass, cmd_pool: i64) -> i32:
+        if self.white_tex_id >= 0:
+            return self.white_tex_id
+        wtex: GpuTexture = gpu_texture_make_white(self.device, self.phys_device, self.gfx_queue, cmd_pool)
+        if wtex.ok == 0:
+            return 0 - 1
+        tid: i32 = self.register_texture(rp, wtex)
+        if tid < 0:
+            gpu_texture_destroy(self.device, wtex)
+            return 0 - 1
+        self.white_tex_id = tid
+        self.white_desc_set = Memory.read_ptr(self.tex_desc_sets + tid * 8)
+        return tid
+
+    # Assign a texture id to a mesh/instance.
+    fun bind_texture(self, mesh_id: i32, tex_id: i32):
+        if mesh_id < 0:
+            return
+        if mesh_id >= self.vb_count:
+            return
+        if self.mesh_tex_ids == 0:
+            return
+        Memory.write_i32(self.mesh_tex_ids + mesh_id * 4, tex_id)
+
+    fun mesh_descriptor_set(self, mesh_id: i32) -> i64:
+        if self.mesh_tex_ids == 0:
+            return self.white_desc_set
+        tid: i32 = Memory.read_i32(self.mesh_tex_ids + mesh_id * 4)
+        if tid < 0:
+            return self.white_desc_set
+        if tid >= self.tex_count:
+            return self.white_desc_set
+        return Memory.read_ptr(self.tex_desc_sets + tid * 8)
+
     fun render_frame(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32) -> void:
         if rp.frame_initialized == 0:
             return
@@ -424,6 +517,7 @@ attach GpuRendererCore:
         cmd_buf: i64 = Memory.read_ptr(rp.vk_command_buffers + self.current_frame * 8)
         vkResetCommandBuffer(cmd_buf, 0)
         fb: i64 = Memory.read_ptr(rp.framebuffers + img_idx * 8)
+        self.ensure_white_texture(rp, rp.vk_command_pool)
         self._record_commands(cmd_buf, fb, rp, cam_view, cam_proj, width, height)
 
         # Submit
@@ -561,6 +655,7 @@ attach GpuRendererCore:
 
                 last_bound: i64 = 0
                 last_index_bound: i64 = 0
+                last_desc: i64 = 0
                 instance_write: i32 = 0
                 frame_draw_calls: i32 = 0
                 frame_indexed_draw_calls: i32 = 0
@@ -587,12 +682,18 @@ attach GpuRendererCore:
                     else:
                         group_start: i32 = instance_write
                         group_count: i32 = 0
+                        group_tex_id: i32 = 0 - 1
+                        if self.mesh_tex_ids != 0:
+                            group_tex_id = Memory.read_i32(self.mesh_tex_ids + mi * 4)
                         gi: i32 = mi
                         while gi < self.vb_count:
                             g_vb: i64 = Memory.read_ptr(self.vb_handles + gi * 8)
                             g_vc: i32 = Memory.read_i32(self.vb_vert_counts + gi * 4)
                             g_ib: i64 = Memory.read_ptr(self.ib_handles + gi * 8)
                             g_ic: i32 = Memory.read_i32(self.ib_index_counts + gi * 4)
+                            g_tex: i32 = 0 - 1
+                            if self.mesh_tex_ids != 0:
+                                g_tex = Memory.read_i32(self.mesh_tex_ids + gi * 4)
                             g_model: i64 = 0
                             if self.model_matrices != 0:
                                 g_model = Memory.read_ptr(self.model_matrices + gi * 8)
@@ -603,6 +704,8 @@ attach GpuRendererCore:
                             elif g_ib != ib_handle:
                                 break
                             elif g_ic != ic:
+                                break
+                            elif g_tex != group_tex_id:
                                 break
                             elif g_model == 0:
                                 break
@@ -629,6 +732,15 @@ attach GpuRendererCore:
                             Memory.write_ptr(self.scratch_inst_vb_arr, self.instance_buffer)
                             Memory.write_i64(self.scratch_inst_off_arr, (group_start as i64) * 64)
                             vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
+
+                            # Bind the texture descriptor set for this group
+                            # (falls back to the 1x1 white texture when unset).
+                            grp_desc: i64 = self.mesh_descriptor_set(mi)
+                            if grp_desc != 0:
+                                if grp_desc != last_desc:
+                                    Memory.write_ptr(self.scratch_desc_arr, grp_desc)
+                                    vkCmdBindDescriptorSets(cmd, 0, rp.vk_pipeline_layout, 0, 1, self.scratch_desc_arr, 0, 0)
+                                    last_desc = grp_desc
 
                             if ib_handle != 0:
                                 if ic > 0:
@@ -714,6 +826,38 @@ attach GpuRendererCore:
             Memory.free(self.scratch_inst_vb_arr)
         if self.scratch_inst_off_arr != 0:
             Memory.free(self.scratch_inst_off_arr)
+        if self.scratch_desc_arr != 0:
+            Memory.free(self.scratch_desc_arr)
+        # Destroy textures (image view + sampler + image + memory).
+        # Descriptor sets are freed with the pool in RenderPass.cleanup.
+        if self.tex_views != 0:
+            ti: i32 = 0
+            while ti < self.tex_count:
+                tv: i64 = Memory.read_ptr(self.tex_views + ti * 8)
+                if tv != 0:
+                    vkDestroyImageView(self.device, tv, 0)
+                ts: i64 = Memory.read_ptr(self.tex_samplers + ti * 8)
+                if ts != 0:
+                    vkDestroySampler(self.device, ts, 0)
+                tim: i64 = Memory.read_ptr(self.tex_images + ti * 8)
+                if tim != 0:
+                    vkDestroyImage(self.device, tim, 0)
+                tmem: i64 = Memory.read_ptr(self.tex_memories + ti * 8)
+                if tmem != 0:
+                    vkFreeMemory(self.device, tmem, 0)
+                ti = ti + 1
+            Memory.free(self.tex_views)
+        if self.tex_samplers != 0:
+            Memory.free(self.tex_samplers)
+        if self.tex_images != 0:
+            Memory.free(self.tex_images)
+        if self.tex_memories != 0:
+            Memory.free(self.tex_memories)
+        if self.tex_desc_sets != 0:
+            Memory.free(self.tex_desc_sets)
+        if self.mesh_tex_ids != 0:
+            Memory.free(self.mesh_tex_ids)
+        self.tex_count = 0
         self.vb_count = 0
         self.instance_capacity = 0
         self.initialized = 0

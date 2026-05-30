@@ -6,6 +6,7 @@ module frog
 
 import window
 import json
+import image
 requires vulkan
 
 # Phase 1: Math
@@ -39,6 +40,7 @@ load frog/render/gpu_vulkan_context
 load frog/render/gpu_swapchain
 load frog/render/gpu_render_pass
 load frog/render/gpu_renderer_core
+load frog/render/gpu_texture
 load frog/render/gpu_mesh
 load frog/render/gpu
 load frog/core/runtime
@@ -61,6 +63,7 @@ export KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN
 export KEY_ESCAPE, KEY_SPACE, KEY_SHIFT, KEY_CTRL
 export Assets, AssetModels, AssetTextures, AssetAudio, AssetShaders
 export Model3D, Texture2D, AudioClip, Shader
+export GpuTexture
 export Node, Node3D, Camera3D, RootNode, FlycamNode, GoblinGroupNode, GoblinNode, EarthNode
 export node3d_create, camera3d_create, root_node_create, flycam_node_create
 export goblin_group_node_create, goblin_node_create, earth_node_create
