@@ -615,6 +615,7 @@ camera.make_current()</code></pre>
         <tr><th>Function</th><th>Description</th></tr>
         <tr><td><code>clamp(value, min, max)</code></td><td>Clamp a value to a range.</td></tr>
         <tr><td><code>lerp(a, b, t)</code></td><td>Linear interpolation.</td></tr>
+        <tr><td><code>damp(current, target, k, dt)</code></td><td>Framerate-independent exponential smoothing toward a target (k = responsiveness). Great for cameras, FOV, fades.</td></tr>
         <tr><td><code>min_f32(a, b)</code> / <code>max_f32(a, b)</code></td><td>Min / max of two floats.</td></tr>
         <tr><td><code>deg2rad(deg)</code> / <code>rad2deg(rad)</code></td><td>Angle conversion.</td></tr>
         <tr><td><code>normalize_angle_deg(angle)</code></td><td>Wrap an angle into a canonical range.</td></tr>
@@ -624,6 +625,19 @@ camera.make_current()</code></pre>
         <tr><td><code>rand01(index, seed, salt)</code></td><td>Deterministic random in [0,1).</td></tr>
         <tr><td><code>rand_range(index, seed, salt, min, max)</code></td><td>Deterministic random in a range.</td></tr>
       </table>
+
+      <h3>Spring — smoothing with weight</h3>
+      <p>A 1-D damped spring for values that should ease in with momentum &mdash; camera follow, FOV zoom, weapon sway. It carries its own state (<code>value</code>, <code>vel</code>); call <code>advance(target, dt)</code> each frame. Keep <code>damping ≈ 2*sqrt(stiffness)</code> for a clean, overshoot-free settle, or lower it for a springy bounce.</p>
+      <table>
+        <tr><th>Field / Method</th><th>Description</th></tr>
+        <tr><td><code>value</code>, <code>vel</code></td><td>Current position and velocity — the spring's state.</td></tr>
+        <tr><td><code>stiffness</code> (140), <code>damping</code> (22)</td><td>Pull toward target / resistance. Tune for feel.</td></tr>
+        <tr><td><code>advance(target, dt)</code></td><td>Integrate one frame toward <code>target</code>; returns the new <code>value</code>.</td></tr>
+      </table>
+      <pre><code>fov: <span class="tok-type">Spring</span> = Spring()
+fov.stiffness = <span class="tok-num">120.0</span>
+<span class="tok-com"># each frame: ease the FOV toward its target with weight</span>
+cam.set_fov(fov.advance(target_fov, dt))</code></pre>
     </section>
     <section id="textures">
       <h2>Guide: Textures</h2>

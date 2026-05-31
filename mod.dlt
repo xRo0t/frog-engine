@@ -53,14 +53,15 @@ load frog/core/benchmark
 load frog/frog
 
 # Exports
-export Vec3, Mat4, Quat, Color
-export clamp, lerp, min_f32, max_f32, deg2rad, rad2deg
+export Vec3, Mat4, Quat, Color, Spring
+export clamp, lerp, damp, min_f32, max_f32, deg2rad, rad2deg
 export normalize_angle_deg, lerp_angle_deg, yaw_from_dir
 export rand01, rand_range, approx_atan, approx_atan2
 export Clock, AppWindow, App, Engine, Input
 export KEY_A, KEY_D, KEY_E, KEY_M, KEY_Q, KEY_S, KEY_W
 export KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN
 export KEY_ESCAPE, KEY_SPACE, KEY_SHIFT, KEY_CTRL
+export MOUSE_LEFT, MOUSE_RIGHT
 export Assets, AssetModels, AssetTextures, AssetAudio, AssetShaders
 export Model3D, Texture2D, AudioClip, Shader
 export GpuTexture, TextureSpec

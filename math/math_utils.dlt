@@ -102,3 +102,28 @@ fun rand01(index: i32, seed: i32, salt: i32) -> f32:
 
 fun rand_range(index: i32, seed: i32, salt: i32, min_val: f32, max_val: f32) -> f32:
     return min_val + (max_val - min_val) * rand01(index, seed, salt)
+
+# Framerate-independent exponential smoothing toward target.
+# k = responsiveness (higher = snappier). Stateless: feed last value back in.
+fun damp(current: f32, target: f32, k: f32, dt: f32) -> f32:
+    return lerp(current, target, 1.0 - @exp(0.0 - k * dt))
+
+##############################
+# Spring - 1-D damped spring for smoothing any value (camera, FOV, sway...).
+# Holds its own position + velocity; call step(target, dt) each frame.
+# damping ~= 2 * sqrt(stiffness) is critically damped (no overshoot);
+# lower damping gives a springier bounce.
+##############################
+@heap struct Spring:
+    value: f32 = 0.0
+    vel: f32 = 0.0
+    stiffness: f32 = 140.0
+    damping: f32 = 22.0
+
+attach Spring:
+
+    fun advance(self, target: f32, dt: f32) -> f32:
+        accel: f32 = self.stiffness * (target - self.value) - self.damping * self.vel
+        self.vel = self.vel + accel * dt
+        self.value = self.value + self.vel * dt
+        return self.value

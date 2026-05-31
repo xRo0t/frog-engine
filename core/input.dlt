@@ -26,6 +26,10 @@ KEY_SPACE: i32 = 32
 KEY_SHIFT: i32 = 16
 KEY_CTRL: i32 = 17
 
+# Mouse buttons (Windows virtual-key codes; usable with Input.key_down).
+MOUSE_LEFT: i32 = 1
+MOUSE_RIGHT: i32 = 2
+
 struct Point:
     x: i32 = 0
     y: i32 = 0
