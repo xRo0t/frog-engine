@@ -31,6 +31,7 @@ struct Node:
     velocity_y: f32 = 0.0
     velocity_z: f32 = 0.0
     mass: f32 = 1.0
+    texture_id: i32 = -1
 
 @heap struct Camera3D extends Node3D:
     fov: f32 = 82.0
@@ -231,7 +232,32 @@ attach Node3D:
         return self
 
     fun set_model(self, model: Model3D) -> Node3D:
-        self.mesh_id = model.mesh_id
+        mid: i32 = model.mesh_id
+        if mid < 0:
+            mid = Engine.upload_model_mesh(model)
+        self.mesh_id = mid
+        # If a texture was already chosen for this node, bind it now that we
+        # have a real mesh id (order-independent: set_texture/set_model in any order).
+        if self.texture_id >= 0:
+            if self.mesh_id >= 0:
+                Engine.bind_texture(self.mesh_id, self.texture_id)
+        return self
+
+    # Dress this node with an uploaded texture. Mirrors set_model: the node
+    # carries the texture and binds it to its mesh. Safe to call before or
+    # after set_model.
+    fun set_texture(self, texture: Texture2D) -> Node3D:
+        self.texture_id = texture.texture_id
+        if self.texture_id >= 0:
+            if self.mesh_id >= 0:
+                Engine.bind_texture(self.mesh_id, self.texture_id)
+        return self
+
+    fun set_texture_id(self, texture_id: i32) -> Node3D:
+        self.texture_id = texture_id
+        if self.texture_id >= 0:
+            if self.mesh_id >= 0:
+                Engine.bind_texture(self.mesh_id, self.texture_id)
         return self
 
     fun destroy(self):

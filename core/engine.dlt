@@ -148,6 +148,9 @@ attach Engine:
     static fun upload_texture(path: str) -> i32:
         return g_engine_runtime.upload_texture(path)
 
+    static fun upload_texture_spec(path: str, spec: TextureSpec) -> i32:
+        return g_engine_runtime.upload_texture_spec(path, spec)
+
     static fun bind_texture(mesh_id: i32, texture_id: i32):
         g_engine_runtime.bind_texture(mesh_id, texture_id)
 

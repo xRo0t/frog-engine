@@ -63,7 +63,7 @@ export KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN
 export KEY_ESCAPE, KEY_SPACE, KEY_SHIFT, KEY_CTRL
 export Assets, AssetModels, AssetTextures, AssetAudio, AssetShaders
 export Model3D, Texture2D, AudioClip, Shader
-export GpuTexture
+export GpuTexture, TextureSpec
 export Node, Node3D, Camera3D, RootNode, FlycamNode, GoblinGroupNode, GoblinNode, EarthNode
 export node3d_create, camera3d_create, root_node_create, flycam_node_create
 export goblin_group_node_create, goblin_node_create, earth_node_create

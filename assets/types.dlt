@@ -40,6 +40,7 @@ struct Texture2D:
     resolved_path: str = ""
     width: i32 = 0
     height: i32 = 0
+    texture_id: i32 = -1
     found: i32 = 0
     ready: i32 = 0
     error: str = ""

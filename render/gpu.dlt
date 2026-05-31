@@ -206,7 +206,11 @@ attach Renderer:
     # Returns a texture id, or -1 on failure. Needs the render pass (for the
     # descriptor set) and a command pool (for the upload commands).
     fun upload_texture_image(self, rp: RenderPass, cmd_pool: i64, img: Image) -> i32:
-        gtex: GpuTexture = gpu_texture_upload_image(self.core.device, self.core.phys_device, self.core.gfx_queue, cmd_pool, img)
+        return self.upload_texture_image_spec(rp, cmd_pool, img, TextureSpec.smooth())
+
+    # Same, but with an explicit TextureSpec controlling filtering/wrap/srgb.
+    fun upload_texture_image_spec(self, rp: RenderPass, cmd_pool: i64, img: Image, spec: TextureSpec) -> i32:
+        gtex: GpuTexture = gpu_texture_upload_image_spec(self.core.device, self.core.phys_device, self.core.gfx_queue, cmd_pool, img, spec)
         if gtex.ok == 0:
             return 0 - 1
         tid: i32 = self.core.register_texture(rp, gtex)

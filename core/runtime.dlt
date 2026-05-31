@@ -112,12 +112,16 @@ attach EngineRuntime:
     # Load a PNG via the image package, upload it to the GPU, and return a
     # texture id (-1 on failure). Resolves the path through Assets.
     fun upload_texture(self, path: str) -> i32:
+        return self.upload_texture_spec(path, TextureSpec.smooth())
+
+    # Same, but with an explicit TextureSpec controlling filtering/wrap/srgb.
+    fun upload_texture_spec(self, path: str, spec: TextureSpec) -> i32:
         resolved: str = Assets.resolve(path)
         img: Image = PNG.load(resolved)
         if img.is_valid() == 0:
             print(@"Texture load failed: {path}")
             return 0 - 1
-        tid: i32 = self.renderer.upload_texture_image(self.render_pass, self.render_pass.vk_command_pool, img)
+        tid: i32 = self.renderer.upload_texture_image_spec(self.render_pass, self.render_pass.vk_command_pool, img, spec)
         img.free()
         return tid
 

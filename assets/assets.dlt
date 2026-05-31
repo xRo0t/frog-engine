@@ -36,12 +36,25 @@ attach AssetModels:
 
 attach AssetTextures:
 
+    # Read a PNG, upload it to the GPU with the default (smooth) spec, and
+    # return a ready-to-use Texture2D whose texture_id is bound-able.
     static fun load(path: str) -> Texture2D:
+        return AssetTextures.load(path, TextureSpec.smooth())
+
+    # Same, but the TextureSpec controls how the image appears (filtering,
+    # wrapping, color space). One CPU read + one GPU upload, done once.
+    static fun load(path: str, spec: TextureSpec) -> Texture2D:
         resolved: str = Assets.resolve(path)
         found: i32 = 0
         if PathOps.exists(resolved):
             found = 1
-        return Texture2D(path=path, resolved_path=resolved, found=found, ready=0)
+        if found == 0:
+            return Texture2D(path=path, resolved_path=resolved, texture_id=-1, found=0, ready=0, error="texture file not found")
+        tid: i32 = Engine.upload_texture_spec(path, spec)
+        ready: i32 = 0
+        if tid >= 0:
+            ready = 1
+        return Texture2D(path=path, resolved_path=resolved, texture_id=tid, found=1, ready=ready)
 
 attach AssetAudio:
 

@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Frog Engine — API Reference</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --bg-alt: #151a21;
+    --panel: #1b212b;
+    --border: #283041;
+    --text: #d6deea;
+    --muted: #8a96a8;
+    --accent: #4ade80;
+    --accent-dim: #2f9e5f;
+    --accent2: #38bdf8;
+    --code-bg: #0a0d12;
+    --kw: #c792ea;
+    --type: #82aaff;
+    --str: #c3e88d;
+    --num: #f78c6c;
+    --com: #5c6773;
+    --fn: #ffcb6b;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    font-size: 15px;
+  }
+  a { color: var(--accent2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: "JetBrains Mono", "Fira Code", Consolas, monospace; }
+
+  /* Layout */
+  .layout { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 260px;
+    flex-shrink: 0;
+    background: var(--bg-alt);
+    border-right: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 24px 0;
+  }
+  .sidebar .brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 24px 20px; font-weight: 700; font-size: 20px;
+  }
+  .sidebar .brand .logo { font-size: 26px; }
+  .sidebar nav a {
+    display: block;
+    padding: 6px 24px;
+    color: var(--muted);
+    font-size: 14px;
+    border-left: 3px solid transparent;
+  }
+  .sidebar nav a:hover { color: var(--text); text-decoration: none; background: rgba(255,255,255,0.03); }
+  .sidebar nav a.section {
+    margin-top: 16px; color: var(--accent); font-weight: 600;
+    text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em;
+  }
+  .content { flex: 1; min-width: 0; padding: 0 48px 120px; max-width: 980px; }
+
+  /* Hero */
+  .hero {
+    padding: 64px 0 40px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 40px;
+  }
+  .hero h1 { font-size: 44px; margin: 0 0 12px; font-weight: 800; letter-spacing: -0.02em; }
+  .hero h1 .frog { color: var(--accent); }
+  .hero p.tag { font-size: 19px; color: var(--muted); margin: 0 0 20px; }
+  .badges { display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 999px; padding: 4px 14px; font-size: 13px; color: var(--muted);
+  }
+  .badge.accent { color: var(--accent); border-color: var(--accent-dim); }
+
+  /* Sections */
+  section { margin-bottom: 56px; scroll-margin-top: 24px; }
+  h2 {
+    font-size: 28px; margin: 0 0 8px; font-weight: 700;
+    padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 20px; margin: 32px 0 10px; color: var(--text); }
+  h4 { font-size: 15px; margin: 22px 0 8px; color: var(--accent2); font-family: monospace; }
+  p { color: var(--text); }
+  .lead { color: var(--muted); font-size: 16px; }
+
+  /* Code blocks */
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    font-size: 13.5px;
+    line-height: 1.55;
+    margin: 14px 0;
+  }
+  pre code { background: none; padding: 0; }
+  code {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 0.88em;
+    color: var(--accent);
+  }
+  .tok-kw { color: var(--kw); }
+  .tok-type { color: var(--type); }
+  .tok-str { color: var(--str); }
+  .tok-num { color: var(--num); }
+  .tok-com { color: var(--com); font-style: italic; }
+  .tok-fn { color: var(--fn); }
+
+  /* API tables */
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--accent); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td:first-child { white-space: nowrap; }
+  td code { color: var(--type); white-space: nowrap; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* Cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin: 18px 0; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px;
+  }
+  .card h4 { margin: 0 0 6px; color: var(--accent); font-family: inherit; font-size: 15px; }
+  .card p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+  /* Callout */
+  .note {
+    background: rgba(56,189,248,0.07);
+    border-left: 3px solid var(--accent2);
+    border-radius: 0 8px 8px 0;
+    padding: 12px 16px; margin: 16px 0; font-size: 14px;
+  }
+  .note.warn { background: rgba(247,140,108,0.07); border-left-color: var(--num); }
+  .note strong { color: var(--text); }
+
+  .api-sig {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; margin: 10px 0 4px;
+    font-family: monospace; font-size: 13.5px; color: var(--type);
+  }
+  footer { color: var(--muted); font-size: 13px; padding-top: 32px; border-top: 1px solid var(--border); }
+
+  @media (max-width: 880px) {
+    .sidebar { display: none; }
+    .content { padding: 0 20px 80px; }
+    .hero h1 { font-size: 34px; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">🐸</span> Frog Engine</div>
+    <nav>
+      <a class="section">Getting Started</a>
+      <a href="#overview">Overview</a>
+      <a href="#install">Project Setup</a>
+      <a href="#quickstart">Quick Start</a>
+      <a href="#gameloop">The Game Loop</a>
+      <a class="section">Core API</a>
+      <a href="#engine">Engine</a>
+      <a href="#window">Window &amp; Properties</a>
+      <a href="#assets">Assets</a>
+      <a href="#input">Input</a>
+      <a class="section">Scene Graph</a>
+      <a href="#nodes">Nodes</a>
+      <a href="#node3d">Node3D</a>
+      <a href="#camera">Camera3D</a>
+      <a href="#scene">Scene &amp; GameObject</a>
+      <a class="section">Math</a>
+      <a href="#vec3">Vec3</a>
+      <a href="#mat4">Mat4</a>
+      <a href="#quat">Quat</a>
+      <a href="#color">Color</a>
+      <a href="#mathutils">Math Utils</a>
+      <a class="section">Guides</a>
+      <a href="#textures">Textures</a>
+      <a href="#viewmodel">Viewmodels</a>
+      <a href="#build">Building &amp; -O</a>
+    </nav>
+  </aside>
+
+  <main class="content">
+    <div class="hero">
+      <h1><span class="frog">Frog</span> Engine</h1>
+      <p class="tag">A 100% object-oriented 3D game engine for Dolet. No ECS.</p>
+      <div class="badges">
+        <span class="badge accent">Vulkan rendering</span>
+        <span class="badge">Scene graph</span>
+        <span class="badge">glTF + PNG</span>
+        <span class="badge">Alpha</span>
+      </div>
+    </div>
+    <section id="overview">
+      <h2>Overview</h2>
+      <p class="lead">Frog is a classic object-oriented 3D engine. Every object in the world is a <code>Node</code> in a scene graph, and you drive the whole thing through a small static <code>Engine</code> facade. The Vulkan backend, swapchain, and descriptor plumbing stay hidden &mdash; you work with cameras, models, transforms, and textures.</p>
+      <div class="cards">
+        <div class="card"><h4>Engine</h4><p>Static lifecycle: window, frames, meshes, textures, camera rendering.</p></div>
+        <div class="card"><h4>Assets</h4><p>Load models (glTF/glb), textures (PNG), audio, and shaders from a mounted root.</p></div>
+        <div class="card"><h4>Scene</h4><p>Node tree with Node3D, Camera3D, transforms, parenting, and collision flags.</p></div>
+        <div class="card"><h4>Math</h4><p>Vec3, Mat4, Quat, Color plus angle / rng / clamp helpers.</p></div>
+      </div>
+      <p>Bring everything into scope with a single import:</p>
+      <pre><code><span class="tok-kw">import</span> frog</code></pre>
+    </section>
+
+    <section id="install">
+      <h2>Project Setup</h2>
+      <p>A Frog game is a normal Dolet program. You typically import the standard library, the engine, and your own game module:</p>
+      <pre><code><span class="tok-kw">import</span> std
+<span class="tok-kw">import</span> frog
+<span class="tok-kw">import</span> game.runtime</code></pre>
+      <p>Before loading any asset, mount a root directory. Everything you load later resolves relative to it. A common pattern handles both running from source and running next to the built executable:</p>
+      <pre><code>asset_probe: <span class="tok-type">str</span> = PathOps.resolve_path(<span class="tok-str">"assets\\models\\cube.gltf"</span>)
+<span class="tok-kw">if</span> PathOps.exists(asset_probe):
+    Assets.mount(<span class="tok-str">"assets"</span>)
+<span class="tok-kw">else</span>:
+    Assets.mount(PathOps.resolve_from_exe(<span class="tok-str">"..\\assets"</span>))</code></pre>
+    </section>
+
+    <section id="quickstart">
+      <h2>Quick Start</h2>
+      <p class="lead">A complete minimal scene: a window, a ground plane, one model, and a camera.</p>
+      <pre><code><span class="tok-kw">import</span> std
+<span class="tok-kw">import</span> frog
+
+<span class="tok-com"># 1. Configure the window before starting</span>
+Engine.window.create(<span class="tok-str">"My Game"</span>, <span class="tok-num">1280</span>, <span class="tok-num">720</span>)
+Engine.properties.set_vsync(<span class="tok-num">0</span>)
+Engine.properties.set_instance_culling(<span class="tok-num">1</span>)
+Engine.debug.render_stats(<span class="tok-num">1</span>)
+
+<span class="tok-com"># 2. Mount assets and build a scene</span>
+Assets.mount(<span class="tok-str">"assets"</span>)
+scene: <span class="tok-type">Scene</span> = Scene.create()
+
+actor: <span class="tok-type">Node3D</span> = Node3D.create(<span class="tok-str">"Actor"</span>)
+actor_model: <span class="tok-type">Model3D</span> = Assets.models.load(<span class="tok-str">"models/actor.gltf"</span>)
+camera: <span class="tok-type">Camera3D</span> = Camera3D.create(<span class="tok-str">"Camera"</span>)
+ground: <span class="tok-type">Node3D</span> = Node3D.create(<span class="tok-str">"Ground"</span>)
+
+<span class="tok-com"># 3. Configure nodes (chainable)</span>
+actor.position(<span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0.0</span>)
+actor.set_model(actor_model)
+camera.position(<span class="tok-num">0.0</span>, <span class="tok-num">2.0</span>, <span class="tok-num">6.0</span>)
+camera.rotation(<span class="tok-num">0.0</span> - <span class="tok-num">12.0</span>, <span class="tok-num">180.0</span>, <span class="tok-num">0.0</span>)
+camera.set_fov(<span class="tok-num">82.0</span>)
+camera.make_current()
+ground.as_static()
+ground.with_box_collision()
+ground.scale(<span class="tok-num">800.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">800.0</span>)
+
+<span class="tok-com"># 4. Build the tree and hand it to the engine</span>
+actor.add_child(camera)
+scene.add_child(actor)
+scene.add_child(ground)
+Engine.scene.set(scene)</code></pre>
+      <div class="note"><strong>Method chaining.</strong> Node setters such as <code>position</code>, <code>rotation</code>, <code>scale</code>, and <code>set_model</code> return the node, so you can chain them: <code>actor.position(0,1,0).scale(2,2,2)</code>.</div>
+    </section>
+
+    <section id="gameloop">
+      <h2>The Game Loop</h2>
+      <p>Frog does not hide the main loop. You own it. <code>Engine.start()</code> brings up Vulkan, <code>begin_frame()</code> returns the delta time in seconds, and a render call submits the frame for the current camera.</p>
+      <pre><code><span class="tok-kw">if</span> Engine.start() == <span class="tok-num">0</span>:
+    <span class="tok-kw">return</span>
+
+Engine.capture_mouse()
+<span class="tok-kw">while</span> Engine.running() == <span class="tok-num">1</span>:
+    dt: <span class="tok-type">f32</span> = Engine.begin_frame()
+    <span class="tok-com"># ... update your game state with dt ...</span>
+    Engine.render_camera(camera)
+
+Engine.destroy_scene()
+Engine.shutdown()</code></pre>
+      <div class="note">Wrap this in your own <code>attach Engine: static fun run()</code> to keep <code>main</code> tidy, then just call <code>Engine.run()</code>.</div>
+    </section>
+    <section id="engine">
+      <h2>Engine</h2>
+      <p class="lead">The static facade that owns the application lifecycle. Configure it through <code>Engine.window</code> / <code>Engine.properties</code> / <code>Engine.debug</code> / <code>Engine.scene</code>, then drive the loop with the methods below.</p>
+
+      <h3>Lifecycle</h3>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Engine.start()</code></td><td>i32</td><td>Boots the Vulkan runtime. Returns 1 on success, 0 on failure.</td></tr>
+        <tr><td><code>Engine.running()</code></td><td>i32</td><td>1 while the window is open; 0 once it should close.</td></tr>
+        <tr><td><code>Engine.begin_frame()</code></td><td>f32</td><td>Starts a new frame and returns delta time in seconds.</td></tr>
+        <tr><td><code>Engine.shutdown()</code></td><td>—</td><td>Tears down the runtime and releases GPU resources.</td></tr>
+        <tr><td><code>Engine.destroy_scene()</code></td><td>—</td><td>Destroys the active scene tree.</td></tr>
+      </table>
+
+      <h3>Mouse</h3>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Engine.capture_mouse()</code></td><td>—</td><td>Locks and hides the cursor for FPS-style look.</td></tr>
+        <tr><td><code>Engine.release_mouse()</code></td><td>—</td><td>Unlocks and shows the cursor.</td></tr>
+        <tr><td><code>Engine.center_mouse()</code></td><td>—</td><td>Recenters the cursor in the window.</td></tr>
+        <tr><td><code>Engine.mouse_x()</code></td><td>i32</td><td>Cursor X in client coordinates.</td></tr>
+        <tr><td><code>Engine.mouse_y()</code></td><td>i32</td><td>Cursor Y in client coordinates.</td></tr>
+      </table>
+
+      <h3>Meshes &amp; Instances</h3>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Engine.upload_plane_mesh()</code></td><td>i32</td><td>Uploads a built-in plane. Returns a mesh id.</td></tr>
+        <tr><td><code>Engine.upload_cube_mesh()</code></td><td>i32</td><td>Uploads a built-in cube. Returns a mesh id.</td></tr>
+        <tr><td><code>Engine.upload_model_mesh(model)</code></td><td>i32</td><td>Uploads a loaded <code>Model3D</code> to the GPU.</td></tr>
+        <tr><td><code>Engine.upload_model(path)</code></td><td>i32</td><td>Loads and uploads a model in one call.</td></tr>
+        <tr><td><code>Engine.upload_model_or_cube(path)</code></td><td>i32</td><td>Loads a model, falling back to a cube if missing.</td></tr>
+        <tr><td><code>Engine.register_instance(source_mesh)</code></td><td>i32</td><td>Creates another instance sharing a mesh's geometry. Returns its id.</td></tr>
+      </table>
+
+      <h3>Transforms &amp; Textures</h3>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Engine.set_transform(mesh_id, x,y,z, rx,ry,rz, sx,sy,sz)</code></td><td>—</td><td>Sets position, euler rotation (deg), and scale for a mesh/instance.</td></tr>
+        <tr><td><code>Engine.set_model_matrix_raw(mesh_id, src)</code></td><td>—</td><td>Writes a raw 64-byte Mat4 (pointer as i64) straight to the mesh. Used for viewmodels.</td></tr>
+        <tr><td><code>Engine.upload_texture(path)</code></td><td>i32</td><td>Uploads a texture (PNG) to the GPU. Returns a texture id.</td></tr>
+        <tr><td><code>Engine.upload_texture_spec(path, spec)</code></td><td>i32</td><td>Same, with a <code>TextureSpec</code> controlling appearance.</td></tr>
+        <tr><td><code>Engine.bind_texture(mesh_id, texture_id)</code></td><td>—</td><td>Binds an uploaded texture to a mesh's descriptor set.</td></tr>
+      </table>
+
+      <h3>Rendering</h3>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>Engine.render_camera(camera)</code></td><td>Renders the scene from a <code>Camera3D</code> and presents the frame.</td></tr>
+        <tr><td><code>Engine.render_flycam(camera)</code></td><td>Renders from a <code>FlycamNode</code> (free-fly debug camera).</td></tr>
+      </table>
+    </section>
+
+    <section id="window">
+      <h2>Window &amp; Properties</h2>
+      <p>Configured once before <code>Engine.start()</code>.</p>
+
+      <h4>Engine.window</h4>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>create(title, width, height)</code></td><td>—</td><td>Sets the window title and size. Resets scene state.</td></tr>
+        <tr><td><code>width()</code></td><td>i32</td><td>Configured window width.</td></tr>
+        <tr><td><code>height()</code></td><td>i32</td><td>Configured window height.</td></tr>
+      </table>
+
+      <h4>Engine.properties</h4>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>set_vsync(enabled)</code></td><td>—</td><td>1 = synced presentation, 0 = uncapped frame rate.</td></tr>
+        <tr><td><code>vsync()</code></td><td>i32</td><td>Current vsync state.</td></tr>
+        <tr><td><code>set_instance_culling(enabled)</code></td><td>—</td><td>Toggles per-instance frustum culling.</td></tr>
+        <tr><td><code>instance_culling()</code></td><td>i32</td><td>Current culling state.</td></tr>
+      </table>
+
+      <h4>Engine.debug</h4>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>render_stats(enabled)</code></td><td>—</td><td>Toggles on-screen render statistics.</td></tr>
+        <tr><td><code>render_stats_enabled()</code></td><td>i32</td><td>Current stats state.</td></tr>
+      </table>
+
+      <h4>Engine.scene</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>set(scene)</code></td><td>Registers the scene the engine will render.</td></tr>
+        <tr><td><code>destroy()</code></td><td>Destroys the active scene.</td></tr>
+      </table>
+    </section>
+    <section id="assets">
+      <h2>Assets</h2>
+      <p class="lead">Resource loading is grouped under <code>Assets</code> and its sub-loaders. Mount a root once, then load by relative path.</p>
+
+      <h4>Assets</h4>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Assets.mount(root)</code></td><td>—</td><td>Sets the base directory all loads resolve against.</td></tr>
+        <tr><td><code>Assets.root()</code></td><td>str</td><td>Returns the current mounted root.</td></tr>
+        <tr><td><code>Assets.resolve(path)</code></td><td>str</td><td>Resolves a relative path to an absolute one.</td></tr>
+      </table>
+
+      <h4>Loaders</h4>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Assets.models.load(path)</code></td><td>Model3D</td><td>Loads a glTF / glb model.</td></tr>
+        <tr><td><code>Assets.textures.load(path)</code></td><td>Texture2D</td><td>Loads + GPU-uploads a PNG (smooth spec). Returns a ready texture.</td></tr>
+        <tr><td><code>Assets.textures.load(path, spec)</code></td><td>Texture2D</td><td>Same, with a <code>TextureSpec</code> controlling appearance.</td></tr>
+        <tr><td><code>Assets.audio.load(path)</code></td><td>AudioClip</td><td>Loads an audio clip descriptor.</td></tr>
+        <tr><td><code>Assets.shaders.load(path)</code></td><td>Shader</td><td>Loads a shader descriptor.</td></tr>
+      </table>
+
+      <h3>Asset Types</h3>
+      <p>Each loader returns a small struct describing the resource. Common fields:</p>
+      <table>
+        <tr><th>Type</th><th>Key fields</th></tr>
+        <tr><td><code>Model3D</code></td><td><code>path</code>, <code>resolved_path</code>, <code>format</code>, <code>mesh_id</code>, <code>mesh_count</code>, <code>found</code>, <code>parsed</code>, <code>ready</code>, <code>error</code></td></tr>
+        <tr><td><code>Texture2D</code></td><td><code>path</code>, <code>resolved_path</code>, <code>width</code>, <code>height</code>, <code>texture_id</code>, <code>found</code>, <code>ready</code>, <code>error</code></td></tr>
+        <tr><td><code>AudioClip</code></td><td><code>path</code>, <code>resolved_path</code>, <code>found</code>, <code>ready</code>, <code>error</code></td></tr>
+        <tr><td><code>Shader</code></td><td><code>path</code>, <code>resolved_path</code>, <code>found</code>, <code>ready</code>, <code>error</code></td></tr>
+      </table>
+    </section>
+
+    <section id="input">
+      <h2>Input</h2>
+      <p class="lead">Minimal keyboard and mouse polling. Poll once per frame.</p>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Input.key_down(key)</code></td><td>i32</td><td>1 if the key is currently held, else 0.</td></tr>
+        <tr><td><code>Input.mouse_x(hwnd)</code></td><td>i32</td><td>Cursor X relative to the window client area.</td></tr>
+        <tr><td><code>Input.mouse_y(hwnd)</code></td><td>i32</td><td>Cursor Y relative to the window client area.</td></tr>
+        <tr><td><code>Input.center_mouse(hwnd, w, h)</code></td><td>—</td><td>Recenters the system cursor.</td></tr>
+        <tr><td><code>Input.capture_mouse(hwnd, w, h)</code></td><td>—</td><td>Locks and hides the cursor.</td></tr>
+        <tr><td><code>Input.release_mouse()</code></td><td>—</td><td>Unlocks and shows the cursor.</td></tr>
+      </table>
+      <div class="note">For typical games, prefer the <code>Engine.capture_mouse()</code> / <code>Engine.mouse_x()</code> wrappers &mdash; they pass the engine's window handle for you.</div>
+
+      <h3>Key Constants</h3>
+      <table>
+        <tr><th>Group</th><th>Constants</th></tr>
+        <tr><td>Letters</td><td><code>KEY_A</code> <code>KEY_D</code> <code>KEY_E</code> <code>KEY_M</code> <code>KEY_Q</code> <code>KEY_S</code> <code>KEY_W</code></td></tr>
+        <tr><td>Arrows</td><td><code>KEY_LEFT</code> <code>KEY_UP</code> <code>KEY_RIGHT</code> <code>KEY_DOWN</code></td></tr>
+        <tr><td>Modifiers / misc</td><td><code>KEY_ESCAPE</code> <code>KEY_SPACE</code> <code>KEY_SHIFT</code> <code>KEY_CTRL</code></td></tr>
+      </table>
+      <pre><code><span class="tok-kw">if</span> Input.key_down(KEY_W) == <span class="tok-num">1</span>:
+    camera.translate(<span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span> - speed * dt)</code></pre>
+    </section>
+    <section id="nodes">
+      <h2>Nodes</h2>
+      <p class="lead">Everything in a scene is a <code>Node</code>. The base type carries identity, the transform, a mesh id, and tree links. Game types extend it.</p>
+      <table>
+        <tr><th>Field</th><th>Type</th><th>Meaning</th></tr>
+        <tr><td><code>id</code> / <code>name</code> / <code>active</code></td><td>i32 / str / i32</td><td>Identity and enabled flag.</td></tr>
+        <tr><td><code>mesh_id</code></td><td>i32</td><td>GPU mesh bound to this node (-1 for none).</td></tr>
+        <tr><td><code>pos_x/y/z</code></td><td>f32</td><td>Local position.</td></tr>
+        <tr><td><code>rot_x/y/z</code></td><td>f32</td><td>Local euler rotation (degrees).</td></tr>
+        <tr><td><code>scale_x/y/z</code></td><td>f32</td><td>Local scale.</td></tr>
+        <tr><td><code>parent_ptr</code> / <code>first_child_ptr</code> / <code>next_sibling_ptr</code></td><td>i64</td><td>Scene-graph links.</td></tr>
+      </table>
+      <h4>Base methods (Node)</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>add_child(child_ptr)</code></td><td>Attaches a child node by pointer.</td></tr>
+        <tr><td><code>set_position(x, y, z)</code></td><td>Sets local position. Returns the node.</td></tr>
+        <tr><td><code>set_rotation(x, y, z)</code></td><td>Sets local rotation. Returns the node.</td></tr>
+        <tr><td><code>set_scale(x, y, z)</code></td><td>Sets local scale. Returns the node.</td></tr>
+      </table>
+      <div class="note">Built-in node types: <code>Node3D</code>, <code>Camera3D</code>, <code>RootNode</code>, and <code>FlycamNode</code>. Define your own by extending <code>Node</code> for game-specific behaviour.</div>
+    </section>
+
+    <section id="node3d">
+      <h2>Node3D</h2>
+      <p class="lead">The everyday scene object: a transform with physics flags, velocity, and a mesh. All setters return the node, so calls chain.</p>
+      <div class="api-sig">Node3D.create(name: str) -&gt; Node3D</div>
+
+      <h4>Transform (chainable)</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>position(x, y, z)</code></td><td>Set local position.</td></tr>
+        <tr><td><code>rotation(x, y, z)</code></td><td>Set euler rotation (deg).</td></tr>
+        <tr><td><code>scale(x, y, z)</code></td><td>Set scale.</td></tr>
+        <tr><td><code>translate(x, y, z)</code></td><td>Add to current position.</td></tr>
+        <tr><td><code>rotate(x, y, z)</code></td><td>Add to current rotation.</td></tr>
+        <tr><td><code>velocity(x, y, z)</code></td><td>Set velocity.</td></tr>
+      </table>
+
+      <h4>Behaviour &amp; bodies</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>as_static()</code></td><td>Marks the body as static.</td></tr>
+        <tr><td><code>as_dynamic()</code></td><td>Marks the body as dynamic (default).</td></tr>
+        <tr><td><code>as_player()</code></td><td>Marks the body as the player.</td></tr>
+        <tr><td><code>with_box_collision()</code></td><td>Enables box collision.</td></tr>
+        <tr><td><code>without_collision()</code></td><td>Disables collision.</td></tr>
+        <tr><td><code>set_model(model)</code></td><td>Binds a loaded <code>Model3D</code> (uploads to GPU if needed, sets <code>mesh_id</code>).</td></tr>
+        <tr><td><code>set_texture(texture)</code></td><td>Dresses the node with a loaded <code>Texture2D</code>. Safe before or after <code>set_model</code>.</td></tr>
+      </table>
+
+      <h4>Tree &amp; lifetime</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>add_child(node)</code></td><td>Attaches a <code>Node3D</code> or <code>Camera3D</code> child.</td></tr>
+        <tr><td><code>destroy()</code></td><td>Frees this node.</td></tr>
+        <tr><td><code>destroy_tree()</code></td><td>Frees this node and all descendants.</td></tr>
+      </table>
+    </section>
+
+    <section id="camera">
+      <h2>Camera3D</h2>
+      <p class="lead">A <code>Node3D</code> with projection settings. Defaults: FOV 82°, near 0.1, far 1000.</p>
+      <div class="api-sig">Camera3D.create(name: str) -&gt; Camera3D</div>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>position(x, y, z)</code></td><td>Set camera position.</td></tr>
+        <tr><td><code>rotation(x, y, z)</code></td><td>Set camera euler rotation (deg).</td></tr>
+        <tr><td><code>set_fov(fov)</code></td><td>Set vertical field of view in degrees.</td></tr>
+        <tr><td><code>make_current()</code></td><td>Marks this as the active rendering camera.</td></tr>
+        <tr><td><code>destroy()</code></td><td>Frees the camera node.</td></tr>
+      </table>
+      <pre><code>camera: <span class="tok-type">Camera3D</span> = Camera3D.create(<span class="tok-str">"Camera"</span>)
+camera.position(<span class="tok-num">0.0</span>, <span class="tok-num">2.0</span>, <span class="tok-num">6.0</span>)
+camera.set_fov(<span class="tok-num">85.0</span>)
+camera.make_current()</code></pre>
+    </section>
+
+    <section id="scene">
+      <h2>Scene &amp; GameObject</h2>
+      <p class="lead">A <code>Scene</code> owns the node tree and the active camera. It also offers an optional packed object store for high-count, data-oriented updates via <code>GameObject</code>.</p>
+
+      <h4>Scene</h4>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Scene.create()</code></td><td>Scene</td><td>Creates a scene with a root node.</td></tr>
+        <tr><td><code>Scene.create(capacity)</code></td><td>Scene</td><td>Creates a scene with a packed object store of <code>capacity</code> slots.</td></tr>
+        <tr><td><code>add_child(node)</code></td><td>—</td><td>Adds a <code>Node3D</code> / <code>Camera3D</code> under the root.</td></tr>
+        <tr><td><code>set_camera(camera)</code></td><td>—</td><td>Sets the active camera.</td></tr>
+        <tr><td><code>camera()</code></td><td>Camera3D</td><td>Returns the active camera.</td></tr>
+        <tr><td><code>spawn(name)</code></td><td>GameObject</td><td>Allocates a packed object (capacity scenes only).</td></tr>
+        <tr><td><code>object_at(id)</code></td><td>GameObject</td><td>Returns the object at an index.</td></tr>
+        <tr><td><code>update_all(dt)</code></td><td>—</td><td>Integrates every active object's velocity.</td></tr>
+        <tr><td><code>destroy()</code></td><td>—</td><td>Destroys the tree and frees the store.</td></tr>
+      </table>
+
+      <h4>GameObject (chainable)</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>position(x,y,z)</code> / <code>rotation(x,y,z)</code> / <code>scale(x,y,z)</code></td><td>Set transform components.</td></tr>
+        <tr><td><code>velocity(x,y,z)</code> / <code>translate(x,y,z)</code></td><td>Set velocity / move by offset.</td></tr>
+        <tr><td><code>x()</code> / <code>y()</code> / <code>z()</code></td><td>Read position components.</td></tr>
+        <tr><td><code>name()</code> / <code>set_active(v)</code> / <code>is_active()</code></td><td>Identity and enabled state.</td></tr>
+        <tr><td><code>update(dt)</code> / <code>model_matrix()</code></td><td>Integrate one object / build its TRS matrix.</td></tr>
+      </table>
+    </section>
+    <section id="vec3">
+      <h2>Vec3</h2>
+      <p class="lead">A 3-component float vector with an OOP method style.</p>
+      <h4>Constructors</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>Vec3.make(x, y, z)</code></td><td>Build a vector.</td></tr>
+        <tr><td><code>Vec3.zero()</code> / <code>Vec3.one()</code></td><td>(0,0,0) / (1,1,1).</td></tr>
+        <tr><td><code>Vec3.up()</code> / <code>Vec3.forward()</code> / <code>Vec3.right()</code></td><td>Basis directions.</td></tr>
+      </table>
+      <h4>Operations</h4>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>add(b)</code> / <code>sub(b)</code></td><td>Vec3</td><td>Component-wise add / subtract.</td></tr>
+        <tr><td><code>scale(s)</code> / <code>neg()</code></td><td>Vec3</td><td>Scale by scalar / negate.</td></tr>
+        <tr><td><code>dot(b)</code></td><td>f32</td><td>Dot product.</td></tr>
+        <tr><td><code>cross(b)</code></td><td>Vec3</td><td>Cross product.</td></tr>
+        <tr><td><code>length()</code> / <code>length_sq()</code></td><td>f32</td><td>Magnitude / squared magnitude.</td></tr>
+        <tr><td><code>normalize()</code></td><td>Vec3</td><td>Unit vector (zero if too small).</td></tr>
+        <tr><td><code>distance(b)</code> / <code>distance_sq(b)</code></td><td>f32</td><td>Distance / squared distance.</td></tr>
+        <tr><td><code>lerp_to(b, t)</code></td><td>Vec3</td><td>Linear interpolation toward b.</td></tr>
+      </table>
+    </section>
+
+    <section id="mat4">
+      <h2>Mat4</h2>
+      <p class="lead">A column-major 4×4 float matrix (64 bytes, Vulkan/OpenGL compatible).</p>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Mat4.identity()</code> / <code>Mat4.zero()</code></td><td>Mat4</td><td>Identity / zero matrix.</td></tr>
+        <tr><td><code>Mat4.translation(tx,ty,tz)</code></td><td>Mat4</td><td>Translation matrix.</td></tr>
+        <tr><td><code>Mat4.scaling(sx,sy,sz)</code></td><td>Mat4</td><td>Scale matrix.</td></tr>
+        <tr><td><code>Mat4.rotation_x/y/z(deg)</code></td><td>Mat4</td><td>Axis rotation matrices.</td></tr>
+        <tr><td><code>Mat4.trs(t…, r…, s…)</code></td><td>Mat4</td><td>Combined translate-rotate-scale (rotation order Y·X·Z).</td></tr>
+        <tr><td><code>Mat4.perspective(fovy, aspect, near, far)</code></td><td>Mat4</td><td>Vulkan-style perspective projection.</td></tr>
+        <tr><td><code>Mat4.look_at(eye…, target…, up…)</code></td><td>Mat4</td><td>View matrix.</td></tr>
+        <tr><td><code>mul(b)</code></td><td>Mat4</td><td>Matrix product.</td></tr>
+        <tr><td><code>write_to_ptr(ptr)</code></td><td>—</td><td>Write 16 floats to raw memory (for <code>set_model_matrix_raw</code>).</td></tr>
+      </table>
+    </section>
+
+    <section id="quat">
+      <h2>Quat</h2>
+      <p class="lead">A quaternion (x, y, z, w) for rotations.</p>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Quat.identity()</code> / <code>Quat.make(x,y,z,w)</code></td><td>Quat</td><td>Identity / explicit quaternion.</td></tr>
+        <tr><td><code>Quat.from_axis_angle(ax,ay,az, deg)</code></td><td>Quat</td><td>Rotation about a (normalized) axis.</td></tr>
+        <tr><td><code>Quat.from_euler_deg(yaw, pitch, roll)</code></td><td>Quat</td><td>From euler angles (Y·X·Z).</td></tr>
+        <tr><td><code>mul(b)</code> / <code>conjugate()</code></td><td>Quat</td><td>Compose / conjugate.</td></tr>
+        <tr><td><code>length()</code> / <code>normalize()</code></td><td>f32 / Quat</td><td>Magnitude / unit quaternion.</td></tr>
+      </table>
+    </section>
+
+    <section id="color">
+      <h2>Color</h2>
+      <p class="lead">An RGBA color with float channels (0..1).</p>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>Color.rgba(r,g,b,a)</code> / <code>Color.rgb(r,g,b)</code></td><td>Build a color.</td></tr>
+        <tr><td><code>Color.white()</code> <code>black()</code> <code>red()</code> <code>green()</code> <code>blue()</code></td><td>Presets.</td></tr>
+        <tr><td><code>Color.gray(v)</code></td><td>Grayscale value.</td></tr>
+        <tr><td><code>with_alpha(a)</code></td><td>Copy with a new alpha.</td></tr>
+      </table>
+    </section>
+
+    <section id="mathutils">
+      <h2>Math Utilities</h2>
+      <p class="lead">Free functions for common scalar and angle math, plus a deterministic RNG.</p>
+      <table>
+        <tr><th>Function</th><th>Description</th></tr>
+        <tr><td><code>clamp(value, min, max)</code></td><td>Clamp a value to a range.</td></tr>
+        <tr><td><code>lerp(a, b, t)</code></td><td>Linear interpolation.</td></tr>
+        <tr><td><code>min_f32(a, b)</code> / <code>max_f32(a, b)</code></td><td>Min / max of two floats.</td></tr>
+        <tr><td><code>deg2rad(deg)</code> / <code>rad2deg(rad)</code></td><td>Angle conversion.</td></tr>
+        <tr><td><code>normalize_angle_deg(angle)</code></td><td>Wrap an angle into a canonical range.</td></tr>
+        <tr><td><code>lerp_angle_deg(current, target, blend)</code></td><td>Shortest-path angular interpolation.</td></tr>
+        <tr><td><code>yaw_from_dir(dir_x, dir_z)</code></td><td>Heading (deg) from a direction.</td></tr>
+        <tr><td><code>approx_atan(x)</code> / <code>approx_atan2(y, x)</code></td><td>Fast approximate arctangent.</td></tr>
+        <tr><td><code>rand01(index, seed, salt)</code></td><td>Deterministic random in [0,1).</td></tr>
+        <tr><td><code>rand_range(index, seed, salt, min, max)</code></td><td>Deterministic random in a range.</td></tr>
+      </table>
+    </section>
+    <section id="textures">
+      <h2>Guide: Textures</h2>
+      <p class="lead">A texture is a resource, so it loads through <code>Assets</code> and gets worn by a node &mdash; exactly like a model. One call reads the PNG and uploads it to the GPU; the node binds it. A <code>TextureSpec</code> describes how the image should appear.</p>
+      <pre><code><span class="tok-com"># Load + GPU-upload model and texture (each happens once)</span>
+actor_model: <span class="tok-type">Model3D</span> = Assets.models.load(<span class="tok-str">"models/actor.gltf"</span>)
+actor_tex:   <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/actor.png"</span>, TextureSpec.smooth())
+
+<span class="tok-com"># The node wears both — no manual mesh/texture ids</span>
+actor: <span class="tok-type">Node3D</span> = Node3D.create(<span class="tok-str">"Actor"</span>)
+actor.set_model(actor_model)
+actor.set_texture(actor_tex)</code></pre>
+      <p>Calling <code>set_model</code> and <code>set_texture</code> in either order is safe &mdash; the node binds the texture as soon as it has both. Each mesh keeps its own descriptor set, and meshes with no texture fall back to a 1×1 white pixel so geometry still renders.</p>
+
+      <h3>TextureSpec — controlling appearance</h3>
+      <p>A <code>TextureSpec</code> sets filtering, wrapping, and color space. Presets cover the common cases:</p>
+      <table>
+        <tr><th>Preset</th><th>Use for</th></tr>
+        <tr><td><code>TextureSpec.smooth()</code></td><td>Default. Linear filtering, repeat wrap, sRGB color. Models and photos.</td></tr>
+        <tr><td><code>TextureSpec.pixel()</code></td><td>Sharp nearest filtering + clamp. Pixel art and crisp sprites.</td></tr>
+        <tr><td><code>TextureSpec.ground()</code></td><td>Linear + repeat + anisotropy. Tiled floors/walls seen at glancing angles.</td></tr>
+      </table>
+      <table>
+        <tr><th>Modifier / field</th><th>Effect</th></tr>
+        <tr><td><code>.as_data()</code></td><td>Mark as linear (non-color) data: normal/roughness maps.</td></tr>
+        <tr><td><code>.wrap(mode)</code></td><td>Set U/V/W wrap: 0 REPEAT, 1 MIRROR, 2 CLAMP_EDGE, 3 CLAMP_BORDER.</td></tr>
+        <tr><td><code>mag_filter</code> / <code>min_filter</code></td><td>0 = NEAREST (sharp), 1 = LINEAR (smooth).</td></tr>
+        <tr><td><code>anisotropy</code></td><td>0 = off, else max anisotropy (e.g. 8.0 / 16.0).</td></tr>
+        <tr><td><code>srgb</code></td><td>1 = color (gamma-corrected), 0 = linear data.</td></tr>
+      </table>
+      <pre><code><span class="tok-com"># Pixel-art variants of one model — different images, same mesh</span>
+red:  <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/chicken_red.png"</span>, TextureSpec.pixel())
+blue: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/chicken_blue.png"</span>, TextureSpec.pixel())
+chicken_a.set_texture(red)
+chicken_b.set_texture(blue)
+
+<span class="tok-com"># Tiled ground, no shimmer at distance</span>
+ground.set_texture(Assets.textures.load(<span class="tok-str">"textures/grass.png"</span>, TextureSpec.ground()))
+
+<span class="tok-com"># Normal map — linear data, not color</span>
+n: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/wall_normal.png"</span>, TextureSpec.smooth().as_data())</code></pre>
+      <div class="note"><strong>PNG support.</strong> Textures decode through a pure-Dolet PNG decoder: full zlib/DEFLATE inflate, all five row filters, color types 0/2/3/4/6, and bit depths 1/2/4/8/16.</div>
+      <div class="note"><strong>Low-level path.</strong> If you work with raw mesh ids (e.g. GPU instances), <code>Engine.upload_texture(path)</code> / <code>Engine.upload_texture_spec(path, spec)</code> and <code>Engine.bind_texture(mesh_id, tex_id)</code> are still available.</div>
+    </section>
+
+    <section id="viewmodel">
+      <h2>Guide: Viewmodels (held items)</h2>
+      <p class="lead">A first-person item should stay fixed relative to the camera, not the world. Rather than parenting it in the scene graph, render it by writing a raw model matrix built from the camera's world transform.</p>
+      <pre><code><span class="tok-com"># Build: world = camera_world * local_offset, then push raw bytes</span>
+model: <span class="tok-type">Mat4</span> = camera_world.mul(item_local)
+buf: <span class="tok-type">i64</span> = Memory.malloc_zeroed(<span class="tok-num">64</span>)
+model.write_to_ptr(buf)
+Engine.set_model_matrix_raw(item_mesh, buf)</code></pre>
+      <p>Because <code>set_model_matrix_raw</code> bypasses the usual TRS pipeline, the item follows the camera exactly each frame and reads as a true held viewmodel.</p>
+      <div class="note warn"><strong>Rig tip.</strong> A clean setup is a <code>head</code> node with the camera and the held item as its children, so look direction drives both together.</div>
+    </section>
+
+    <section id="build">
+      <h2>Guide: Building &amp; Optimization</h2>
+      <p class="lead">Compile a game to a native executable with the Dolet compiler. An optimization level can be passed directly.</p>
+      <pre><code>doletc game.dlt -o game.exe -O2      <span class="tok-com"># or -O0 / -O1 / -O3</span></code></pre>
+      <table>
+        <tr><th>Flag</th><th>Effect</th></tr>
+        <tr><td><code>-O0</code></td><td>No optimization (default). Fastest builds, best for debugging.</td></tr>
+        <tr><td><code>-O1</code></td><td>Basic optimization.</td></tr>
+        <tr><td><code>-O2</code></td><td>Recommended for release builds. Strong speed gains, stable.</td></tr>
+        <tr><td><code>-O3</code></td><td>Most aggressive optimization.</td></tr>
+      </table>
+      <p>The level is forwarded straight to the C backend, so an unoptimized <code>-O0</code> build and an <code>-O2</code> build can differ dramatically in frame rate. Use <code>-O2</code> when benchmarking or shipping.</p>
+    </section>
+
+    <footer>
+      <p>🐸 Frog Engine &mdash; object-oriented 3D for Dolet. Vulkan rendering, glTF models, PNG textures, scene-graph nodes. Alpha &mdash; under active construction. See <code>ROADMAP.md</code> for the build plan.</p>
+    </footer>
+  </main>
+</div>
+</body>
+</html>
