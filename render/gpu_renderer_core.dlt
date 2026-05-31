@@ -62,6 +62,7 @@ struct GpuRendererCore:
     ib_memories:       i64 = 0
     ib_index_counts:   i64 = 0
     model_matrices:    i64 = 0
+    vb_visible:        i64 = 0    # i32[] per instance: 1 = drawn, 0 = hidden
     instance_buffer:   i64 = 0
     instance_memory:   i64 = 0
     # Per-frame instance buffers (one per frame-in-flight) to avoid a
@@ -113,6 +114,11 @@ attach GpuRendererCore:
         self.ib_memories = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.ib_index_counts = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.model_matrices = Memory.malloc_zeroed(self.vb_capacity * 8)
+        self.vb_visible = Memory.malloc_zeroed(self.vb_capacity * 4)
+        vvi: i32 = 0
+        while vvi < self.vb_capacity:
+            Memory.write_i32(self.vb_visible + vvi * 4, 1)
+            vvi = vvi + 1
         self.vb_count = 0
         # Texture registry
         self.tex_capacity = 256
@@ -186,6 +192,11 @@ attach GpuRendererCore:
         while mti2 < new_cap:
             Memory.write_i32(new_mesh_tex + mti2 * 4, 0 - 1)
             mti2 = mti2 + 1
+        new_visible: i64 = Memory.malloc_zeroed(new_cap * 4)
+        vvi2: i32 = 0
+        while vvi2 < new_cap:
+            Memory.write_i32(new_visible + vvi2 * 4, 1)
+            vvi2 = vvi2 + 1
         Memory.copy(new_handles, self.vb_handles, self.vb_capacity * 8)
         Memory.copy(new_memories, self.vb_memories, self.vb_capacity * 8)
         Memory.copy(new_vert_counts, self.vb_vert_counts, self.vb_capacity * 4)
@@ -193,6 +204,7 @@ attach GpuRendererCore:
         Memory.copy(new_ib_memories, self.ib_memories, self.vb_capacity * 8)
         Memory.copy(new_ib_counts, self.ib_index_counts, self.vb_capacity * 4)
         Memory.copy(new_matrices, self.model_matrices, self.vb_capacity * 8)
+        Memory.copy(new_visible, self.vb_visible, self.vb_capacity * 4)
         if self.mesh_tex_ids != 0:
             Memory.copy(new_mesh_tex, self.mesh_tex_ids, self.vb_capacity * 4)
         Memory.free(self.vb_handles)
@@ -202,6 +214,7 @@ attach GpuRendererCore:
         Memory.free(self.ib_memories)
         Memory.free(self.ib_index_counts)
         Memory.free(self.model_matrices)
+        Memory.free(self.vb_visible)
         if self.mesh_tex_ids != 0:
             Memory.free(self.mesh_tex_ids)
         self.vb_handles = new_handles
@@ -211,6 +224,7 @@ attach GpuRendererCore:
         self.ib_memories = new_ib_memories
         self.ib_index_counts = new_ib_counts
         self.model_matrices = new_matrices
+        self.vb_visible = new_visible
         self.mesh_tex_ids = new_mesh_tex
         self.vb_capacity = new_cap
 
@@ -451,6 +465,18 @@ attach GpuRendererCore:
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
         self.vb_count = idx + 1
         return idx
+
+    fun set_instance_visible(self, mesh_id: i32, on: i32):
+        if self.vb_visible == 0:
+            return
+        if mesh_id < 0:
+            return
+        if mesh_id >= self.vb_count:
+            return
+        v: i32 = 1
+        if on == 0:
+            v = 0
+        Memory.write_i32(self.vb_visible + mesh_id * 4, v)
 
     fun set_model_matrix(self, vb_idx: i32, mat_ptr: i64) -> void:
         if vb_idx < 0:
@@ -753,8 +779,12 @@ attach GpuRendererCore:
                                 break
                             else:
                                 visible: i32 = 1
-                                if self.instance_culling_enabled == 1:
-                                    visible = _frog_instance_visible(vp_mat, g_model)
+                                if self.vb_visible != 0:
+                                    if Memory.read_i32(self.vb_visible + gi * 4) == 0:
+                                        visible = 0
+                                if visible == 1:
+                                    if self.instance_culling_enabled == 1:
+                                        visible = _frog_instance_visible(vp_mat, g_model)
                                 if visible == 1:
                                     instance_dst: i64 = mapped_instances + ((instance_write as i64) * 64)
                                     if vp_mat != 0:

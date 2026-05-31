@@ -160,6 +160,9 @@ attach Engine:
     static fun set_model_matrix_raw(mesh_id: i32, src: i64):
         g_engine_runtime.set_model_matrix_raw(mesh_id, src)
 
+    static fun set_instance_visible(mesh_id: i32, on: i32):
+        g_engine_runtime.set_instance_visible(mesh_id, on)
+
     static fun render_flycam(camera: FlycamNode):
         g_engine_runtime.render_flycam(camera)
 

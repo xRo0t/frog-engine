@@ -260,6 +260,12 @@ attach Node3D:
                 Engine.bind_texture(self.mesh_id, self.texture_id)
         return self
 
+    # Show or hide this node's mesh instance (1 = visible, 0 = hidden).
+    fun set_visible(self, on: i32) -> Node3D:
+        if self.mesh_id >= 0:
+            Engine.set_instance_visible(self.mesh_id, on)
+        return self
+
     fun destroy(self):
         node_destroy(self as i64)
 

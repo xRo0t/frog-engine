@@ -134,6 +134,9 @@ attach EngineRuntime:
     fun set_model_matrix_raw(self, mesh_id: i32, src: i64):
         self.renderer.set_model_matrix_raw(mesh_id, src)
 
+    fun set_instance_visible(self, mesh_id: i32, on: i32):
+        self.renderer.set_instance_visible(mesh_id, on)
+
     fun set_render_stats(self, enabled: i32):
         self.renderer.set_render_stats(enabled)
 

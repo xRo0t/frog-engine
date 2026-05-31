@@ -11,6 +11,8 @@ extern lib "user32":
 KEY_A: i32 = 65
 KEY_D: i32 = 68
 KEY_E: i32 = 69
+KEY_F: i32 = 70
+KEY_G: i32 = 71
 KEY_M: i32 = 77
 KEY_Q: i32 = 81
 KEY_S: i32 = 83
