@@ -10,9 +10,10 @@ The public game-facing API is now `Engine`:
 ```dolet
 Engine.window.create("Frog Game", 1280, 720)
 Engine.properties.set_vsync(1)
+Engine.scene.set(scene)
 if Engine.start() == 1:
     mesh: i32 = Engine.upload_cube_mesh()
-    Engine.render_camera(camera)
+    Engine.render()
     Engine.shutdown()
 ```
 

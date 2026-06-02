@@ -25,6 +25,38 @@ struct GameObject:
     scales: i64 = 0
     velocities: i64 = 0
 
+fun scene_find_current_camera(node_ptr: i64) -> i64:
+    if node_ptr == 0:
+        return 0
+    node: Node = node_ptr as Node
+    if node.kind == 3:
+        camera: Camera3D = node_ptr as Camera3D
+        if camera.current == 1:
+            return node_ptr
+    child_ptr: i64 = node.first_child_ptr
+    while child_ptr != 0:
+        found: i64 = scene_find_current_camera(child_ptr)
+        if found != 0:
+            return found
+        child: Node = child_ptr as Node
+        child_ptr = child.next_sibling_ptr
+    return 0
+
+fun scene_find_first_camera(node_ptr: i64) -> i64:
+    if node_ptr == 0:
+        return 0
+    node: Node = node_ptr as Node
+    if node.kind == 3:
+        return node_ptr
+    child_ptr: i64 = node.first_child_ptr
+    while child_ptr != 0:
+        found: i64 = scene_find_first_camera(child_ptr)
+        if found != 0:
+            return found
+        child: Node = child_ptr as Node
+        child_ptr = child.next_sibling_ptr
+    return 0
+
 attach Scene:
 
     static fun create() -> Scene:
@@ -54,19 +86,37 @@ attach Scene:
     fun add_child(self, child: Node3D):
         root: RootNode = self.root()
         root.add_child(child as i64)
+        if self.active_camera_ptr == 0:
+            self.resolve_camera()
 
     fun add_child(self, child: Camera3D):
         root: RootNode = self.root()
         root.add_child(child as i64)
         if self.active_camera_ptr == 0:
-            self.active_camera_ptr = child as i64
-            child.current = 1
+            self.set_camera(child)
 
     fun set_camera(self, camera: Camera3D):
+        new_ptr: i64 = camera as i64
+        if self.active_camera_ptr != 0:
+            if self.active_camera_ptr != new_ptr:
+                old_camera: Camera3D = self.active_camera_ptr as Camera3D
+                old_camera.current = 0
         self.active_camera_ptr = camera as i64
         camera.current = 1
 
+    fun resolve_camera(self) -> Camera3D:
+        if self.active_camera_ptr != 0:
+            return self.active_camera_ptr as Camera3D
+        found: i64 = scene_find_current_camera(self.root_ptr)
+        if found == 0:
+            found = scene_find_first_camera(self.root_ptr)
+        if found != 0:
+            self.set_camera(found as Camera3D)
+        return self.active_camera_ptr as Camera3D
+
     fun camera(self) -> Camera3D:
+        if self.active_camera_ptr == 0:
+            self.resolve_camera()
         return self.active_camera_ptr as Camera3D
 
     fun destroy(self):

@@ -143,11 +143,8 @@ attach EngineRuntime:
     fun set_instance_culling(self, enabled: i32):
         self.renderer.set_instance_culling(enabled)
 
-    fun render_flycam(self, camera: FlycamNode):
-        self.renderer.render_camera_frame(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height)
-
     fun render_camera(self, camera: Camera3D):
-        self.renderer.render_camera_frame(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height)
+        self.renderer.render_camera3d_frame(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height)
 
     fun shutdown(self):
         if self.ready_flag == 0:

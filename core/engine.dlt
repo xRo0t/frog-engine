@@ -31,6 +31,7 @@ static g_engine_runtime: EngineRuntime = EngineRuntime()
 static g_engine_vsync_enabled: i32 = 1
 static g_engine_render_stats_enabled: i32 = 0
 static g_engine_instance_culling_enabled: i32 = 0
+static g_engine_current_camera_ptr: i64 = 0
 
 attach DisplayWindow:
 
@@ -44,6 +45,7 @@ attach DisplayWindow:
         g_engine_vsync_enabled = 1
         g_engine_render_stats_enabled = 0
         g_engine_instance_culling_enabled = 0
+        g_engine_current_camera_ptr = 0
 
     static fun width() -> i32:
         return g_engine_width
@@ -89,8 +91,25 @@ attach Debug:
 attach EngineScene:
 
     static fun set(scene: Scene):
+        if g_engine_current_camera_ptr != 0:
+            scene.set_camera(g_engine_current_camera_ptr as Camera3D)
+        else:
+            if scene.active_camera_ptr == 0:
+                scene.resolve_camera()
+        if scene.active_camera_ptr != 0:
+            g_engine_current_camera_ptr = scene.active_camera_ptr
         g_engine_scene = scene
         g_engine_has_scene = 1
+
+    static fun set_camera(camera: Camera3D):
+        g_engine_current_camera_ptr = camera as i64
+        if g_engine_has_scene == 1:
+            g_engine_scene.set_camera(camera)
+
+    static fun camera() -> Camera3D:
+        if g_engine_has_scene == 0:
+            return g_engine_current_camera_ptr as Camera3D
+        return g_engine_scene.camera()
 
     static fun destroy():
         Engine.destroy_scene()
@@ -163,10 +182,14 @@ attach Engine:
     static fun set_instance_visible(mesh_id: i32, on: i32):
         g_engine_runtime.set_instance_visible(mesh_id, on)
 
-    static fun render_flycam(camera: FlycamNode):
-        g_engine_runtime.render_flycam(camera)
-
-    static fun render_camera(camera: Camera3D):
+    static fun render():
+        if g_engine_runtime.ready() == 0:
+            return
+        if g_engine_has_scene == 0:
+            return
+        camera: Camera3D = g_engine_scene.camera()
+        if (camera as i64) == 0:
+            return
         g_engine_runtime.render_camera(camera)
 
     static fun destroy_scene():

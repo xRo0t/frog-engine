@@ -148,16 +148,15 @@ simple-game-frog-oop-3d/
     world/
       earth.dlt
     mobs/
-      flycam/
-        flycam.dlt
+      player/
+        player.dlt
+        controller.dlt
       goblin/
         goblin.dlt
         manager.dlt
       critter/
         critter.dlt
         manager.dlt
-      player/
-        player.dlt
   build.bat
   README.md
 ```

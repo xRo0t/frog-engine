@@ -237,11 +237,8 @@ attach Renderer:
     fun set_instance_culling(self, enabled: i32):
         self.core.set_instance_culling(enabled)
 
-    fun render_camera_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: FlycamNode, width: i32, height: i32):
-        self.core.render_camera_frame(render_pass, swapchain, ctx, camera, width, height)
-
-    fun render_camera_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32):
-        self.core.render_camera_frame(render_pass, swapchain, ctx, camera, width, height)
+    fun render_camera3d_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32):
+        self.core.render_camera3d_frame(render_pass, swapchain, ctx, camera, width, height)
 
     fun cleanup(self):
         if self.model_cache_paths != 0:
@@ -304,16 +301,7 @@ attach GpuRendererCore:
             Memory.free(mesh.indices)
         return mesh_id
 
-    fun render_camera_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: FlycamNode, width: i32, height: i32):
-        view: i64 = gpu_camera_view(camera.pos_x, camera.pos_y, camera.pos_z, camera.pitch, camera.yaw)
-        proj: i64 = gpu_camera_proj(82.0, (width as f32) / (height as f32))
-        self.render_frame(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height)
-        if view != 0:
-            Memory.free(view)
-        if proj != 0:
-            Memory.free(proj)
-
-    fun render_camera_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32):
+    fun render_camera3d_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32):
         view: i64 = gpu_camera_view(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y)
         proj: i64 = gpu_camera_proj(camera.fov, (width as f32) / (height as f32))
         self.render_frame(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height)

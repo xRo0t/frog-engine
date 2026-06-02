@@ -262,7 +262,6 @@ actor.set_model(actor_model)
 camera.position(<span class="tok-num">0.0</span>, <span class="tok-num">2.0</span>, <span class="tok-num">6.0</span>)
 camera.rotation(<span class="tok-num">0.0</span> - <span class="tok-num">12.0</span>, <span class="tok-num">180.0</span>, <span class="tok-num">0.0</span>)
 camera.set_fov(<span class="tok-num">82.0</span>)
-camera.make_current()
 ground.as_static()
 ground.with_box_collision()
 ground.scale(<span class="tok-num">800.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">800.0</span>)
@@ -285,7 +284,7 @@ Engine.capture_mouse()
 <span class="tok-kw">while</span> Engine.running() == <span class="tok-num">1</span>:
     dt: <span class="tok-type">f32</span> = Engine.begin_frame()
     <span class="tok-com"># ... update your game state with dt ...</span>
-    Engine.render_camera(camera)
+    Engine.render()
 
 Engine.destroy_scene()
 Engine.shutdown()</code></pre>
@@ -340,8 +339,7 @@ Engine.shutdown()</code></pre>
       <h3>Rendering</h3>
       <table>
         <tr><th>Method</th><th>Description</th></tr>
-        <tr><td><code>Engine.render_camera(camera)</code></td><td>Renders the scene from a <code>Camera3D</code> and presents the frame.</td></tr>
-        <tr><td><code>Engine.render_flycam(camera)</code></td><td>Renders from a <code>FlycamNode</code> (free-fly debug camera).</td></tr>
+        <tr><td><code>Engine.render()</code></td><td>Renders the active scene from the current <code>Camera3D</code> and presents the frame.</td></tr>
       </table>
     </section>
 
@@ -458,7 +456,7 @@ Engine.shutdown()</code></pre>
         <tr><td><code>set_rotation(x, y, z)</code></td><td>Sets local rotation. Returns the node.</td></tr>
         <tr><td><code>set_scale(x, y, z)</code></td><td>Sets local scale. Returns the node.</td></tr>
       </table>
-      <div class="note">Built-in node types: <code>Node3D</code>, <code>Camera3D</code>, <code>RootNode</code>, and <code>FlycamNode</code>. Define your own by extending <code>Node</code> for game-specific behaviour.</div>
+      <div class="note">Built-in node types: <code>Node3D</code>, <code>Camera3D</code>, and <code>RootNode</code>. Define your own by extending <code>Node</code> for game-specific behaviour.</div>
     </section>
 
     <section id="node3d">
@@ -508,13 +506,14 @@ Engine.shutdown()</code></pre>
         <tr><td><code>position(x, y, z)</code></td><td>Set camera position.</td></tr>
         <tr><td><code>rotation(x, y, z)</code></td><td>Set camera euler rotation (deg).</td></tr>
         <tr><td><code>set_fov(fov)</code></td><td>Set vertical field of view in degrees.</td></tr>
-        <tr><td><code>make_current()</code></td><td>Marks this as the active rendering camera.</td></tr>
+        <tr><td><code>make_current()</code></td><td>Makes this camera active when a scene has multiple cameras.</td></tr>
         <tr><td><code>destroy()</code></td><td>Frees the camera node.</td></tr>
       </table>
       <pre><code>camera: <span class="tok-type">Camera3D</span> = Camera3D.create(<span class="tok-str">"Camera"</span>)
 camera.position(<span class="tok-num">0.0</span>, <span class="tok-num">2.0</span>, <span class="tok-num">6.0</span>)
 camera.set_fov(<span class="tok-num">85.0</span>)
-camera.make_current()</code></pre>
+scene.add_child(camera)</code></pre>
+      <div class="note">The first <code>Camera3D</code> in a scene becomes active automatically. Use <code>make_current()</code> only to switch cameras.</div>
     </section>
 
     <section id="scene">
