@@ -331,6 +331,7 @@ Engine.shutdown()</code></pre>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
         <tr><td><code>Engine.set_transform(mesh_id, x,y,z, rx,ry,rz, sx,sy,sz)</code></td><td>—</td><td>Sets position, euler rotation (deg), and scale for a mesh/instance.</td></tr>
         <tr><td><code>Engine.set_model_matrix_raw(mesh_id, src)</code></td><td>—</td><td>Writes a raw 64-byte Mat4 (pointer as i64) straight to the mesh. Used for viewmodels.</td></tr>
+        <tr><td><code>Engine.set_instance_visible(mesh_id, on)</code></td><td>—</td><td>Shows (1) or hides (0) a mesh instance without removing it. Use for pooling / recycling (e.g. projectiles).</td></tr>
         <tr><td><code>Engine.upload_texture(path)</code></td><td>i32</td><td>Uploads a texture (PNG) to the GPU. Returns a texture id.</td></tr>
         <tr><td><code>Engine.upload_texture_spec(path, spec)</code></td><td>i32</td><td>Same, with a <code>TextureSpec</code> controlling appearance.</td></tr>
         <tr><td><code>Engine.bind_texture(mesh_id, texture_id)</code></td><td>—</td><td>Binds an uploaded texture to a mesh's descriptor set.</td></tr>
@@ -429,9 +430,10 @@ Engine.shutdown()</code></pre>
       <h3>Key Constants</h3>
       <table>
         <tr><th>Group</th><th>Constants</th></tr>
-        <tr><td>Letters</td><td><code>KEY_A</code> <code>KEY_D</code> <code>KEY_E</code> <code>KEY_M</code> <code>KEY_Q</code> <code>KEY_S</code> <code>KEY_W</code></td></tr>
+        <tr><td>Letters</td><td><code>KEY_A</code> <code>KEY_D</code> <code>KEY_E</code> <code>KEY_F</code> <code>KEY_G</code> <code>KEY_M</code> <code>KEY_Q</code> <code>KEY_S</code> <code>KEY_W</code></td></tr>
         <tr><td>Arrows</td><td><code>KEY_LEFT</code> <code>KEY_UP</code> <code>KEY_RIGHT</code> <code>KEY_DOWN</code></td></tr>
         <tr><td>Modifiers / misc</td><td><code>KEY_ESCAPE</code> <code>KEY_SPACE</code> <code>KEY_SHIFT</code> <code>KEY_CTRL</code></td></tr>
+        <tr><td>Mouse buttons</td><td><code>MOUSE_LEFT</code> <code>MOUSE_RIGHT</code> &mdash; Windows VK codes; poll with <code>Input.key_down</code></td></tr>
       </table>
       <pre><code><span class="tok-kw">if</span> Input.key_down(KEY_W) == <span class="tok-num">1</span>:
     camera.translate(<span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span> - speed * dt)</code></pre>
@@ -485,6 +487,7 @@ Engine.shutdown()</code></pre>
         <tr><td><code>without_collision()</code></td><td>Disables collision.</td></tr>
         <tr><td><code>set_model(model)</code></td><td>Binds a loaded <code>Model3D</code> (uploads to GPU if needed, sets <code>mesh_id</code>).</td></tr>
         <tr><td><code>set_texture(texture)</code></td><td>Dresses the node with a loaded <code>Texture2D</code>. Safe before or after <code>set_model</code>.</td></tr>
+        <tr><td><code>set_visible(on)</code></td><td>Shows (1) or hides (0) this node's mesh instance.</td></tr>
       </table>
 
       <h4>Tree &amp; lifetime</h4>
