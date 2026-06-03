@@ -247,6 +247,7 @@
 <span class="tok-com"># 1. Configure the window before starting</span>
 Engine.window.create(<span class="tok-str">"My Game"</span>, <span class="tok-num">1280</span>, <span class="tok-num">720</span>)
 Engine.properties.set_vsync(<span class="tok-num">0</span>)
+Engine.properties.set_target_fps(<span class="tok-num">0</span>)
 Engine.properties.set_instance_culling(<span class="tok-num">1</span>)
 Engine.debug.render_stats(<span class="tok-num">1</span>)
 
@@ -363,6 +364,8 @@ Engine.shutdown()</code></pre>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
         <tr><td><code>set_vsync(enabled)</code></td><td>—</td><td>1 = synced presentation, 0 = uncapped frame rate.</td></tr>
         <tr><td><code>vsync()</code></td><td>i32</td><td>Current vsync state.</td></tr>
+        <tr><td><code>set_target_fps(fps)</code></td><td>—</td><td>Caps the main loop when <code>fps &gt; 0</code>. Use 0 for uncapped benchmarking.</td></tr>
+        <tr><td><code>target_fps()</code></td><td>i32</td><td>Current FPS cap; 0 means uncapped.</td></tr>
         <tr><td><code>set_instance_culling(enabled)</code></td><td>—</td><td>Toggles per-instance frustum culling.</td></tr>
         <tr><td><code>instance_culling()</code></td><td>i32</td><td>Current culling state.</td></tr>
       </table>

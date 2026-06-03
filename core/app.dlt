@@ -34,6 +34,24 @@ attach App:
         self.clock = clock
         return dt
 
+    fun begin_frame_limited(self, target_fps: i32) -> f32:
+        Window.poll()
+        if Window.running() == 0:
+            self.running_flag = 0
+        clock: Clock = self.clock
+        if target_fps > 0:
+            min_dt: f64 = 1.0 / (target_fps as f64)
+            now: f64 = engine_time_seconds()
+            elapsed: f64 = now - clock.last_time
+            remaining: f64 = min_dt - elapsed
+            if remaining > 0.0:
+                ms: i32 = (remaining * 1000.0) as i32
+                if ms > 0:
+                    Sleep(ms)
+        dt: f32 = clock.tick()
+        self.clock = clock
+        return dt
+
     fun delta_time(self) -> f32:
         return self.clock.dt
 

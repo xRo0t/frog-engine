@@ -29,6 +29,7 @@ static g_engine_scene: Scene = Scene()
 static g_engine_has_scene: i32 = 0
 static g_engine_runtime: EngineRuntime = EngineRuntime()
 static g_engine_vsync_enabled: i32 = 1
+static g_engine_target_fps: i32 = 0
 static g_engine_render_stats_enabled: i32 = 0
 static g_engine_instance_culling_enabled: i32 = 0
 static g_engine_current_camera_ptr: i64 = 0
@@ -43,6 +44,7 @@ attach DisplayWindow:
         g_engine_has_scene = 0
         g_engine_runtime = EngineRuntime()
         g_engine_vsync_enabled = 1
+        g_engine_target_fps = 0
         g_engine_render_stats_enabled = 0
         g_engine_instance_culling_enabled = 0
         g_engine_current_camera_ptr = 0
@@ -63,6 +65,15 @@ attach Properties:
 
     static fun vsync() -> i32:
         return g_engine_vsync_enabled
+
+    static fun set_target_fps(fps: i32):
+        if fps <= 0:
+            g_engine_target_fps = 0
+        else:
+            g_engine_target_fps = fps
+
+    static fun target_fps() -> i32:
+        return g_engine_target_fps
 
     static fun set_instance_culling(enabled: i32):
         if enabled == 0:
@@ -129,7 +140,7 @@ attach Engine:
         return g_engine_runtime.running()
 
     static fun begin_frame() -> f32:
-        return g_engine_runtime.begin_frame()
+        return g_engine_runtime.begin_frame_limited(g_engine_target_fps)
 
     static fun capture_mouse():
         g_engine_runtime.capture_mouse()

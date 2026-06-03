@@ -113,6 +113,7 @@ These were fixed before enabling the facade:
 
 3. Add more focused compiler tests for:
    - alias overload dispatch
+   - instance-method overload dispatch when arity differs (`foo()` vs `foo(i32)`)
    - package-level complex globals
    - explicit move/no-copy ownership patterns for native resources
 
