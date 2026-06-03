@@ -3,17 +3,28 @@
 # Public resource loading facade.
 ##############################
 
-static g_assets_root: str = "assets"
+static g_assets_root: str = ""
+static g_assets_mounted: i32 = 0
 
 attach Assets:
 
     static fun mount(root: str):
+        if Str.equals(root, ""):
+            g_assets_root = ""
+            g_assets_mounted = 0
+            return
         g_assets_root = root
+        g_assets_mounted = 1
 
     static fun root() -> str:
         return g_assets_root
 
+    static fun mounted() -> i32:
+        return g_assets_mounted
+
     static fun resolve(path: str) -> str:
+        if g_assets_mounted == 0:
+            return ""
         if PathOps.is_absolute(path):
             return PathOps.resolve_path(path)
         joined: str = PathOps.join_path(g_assets_root, path)
@@ -23,6 +34,8 @@ attach AssetModels:
 
     static fun load(path: str) -> Model3D:
         resolved: str = Assets.resolve(path)
+        if Str.equals(resolved, ""):
+            return Model3D(path=path, resolved_path="", format="unknown", mesh_id=-1, found=0, parsed=0, ready=0, error="asset root is not mounted; call Assets.mount before loading assets")
         format: str = "gltf"
         if Str.ends_with(path, ".glb"):
             format = "glb"
@@ -45,6 +58,8 @@ attach AssetTextures:
     # wrapping, color space). One CPU read + one GPU upload, done once.
     static fun load(path: str, spec: TextureSpec) -> Texture2D:
         resolved: str = Assets.resolve(path)
+        if Str.equals(resolved, ""):
+            return Texture2D(path=path, resolved_path="", texture_id=-1, found=0, ready=0, error="asset root is not mounted; call Assets.mount before loading assets")
         found: i32 = 0
         if PathOps.exists(resolved):
             found = 1
@@ -60,6 +75,8 @@ attach AssetAudio:
 
     static fun load(path: str) -> AudioClip:
         resolved: str = Assets.resolve(path)
+        if Str.equals(resolved, ""):
+            return AudioClip(path=path, resolved_path="", found=0, ready=0, error="asset root is not mounted; call Assets.mount before loading assets")
         found: i32 = 0
         if PathOps.exists(resolved):
             found = 1
@@ -69,6 +86,8 @@ attach AssetShaders:
 
     static fun load(path: str) -> Shader:
         resolved: str = Assets.resolve(path)
+        if Str.equals(resolved, ""):
+            return Shader(path=path, resolved_path="", found=0, ready=0, error="asset root is not mounted; call Assets.mount before loading assets")
         found: i32 = 0
         if PathOps.exists(resolved):
             found = 1

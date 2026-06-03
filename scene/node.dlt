@@ -40,36 +40,6 @@ struct Node:
     far_z: f32 = 1000.0
     current: i32 = 0
 
-@heap struct GoblinGroupNode extends Node:
-    sum_x: f32 = 0.0
-    sum_z: f32 = 0.0
-    member_count: i32 = 0
-    leader_index: i32 = -1
-    leader_x: f32 = 0.0
-    leader_z: f32 = 0.0
-    center_x: f32 = 0.0
-    center_z: f32 = 0.0
-
-@heap struct GoblinNode extends Node:
-    home_x: f32 = 0.0
-    home_z: f32 = 0.0
-    yaw: f32 = 0.0
-    phase: i32 = 0
-    timer: f32 = 0.0
-    phase_tick: i32 = 0
-    dir_x: f32 = 0.0
-    dir_z: f32 = 0.0
-    group_id: i32 = -1
-    role: i32 = 0
-    social_timer: f32 = 0.0
-
-@heap struct EarthNode extends Node:
-    ground_id: i32 = -1
-    ground_size: f32 = 800.0
-    goblin_count: i32 = 100000
-    group_count: i32 = 220
-    spawn_radius: f32 = 360.0
-
 fun node_store_create(count: i32) -> i64:
     if count <= 0:
         return 0
@@ -301,11 +271,6 @@ attach RootNode:
     fun destroy(self):
         node_destroy(self as i64)
 
-attach EarthNode:
-
-    fun destroy(self):
-        node_destroy(self as i64)
-
 fun root_node_create(name: str, id: i32) -> RootNode:
     node: RootNode = RootNode()
     node.id = id
@@ -384,94 +349,4 @@ fun camera3d_create(name: str) -> Camera3D:
     node.near_z = 0.1
     node.far_z = 1000.0
     node.current = 0
-    return node
-
-fun goblin_group_node_create(index: i32) -> GoblinGroupNode:
-    node: GoblinGroupNode = GoblinGroupNode()
-    node.id = index
-    node.name = "GoblinGroup"
-    node.active = 1
-    node.kind = 5
-    node.parent_ptr = 0
-    node.first_child_ptr = 0
-    node.next_sibling_ptr = 0
-    node.mesh_id = -1
-    node.pos_x = 0.0
-    node.pos_y = 0.0
-    node.pos_z = 0.0
-    node.rot_x = 0.0
-    node.rot_y = 0.0
-    node.rot_z = 0.0
-    node.scale_x = 1.0
-    node.scale_y = 1.0
-    node.scale_z = 1.0
-    node.sum_x = 0.0
-    node.sum_z = 0.0
-    node.member_count = 0
-    node.leader_index = -1
-    node.leader_x = 0.0
-    node.leader_z = 0.0
-    node.center_x = 0.0
-    node.center_z = 0.0
-    return node
-
-fun goblin_node_create(index: i32, mesh_id: i32, px: f32, pz: f32, group_id: i32) -> GoblinNode:
-    role: i32 = 0
-    if group_id >= 0:
-        role = 1
-    node: GoblinNode = GoblinNode()
-    node.id = index
-    node.name = "Goblin"
-    node.active = 1
-    node.kind = 6
-    node.parent_ptr = 0
-    node.first_child_ptr = 0
-    node.next_sibling_ptr = 0
-    node.mesh_id = mesh_id
-    node.pos_x = px
-    node.pos_y = 0.64
-    node.pos_z = pz
-    node.rot_x = 0.0
-    node.rot_y = 0.0
-    node.rot_z = 0.0
-    node.scale_x = 0.053
-    node.scale_y = 0.053
-    node.scale_z = 0.053
-    node.home_x = px
-    node.home_z = pz
-    node.yaw = 0.0
-    node.phase = 0
-    node.timer = 0.0
-    node.phase_tick = 0
-    node.dir_x = 0.0
-    node.dir_z = 0.0
-    node.group_id = group_id
-    node.role = role
-    node.social_timer = 0.0
-    return node
-
-fun earth_node_create() -> EarthNode:
-    node: EarthNode = EarthNode()
-    node.id = 2
-    node.name = "Earth"
-    node.active = 1
-    node.kind = 7
-    node.parent_ptr = 0
-    node.first_child_ptr = 0
-    node.next_sibling_ptr = 0
-    node.mesh_id = -1
-    node.pos_x = 0.0
-    node.pos_y = 0.0
-    node.pos_z = 0.0
-    node.rot_x = 0.0
-    node.rot_y = 0.0
-    node.rot_z = 0.0
-    node.scale_x = 1.0
-    node.scale_y = 1.0
-    node.scale_z = 1.0
-    node.ground_id = -1
-    node.ground_size = 800.0
-    node.goblin_count = 100000
-    node.group_count = 220
-    node.spawn_radius = 360.0
     return node

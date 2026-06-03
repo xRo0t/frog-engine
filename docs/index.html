@@ -227,12 +227,15 @@
       <pre><code><span class="tok-kw">import</span> std
 <span class="tok-kw">import</span> frog
 <span class="tok-kw">import</span> game.runtime</code></pre>
-      <p>Before loading any asset, mount a root directory. Everything you load later resolves relative to it. A common pattern handles both running from source and running next to the built executable:</p>
-      <pre><code>asset_probe: <span class="tok-type">str</span> = PathOps.resolve_path(<span class="tok-str">"assets\\models\\cube.gltf"</span>)
-<span class="tok-kw">if</span> PathOps.exists(asset_probe):
-    Assets.mount(<span class="tok-str">"assets"</span>)
-<span class="tok-kw">else</span>:
-    Assets.mount(PathOps.resolve_from_exe(<span class="tok-str">"..\\assets"</span>))</code></pre>
+      <p>Before loading any asset, mount a root directory. This is required; Frog does not choose a default asset folder.</p>
+      <pre><code>Assets.mount(<span class="tok-str">"assets"</span>)</code></pre>
+      <p>Keep code and static files separate. The engine does not guess the root; the game chooses it.</p>
+      <pre><code>my-game/
+  src/main.dlt
+  src/game/runtime.dlt
+  assets/models/player/scene.gltf
+  assets/textures/player.png</code></pre>
+      <p>With the layout above, <code>Assets.models.load("models/player/scene.gltf")</code> resolves through the mounted <code>assets</code> directory. Loading before <code>Assets.mount(...)</code> returns an asset error instead of guessing a path.</p>
     </section>
 
     <section id="quickstart">
@@ -380,14 +383,18 @@ Engine.shutdown()</code></pre>
     </section>
     <section id="assets">
       <h2>Assets</h2>
-      <p class="lead">Resource loading is grouped under <code>Assets</code> and its sub-loaders. Mount a root once, then load by relative path.</p>
+      <p class="lead">Resource loading is grouped under <code>Assets</code> and its sub-loaders. Mount a root once, then load by relative path. The mount call is mandatory.</p>
+      <pre><code>Assets.mount(<span class="tok-str">"assets"</span>)
+model: <span class="tok-type">Model3D</span> = Assets.models.load(<span class="tok-str">"models/player/scene.gltf"</span>)
+texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/player.png"</span>, TextureSpec.pixel())</code></pre>
 
       <h4>Assets</h4>
       <table>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
-        <tr><td><code>Assets.mount(root)</code></td><td>—</td><td>Sets the base directory all loads resolve against.</td></tr>
-        <tr><td><code>Assets.root()</code></td><td>str</td><td>Returns the current mounted root.</td></tr>
-        <tr><td><code>Assets.resolve(path)</code></td><td>str</td><td>Resolves a relative path to an absolute one.</td></tr>
+        <tr><td><code>Assets.mount(root)</code></td><td>—</td><td>Required. Sets the base directory all loads resolve against.</td></tr>
+        <tr><td><code>Assets.root()</code></td><td>str</td><td>Returns the current mounted root, or an empty string before mounting.</td></tr>
+        <tr><td><code>Assets.mounted()</code></td><td>i32</td><td>1 after <code>Assets.mount(...)</code>, otherwise 0.</td></tr>
+        <tr><td><code>Assets.resolve(path)</code></td><td>str</td><td>Resolves a relative path to an absolute one. Returns an empty string before mounting.</td></tr>
       </table>
 
       <h4>Loaders</h4>
@@ -438,7 +445,7 @@ Engine.shutdown()</code></pre>
     </section>
     <section id="nodes">
       <h2>Nodes</h2>
-      <p class="lead">Everything in a scene is a <code>Node</code>. The base type carries identity, the transform, a mesh id, and tree links. Game types extend it.</p>
+      <p class="lead">Everything rendered by the scene graph is backed by <code>Node</code>-compatible data. The base type carries identity, the transform, a mesh id, and tree links.</p>
       <table>
         <tr><th>Field</th><th>Type</th><th>Meaning</th></tr>
         <tr><td><code>id</code> / <code>name</code> / <code>active</code></td><td>i32 / str / i32</td><td>Identity and enabled flag.</td></tr>
@@ -456,7 +463,30 @@ Engine.shutdown()</code></pre>
         <tr><td><code>set_rotation(x, y, z)</code></td><td>Sets local rotation. Returns the node.</td></tr>
         <tr><td><code>set_scale(x, y, z)</code></td><td>Sets local scale. Returns the node.</td></tr>
       </table>
-      <div class="note">Built-in node types: <code>Node3D</code>, <code>Camera3D</code>, and <code>RootNode</code>. Define your own by extending <code>Node</code> for game-specific behaviour.</div>
+      <div class="note">Built-in node types: <code>Node3D</code>, <code>Camera3D</code>, and <code>RootNode</code>. Keep game-specific node structs in your game project; the Frog package should only carry reusable engine types.</div>
+
+      <h4>Custom game nodes</h4>
+      <p>For normal gameplay objects, start with <code>Node3D</code> and add behavior in your game modules. For high-count custom data, define a game-owned struct that keeps the base node fields first, then add game fields after them.</p>
+      <pre><code><span class="tok-kw">@heap</span> <span class="tok-kw">struct</span> EnemyNode:
+    id: <span class="tok-type">i32</span> = -1
+    name: <span class="tok-type">str</span> = <span class="tok-str">""</span>
+    active: <span class="tok-type">i32</span> = <span class="tok-num">1</span>
+    kind: <span class="tok-type">i32</span> = <span class="tok-num">0</span>
+    parent_ptr: <span class="tok-type">i64</span> = <span class="tok-num">0</span>
+    first_child_ptr: <span class="tok-type">i64</span> = <span class="tok-num">0</span>
+    next_sibling_ptr: <span class="tok-type">i64</span> = <span class="tok-num">0</span>
+    mesh_id: <span class="tok-type">i32</span> = -1
+    pos_x: <span class="tok-type">f32</span> = <span class="tok-num">0.0</span>
+    pos_y: <span class="tok-type">f32</span> = <span class="tok-num">0.0</span>
+    pos_z: <span class="tok-type">f32</span> = <span class="tok-num">0.0</span>
+    rot_x: <span class="tok-type">f32</span> = <span class="tok-num">0.0</span>
+    rot_y: <span class="tok-type">f32</span> = <span class="tok-num">0.0</span>
+    rot_z: <span class="tok-type">f32</span> = <span class="tok-num">0.0</span>
+    scale_x: <span class="tok-type">f32</span> = <span class="tok-num">1.0</span>
+    scale_y: <span class="tok-type">f32</span> = <span class="tok-num">1.0</span>
+    scale_z: <span class="tok-type">f32</span> = <span class="tok-num">1.0</span>
+    health: <span class="tok-type">i32</span> = <span class="tok-num">100</span></code></pre>
+      <div class="note warn">Alpha guidance: avoid adding game-only node types to Frog itself. Put them in the game repo, and use the engine's <code>Node</code> helpers by casting the node pointer when needed.</div>
     </section>
 
     <section id="node3d">
