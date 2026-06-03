@@ -7,7 +7,7 @@
 extern lib "kernel32":
     fun GetModuleHandleA(lpModuleName: i64) -> i64
 
-extern lib "vulkan-1":
+extern lib "dolet-vulkan-1":
     fun vkCreateWin32SurfaceKHR(instance: i64, pCreateInfo: i64, pAllocator: i64, pSurface: i64) -> i32
 
 struct VulkanContext:
@@ -24,6 +24,94 @@ struct VulkanContext:
 attach VulkanContext:
 
     fun init(self, window_handle: i64) -> i32:
+        return self.init_with_gpu_preference(window_handle, 0)
+
+    fun _find_queue_families(self, device: i64, surface: i64, graphics_out: i64, present_out: i64) -> i32:
+        Memory.write_i32(graphics_out, -1)
+        Memory.write_i32(present_out, -1)
+
+        qf_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if qf_count_ptr == 0:
+            return 0
+        vkGetPhysicalDeviceQueueFamilyProperties(device, qf_count_ptr, 0)
+        qf_count: i32 = Memory.read_i32(qf_count_ptr)
+        if qf_count == 0:
+            Memory.free(qf_count_ptr)
+            return 0
+
+        qf_props: i64 = Memory.malloc_zeroed(qf_count * 24)
+        if qf_props == 0:
+            Memory.free(qf_count_ptr)
+            return 0
+        vkGetPhysicalDeviceQueueFamilyProperties(device, qf_count_ptr, qf_props)
+        Memory.free(qf_count_ptr)
+
+        present_ptr: i64 = Memory.malloc_zeroed(4)
+        if present_ptr == 0:
+            Memory.free(qf_props)
+            return 0
+
+        qi: i32 = 0
+        while qi < qf_count:
+            flags: i32 = Memory.read_i32(qf_props + qi * 24)
+            if Memory.read_i32(graphics_out) < 0:
+                if (flags / 1) - (flags / 2) * 2 == 1:
+                    Memory.write_i32(graphics_out, qi)
+
+            if Memory.read_i32(present_out) < 0:
+                vkGetPhysicalDeviceSurfaceSupportKHR(device, qi, surface, present_ptr)
+                support: i32 = Memory.read_i32(present_ptr)
+                if support == 1:
+                    Memory.write_i32(present_out, qi)
+            qi = qi + 1
+
+        Memory.free(present_ptr)
+        Memory.free(qf_props)
+
+        if Memory.read_i32(graphics_out) < 0:
+            return 0
+        if Memory.read_i32(present_out) < 0:
+            return 0
+        return 1
+
+    fun _choose_physical_device(self, devices: i64, dev_count: i32, surface: i64, preference: i32, graphics_out: i64, present_out: i64) -> i64:
+        temp_graphics: i64 = Memory.malloc_zeroed(4)
+        temp_present: i64 = Memory.malloc_zeroed(4)
+        if temp_graphics == 0:
+            return 0
+        if temp_present == 0:
+            Memory.free(temp_graphics)
+            return 0
+
+        if preference >= 1000:
+            wanted_index: i32 = preference - 1000
+            if wanted_index >= 0:
+                if wanted_index < dev_count:
+                    indexed_device: i64 = Memory.read_ptr(devices + wanted_index * 8)
+                    if self._find_queue_families(indexed_device, surface, temp_graphics, temp_present) == 1:
+                        Memory.write_i32(graphics_out, Memory.read_i32(temp_graphics))
+                        Memory.write_i32(present_out, Memory.read_i32(temp_present))
+                        Memory.free(temp_graphics)
+                        Memory.free(temp_present)
+                        return indexed_device
+                    print("  Requested GPU index is not suitable; falling back to auto")
+
+        i: i32 = 0
+        while i < dev_count:
+            candidate: i64 = Memory.read_ptr(devices + i * 8)
+            if self._find_queue_families(candidate, surface, temp_graphics, temp_present) == 1:
+                Memory.write_i32(graphics_out, Memory.read_i32(temp_graphics))
+                Memory.write_i32(present_out, Memory.read_i32(temp_present))
+                Memory.free(temp_graphics)
+                Memory.free(temp_present)
+                return candidate
+            i = i + 1
+
+        Memory.free(temp_graphics)
+        Memory.free(temp_present)
+        return 0
+
+    fun init_with_gpu_preference(self, window_handle: i64, gpu_preference: i32) -> i32:
         # Step 1: Required Vulkan extensions (replaces glfwGetRequiredInstanceExtensions)
         ext1: str = "VK_KHR_surface"
         ext2: str = "VK_KHR_win32_surface"
@@ -75,35 +163,11 @@ attach VulkanContext:
             return 0
         print("  VkInstance created")
 
-        # Step 4: Create surface
+        # Step 4: Create surface via native Win32. Device suitability depends
+        # on present support, so the surface must exist before GPU selection.
         surface_ptr: i64 = Memory.malloc_zeroed(8)
         if surface_ptr == 0:
             return 0
-
-        # Step 5: Pick physical device
-        dev_count_ptr: i64 = Memory.malloc_zeroed(4)
-        if dev_count_ptr == 0:
-            Memory.free(surface_ptr)
-            return 0
-        Memory.write_i32(dev_count_ptr, 0)
-        vkEnumeratePhysicalDevices(self.vk_instance, dev_count_ptr, 0)
-        dev_count: i32 = Memory.read_i32(dev_count_ptr)
-        if dev_count == 0:
-            print("  No physical devices found")
-            Memory.free(dev_count_ptr)
-            Memory.free(surface_ptr)
-            return 0
-        devices: i64 = Memory.malloc_zeroed(dev_count * 8)
-        if devices == 0:
-            Memory.free(dev_count_ptr)
-            Memory.free(surface_ptr)
-            return 0
-        vkEnumeratePhysicalDevices(self.vk_instance, dev_count_ptr, devices)
-        Memory.free(dev_count_ptr)
-        self.vk_physical_device = Memory.read_ptr(devices)
-        Memory.free(devices)
-
-        # Step 6: Create surface via native Win32
         surf_ci: i64 = Memory.malloc_zeroed(40)
         if surf_ci == 0:
             Memory.free(surface_ptr)
@@ -121,48 +185,46 @@ attach VulkanContext:
             Memory.free(surface_ptr)
             return 0
         print("  Surface created")
-
-        # Step 7: Find queue families
-        qf_count_ptr: i64 = Memory.malloc_zeroed(4)
-        if qf_count_ptr == 0:
-            Memory.free(surface_ptr)
-            return 0
-        vkGetPhysicalDeviceQueueFamilyProperties(self.vk_physical_device, qf_count_ptr, 0)
-        qf_count: i32 = Memory.read_i32(qf_count_ptr)
-        if qf_count == 0:
-            Memory.free(qf_count_ptr)
-            Memory.free(surface_ptr)
-            return 0
-        qf_size: i32 = qf_count * 24
-        qf_props: i64 = Memory.malloc_zeroed(qf_size)
-        if qf_props == 0:
-            Memory.free(qf_count_ptr)
-            Memory.free(surface_ptr)
-            return 0
-        vkGetPhysicalDeviceQueueFamilyProperties(self.vk_physical_device, qf_count_ptr, qf_props)
-        Memory.free(qf_count_ptr)
-
-        vk_surface: i64 = Memory.read_ptr(surface_ptr)
+        self.vk_surface = Memory.read_ptr(surface_ptr)
         Memory.free(surface_ptr)
-        self.vk_surface = vk_surface
 
-        present_ptr: i64 = Memory.malloc_zeroed(4)
-        if present_ptr == 0:
-            Memory.free(qf_props)
+        # Step 5: Pick physical device and queue families.
+        dev_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if dev_count_ptr == 0:
             return 0
+        Memory.write_i32(dev_count_ptr, 0)
+        vkEnumeratePhysicalDevices(self.vk_instance, dev_count_ptr, 0)
+        dev_count: i32 = Memory.read_i32(dev_count_ptr)
+        if dev_count == 0:
+            print("  No physical devices found")
+            Memory.free(dev_count_ptr)
+            return 0
+        devices: i64 = Memory.malloc_zeroed(dev_count * 8)
+        if devices == 0:
+            Memory.free(dev_count_ptr)
+            return 0
+        vkEnumeratePhysicalDevices(self.vk_instance, dev_count_ptr, devices)
+        Memory.free(dev_count_ptr)
 
-        qi: i32 = 0
-        while qi < qf_count:
-            flags: i32 = Memory.read_i32(qf_props + qi * 24)
-            if (flags / 1) - (flags / 2) * 2 == 1:
-                self.graphics_family = qi
-            vkGetPhysicalDeviceSurfaceSupportKHR(self.vk_physical_device, qi, vk_surface, present_ptr)
-            support: i32 = Memory.read_i32(present_ptr)
-            if support == 1:
-                self.present_family = qi
-            qi = qi + 1
+        graphics_ptr: i64 = Memory.malloc_zeroed(4)
+        present_ptr: i64 = Memory.malloc_zeroed(4)
+        if graphics_ptr == 0:
+            Memory.free(devices)
+            return 0
+        if present_ptr == 0:
+            Memory.free(graphics_ptr)
+            Memory.free(devices)
+            return 0
+        self.vk_physical_device = self._choose_physical_device(devices, dev_count, self.vk_surface, gpu_preference, graphics_ptr, present_ptr)
+        self.graphics_family = Memory.read_i32(graphics_ptr)
+        self.present_family = Memory.read_i32(present_ptr)
+        Memory.free(graphics_ptr)
         Memory.free(present_ptr)
-        Memory.free(qf_props)
+        Memory.free(devices)
+
+        if self.vk_physical_device == 0:
+            print("  No suitable physical device found")
+            return 0
 
         if self.graphics_family < 0:
             print("  No graphics queue family found")
@@ -171,7 +233,9 @@ attach VulkanContext:
             print("  No present queue family found")
             return 0
 
-        # Step 8: Create logical device
+        print("  Physical device selected")
+
+        # Step 6: Create logical device
         priority_ptr: i64 = Memory.malloc_zeroed(4)
         if priority_ptr == 0:
             return 0

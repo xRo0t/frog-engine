@@ -157,9 +157,9 @@ fun gpu_tex_make_staging(device: i64, phys_device: i64, data: i64, size: i64, bu
     Memory.write_ptr(mem_out, mem)
     return 1
 
-# Create a device-local VkImage (color format from spec, OPTIMAL, sampled+transfer_dst).
+# Create a device-local VkImage with caller-provided usage flags.
 # Writes the image + memory to out pointers. Returns 1 on success.
-fun gpu_tex_make_image(device: i64, phys_device: i64, width: i32, height: i32, fmt: i32, img_out: i64, mem_out: i64) -> i32:
+fun gpu_make_image_usage(device: i64, phys_device: i64, width: i32, height: i32, fmt: i32, usage: i32, img_out: i64, mem_out: i64) -> i32:
     Memory.write_ptr(img_out, 0)
     Memory.write_ptr(mem_out, 0)
 
@@ -182,7 +182,7 @@ fun gpu_tex_make_image(device: i64, phys_device: i64, width: i32, height: i32, f
     Memory.write_i32(ci + 44, 1)         # arrayLayers
     Memory.write_i32(ci + 48, 1)         # SAMPLE_COUNT_1
     Memory.write_i32(ci + 52, 0)         # TILING_OPTIMAL
-    Memory.write_i32(ci + 56, 6)         # USAGE_TRANSFER_DST(2) | SAMPLED(4)
+    Memory.write_i32(ci + 56, usage)
     Memory.write_i32(ci + 60, 0)         # SHARING_EXCLUSIVE
     Memory.write_i32(ci + 80, 0)         # INITIAL_LAYOUT_UNDEFINED
 
@@ -223,6 +223,10 @@ fun gpu_tex_make_image(device: i64, phys_device: i64, width: i32, height: i32, f
     Memory.write_ptr(img_out, img)
     Memory.write_ptr(mem_out, mem)
     return 1
+
+# Create a device-local texture image (sampled + transfer dst).
+fun gpu_tex_make_image(device: i64, phys_device: i64, width: i32, height: i32, fmt: i32, img_out: i64, mem_out: i64) -> i32:
+    return gpu_make_image_usage(device, phys_device, width, height, fmt, 6, img_out, mem_out)
 
 # Begin a one-shot primary command buffer on the given pool.
 fun gpu_tex_begin_oneshot(device: i64, cmd_pool: i64) -> i64:
@@ -308,7 +312,7 @@ fun gpu_tex_copy(cmd: i64, staging: i64, image: i64, width: i32, height: i32):
     Memory.free(region)
 
 # Create a VkImageView (2D, color format from spec) for the texture image.
-fun gpu_tex_make_view(device: i64, image: i64, fmt: i32) -> i64:
+fun gpu_make_image_view_aspect(device: i64, image: i64, fmt: i32, aspect: i32) -> i64:
     # VkImageViewCreateInfo (sType = 15). Offsets:
     #  0 sType, 8 pNext, 16 flags, 24 image, 32 viewType, 36 format,
     # 40 components {r,g,b,a = 40,44,48,52}, 56 subresourceRange
@@ -320,7 +324,7 @@ fun gpu_tex_make_view(device: i64, image: i64, fmt: i32) -> i64:
     Memory.write_ptr(ci + 24, image)
     Memory.write_i32(ci + 32, 1)        # VIEW_TYPE_2D
     Memory.write_i32(ci + 36, fmt)      # FORMAT (must match the image)
-    Memory.write_i32(ci + 56, 1)        # ASPECT_COLOR
+    Memory.write_i32(ci + 56, aspect)
     Memory.write_i32(ci + 60, 0)
     Memory.write_i32(ci + 64, 1)        # levelCount
     Memory.write_i32(ci + 68, 0)
@@ -333,6 +337,9 @@ fun gpu_tex_make_view(device: i64, image: i64, fmt: i32) -> i64:
     if r != 0:
         return 0
     return view
+
+fun gpu_tex_make_view(device: i64, image: i64, fmt: i32) -> i64:
+    return gpu_make_image_view_aspect(device, image, fmt, 1)
 
 # Create a sampler from a TextureSpec (filtering, wrapping, anisotropy).
 fun gpu_tex_make_sampler(device: i64, spec: TextureSpec) -> i64:

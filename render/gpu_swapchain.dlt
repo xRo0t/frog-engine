@@ -9,6 +9,7 @@ struct Swapchain:
     vk_swapchain:     i64 = 0
     images:           i64 = 0
     image_views:      i64 = 0
+    image_layouts:    i64 = 0
     image_count:      i32 = 0
     format:           i32 = 0
     width:            i32 = 0
@@ -152,6 +153,9 @@ attach Swapchain:
             return 0
         vkGetSwapchainImagesKHR(device, self.vk_swapchain, img_count_ptr, self.images)
         Memory.free(img_count_ptr)
+        self.image_layouts = Memory.malloc_zeroed(self.image_count * 4)
+        if self.image_layouts == 0:
+            return 0
 
         # Create image views
         self.image_views = Memory.malloc_zeroed(self.image_count * 8)
@@ -312,6 +316,24 @@ attach Swapchain:
 
         return 1
 
+    fun image_layout(self, index: i32) -> i32:
+        if self.image_layouts == 0:
+            return 0
+        if index < 0:
+            return 0
+        if index >= self.image_count:
+            return 0
+        return Memory.read_i32(self.image_layouts + index * 4)
+
+    fun set_image_layout(self, index: i32, layout: i32):
+        if self.image_layouts == 0:
+            return
+        if index < 0:
+            return
+        if index >= self.image_count:
+            return
+        Memory.write_i32(self.image_layouts + index * 4, layout)
+
     fun cleanup(self, instance: i64, device: i64) -> void:
         if self.depth_view != 0:
             vkDestroyImageView(device, self.depth_view, 0)
@@ -337,3 +359,6 @@ attach Swapchain:
         if self.images != 0:
             Memory.free(self.images)
             self.images = 0
+        if self.image_layouts != 0:
+            Memory.free(self.image_layouts)
+            self.image_layouts = 0

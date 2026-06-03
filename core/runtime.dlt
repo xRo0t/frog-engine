@@ -20,6 +20,9 @@ attach EngineRuntime:
         return EngineRuntime.create(title, width, height, 1)
 
     static fun create(title: str, width: i32, height: i32, vsync: i32) -> EngineRuntime:
+        return EngineRuntime.create_with_gpu_preference(title, width, height, vsync, 0)
+
+    static fun create_with_gpu_preference(title: str, width: i32, height: i32, vsync: i32, gpu_preference: i32) -> EngineRuntime:
         sync: i32 = 1
         if vsync == 0:
             sync = 0
@@ -27,7 +30,7 @@ attach EngineRuntime:
         runtime.app = App.create(title, width, height)
 
         ctx: VulkanContext = VulkanContext()
-        if ctx.init(runtime.app.handle()) == 0:
+        if ctx.init_with_gpu_preference(runtime.app.handle(), gpu_preference) == 0:
             print("GPU context init failed")
             runtime.app.shutdown()
             return runtime
@@ -148,6 +151,20 @@ attach EngineRuntime:
 
     fun render_camera(self, camera: Camera3D):
         self.renderer.render_camera3d_frame(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height)
+
+    fun render_camera_scaled(self, camera: Camera3D, render_scale: f32):
+        scale: f32 = render_scale
+        if scale < 0.25:
+            scale = 0.25
+        if scale > 2.0:
+            scale = 2.0
+        rw: i32 = ((self.width as f32) * scale) as i32
+        rh: i32 = ((self.height as f32) * scale) as i32
+        if rw < 1:
+            rw = 1
+        if rh < 1:
+            rh = 1
+        self.renderer.render_camera3d_frame_scaled(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height, rw, rh)
 
     fun shutdown(self):
         if self.ready_flag == 0:

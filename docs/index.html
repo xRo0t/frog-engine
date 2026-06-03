@@ -248,7 +248,9 @@
 Engine.window.create(<span class="tok-str">"My Game"</span>, <span class="tok-num">1280</span>, <span class="tok-num">720</span>)
 Engine.properties.set_vsync(<span class="tok-num">0</span>)
 Engine.properties.set_target_fps(<span class="tok-num">0</span>)
-Engine.properties.set_instance_culling(<span class="tok-num">1</span>)
+Engine.properties.set_render_scale(<span class="tok-num">1.0</span>)
+Engine.properties.set_gpu_preference(GpuPreference.auto())
+Engine.properties.set_frustum_culling(<span class="tok-num">1</span>)
 Engine.debug.render_stats(<span class="tok-num">1</span>)
 
 <span class="tok-com"># 2. Mount assets and build a scene</span>
@@ -366,8 +368,12 @@ Engine.shutdown()</code></pre>
         <tr><td><code>vsync()</code></td><td>i32</td><td>Current vsync state.</td></tr>
         <tr><td><code>set_target_fps(fps)</code></td><td>—</td><td>Caps the main loop when <code>fps &gt; 0</code>. Use 0 for uncapped benchmarking.</td></tr>
         <tr><td><code>target_fps()</code></td><td>i32</td><td>Current FPS cap; 0 means uncapped.</td></tr>
-        <tr><td><code>set_instance_culling(enabled)</code></td><td>—</td><td>Toggles per-instance frustum culling.</td></tr>
-        <tr><td><code>instance_culling()</code></td><td>i32</td><td>Current culling state.</td></tr>
+        <tr><td><code>set_render_scale(scale)</code></td><td>—</td><td>Renders the scene to an internal scaled target, then blits to the window. Clamped to 0.25..2.0; 1.0 is native size.</td></tr>
+        <tr><td><code>render_scale()</code></td><td>f32</td><td>Current render scale.</td></tr>
+        <tr><td><code>set_gpu_preference(pref)</code></td><td>—</td><td>Selects the Vulkan physical device before <code>Engine.start()</code>. Use <code>GpuPreference.auto()</code> or <code>GpuPreference.index(n)</code>, where <code>n</code> is the 0-based Vulkan device index.</td></tr>
+        <tr><td><code>gpu_preference()</code></td><td>i32</td><td>Current GPU preference token.</td></tr>
+        <tr><td><code>set_frustum_culling(enabled)</code></td><td>—</td><td>Toggles camera-frustum culling for renderable scene instances.</td></tr>
+        <tr><td><code>frustum_culling()</code></td><td>i32</td><td>Current frustum-culling state.</td></tr>
       </table>
 
       <h4>Engine.debug</h4>

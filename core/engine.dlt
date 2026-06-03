@@ -9,6 +9,9 @@ struct DisplayWindow:
 struct Properties:
     _placeholder: i32 = 0
 
+struct GpuPreference:
+    _placeholder: i32 = 0
+
 struct Debug:
     _placeholder: i32 = 0
 
@@ -30,8 +33,10 @@ static g_engine_has_scene: i32 = 0
 static g_engine_runtime: EngineRuntime = EngineRuntime()
 static g_engine_vsync_enabled: i32 = 1
 static g_engine_target_fps: i32 = 0
+static g_engine_render_scale: f32 = 1.0
+static g_engine_gpu_preference: i32 = 0
 static g_engine_render_stats_enabled: i32 = 0
-static g_engine_instance_culling_enabled: i32 = 0
+static g_engine_frustum_culling_enabled: i32 = 0
 static g_engine_current_camera_ptr: i64 = 0
 
 attach DisplayWindow:
@@ -45,8 +50,10 @@ attach DisplayWindow:
         g_engine_runtime = EngineRuntime()
         g_engine_vsync_enabled = 1
         g_engine_target_fps = 0
+        g_engine_render_scale = 1.0
+        g_engine_gpu_preference = 0
         g_engine_render_stats_enabled = 0
-        g_engine_instance_culling_enabled = 0
+        g_engine_frustum_culling_enabled = 0
         g_engine_current_camera_ptr = 0
 
     static fun width() -> i32:
@@ -75,16 +82,47 @@ attach Properties:
     static fun target_fps() -> i32:
         return g_engine_target_fps
 
-    static fun set_instance_culling(enabled: i32):
-        if enabled == 0:
-            g_engine_instance_culling_enabled = 0
-        else:
-            g_engine_instance_culling_enabled = 1
-        if g_engine_runtime.ready() == 1:
-            g_engine_runtime.set_instance_culling(g_engine_instance_culling_enabled)
+    static fun set_render_scale(scale: f32):
+        if scale < 0.25:
+            g_engine_render_scale = 0.25
+            return
+        if scale > 2.0:
+            g_engine_render_scale = 2.0
+            return
+        g_engine_render_scale = scale
 
-    static fun instance_culling() -> i32:
-        return g_engine_instance_culling_enabled
+    static fun render_scale() -> f32:
+        return g_engine_render_scale
+
+    static fun set_gpu_preference(preference: i32):
+        if preference < 0:
+            g_engine_gpu_preference = 0
+            return
+        g_engine_gpu_preference = preference
+
+    static fun gpu_preference() -> i32:
+        return g_engine_gpu_preference
+
+    static fun set_frustum_culling(enabled: i32):
+        if enabled == 0:
+            g_engine_frustum_culling_enabled = 0
+        else:
+            g_engine_frustum_culling_enabled = 1
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_instance_culling(g_engine_frustum_culling_enabled)
+
+    static fun frustum_culling() -> i32:
+        return g_engine_frustum_culling_enabled
+
+attach GpuPreference:
+
+    static fun auto() -> i32:
+        return 0
+
+    static fun index(index: i32) -> i32:
+        if index < 0:
+            return 0
+        return 1000 + index
 
 attach Debug:
 
@@ -130,10 +168,10 @@ attach Engine:
     static fun start() -> i32:
         if g_engine_runtime.ready() == 1:
             return 1
-        g_engine_runtime = EngineRuntime.create(g_engine_title, g_engine_width, g_engine_height, g_engine_vsync_enabled)
+        g_engine_runtime = EngineRuntime.create_with_gpu_preference(g_engine_title, g_engine_width, g_engine_height, g_engine_vsync_enabled, g_engine_gpu_preference)
         if g_engine_runtime.ready() == 1:
             g_engine_runtime.set_render_stats(g_engine_render_stats_enabled)
-            g_engine_runtime.set_instance_culling(g_engine_instance_culling_enabled)
+            g_engine_runtime.set_instance_culling(g_engine_frustum_culling_enabled)
         return g_engine_runtime.ready()
 
     static fun running() -> i32:
@@ -201,7 +239,7 @@ attach Engine:
         camera: Camera3D = g_engine_scene.camera()
         if (camera as i64) == 0:
             return
-        g_engine_runtime.render_camera(camera)
+        g_engine_runtime.render_camera_scaled(camera, g_engine_render_scale)
 
     static fun destroy_scene():
         if g_engine_has_scene == 1:

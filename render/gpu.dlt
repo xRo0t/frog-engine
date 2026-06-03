@@ -240,6 +240,9 @@ attach Renderer:
     fun render_camera3d_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32):
         self.core.render_camera3d_frame(render_pass, swapchain, ctx, camera, width, height)
 
+    fun render_camera3d_frame_scaled(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32, render_width: i32, render_height: i32):
+        self.core.render_camera3d_frame_scaled(render_pass, swapchain, ctx, camera, width, height, render_width, render_height)
+
     fun cleanup(self):
         if self.model_cache_paths != 0:
             ci: i32 = 0
@@ -305,6 +308,15 @@ attach GpuRendererCore:
         view: i64 = gpu_camera_view(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y)
         proj: i64 = gpu_camera_proj(camera.fov, (width as f32) / (height as f32))
         self.render_frame(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height)
+        if view != 0:
+            Memory.free(view)
+        if proj != 0:
+            Memory.free(proj)
+
+    fun render_camera3d_frame_scaled(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32, render_width: i32, render_height: i32):
+        view: i64 = gpu_camera_view(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y)
+        proj: i64 = gpu_camera_proj(camera.fov, (render_width as f32) / (render_height as f32))
+        self.render_frame_scaled(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height, render_width, render_height)
         if view != 0:
             Memory.free(view)
         if proj != 0:

@@ -102,6 +102,16 @@ These were fixed before enabling the facade:
 
 ## Remaining Design Work
 
+0. `Engine.properties.set_render_scale(scale)` now uses the professional path:
+   render into an offscreen color/depth target sized from the scale, then blit
+   into the swapchain image for presentation. The direct swapchain render path
+   remains active when scale resolves to native size.
+
+0. `Engine.properties.set_gpu_preference(pref)` selects the Vulkan physical
+   device before runtime startup. The public API only exposes
+   `GpuPreference.auto()` and `GpuPreference.index(n)` so selection stays
+   vendor-neutral and based on the 0-based Vulkan device index.
+
 1. A stable owning-handle pattern is still needed for engine objects that wrap native
    resources. Either:
    - heap-own the state and pass a pointer-like wrapper, or

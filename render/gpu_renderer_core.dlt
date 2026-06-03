@@ -98,6 +98,18 @@ struct GpuRendererCore:
     mesh_tex_ids:   i64 = 0    # mesh_id -> texture_id (-1 = white fallback)
     white_desc_set: i64 = 0    # descriptor set for the 1x1 white fallback
     white_tex_id:   i32 = -1
+    # Offscreen render-scale target. When render_scale != 1, the scene is
+    # rendered here, then blitted to the swapchain image for presentation.
+    scale_color_image:  i64 = 0
+    scale_color_memory: i64 = 0
+    scale_color_view:   i64 = 0
+    scale_depth_image:  i64 = 0
+    scale_depth_memory: i64 = 0
+    scale_depth_view:   i64 = 0
+    scale_framebuffer:  i64 = 0
+    scale_width:        i32 = 0
+    scale_height:       i32 = 0
+    scale_format:       i32 = 0
 
 attach GpuRendererCore:
 
@@ -545,7 +557,169 @@ attach GpuRendererCore:
             return self.white_desc_set
         return Memory.read_ptr(self.tex_desc_sets + tid * 8)
 
+    fun destroy_render_scale_target(self):
+        if self.scale_framebuffer != 0:
+            vkDestroyFramebuffer(self.device, self.scale_framebuffer, 0)
+            self.scale_framebuffer = 0
+        if self.scale_color_view != 0:
+            vkDestroyImageView(self.device, self.scale_color_view, 0)
+            self.scale_color_view = 0
+        if self.scale_color_image != 0:
+            vkDestroyImage(self.device, self.scale_color_image, 0)
+            self.scale_color_image = 0
+        if self.scale_color_memory != 0:
+            vkFreeMemory(self.device, self.scale_color_memory, 0)
+            self.scale_color_memory = 0
+        if self.scale_depth_view != 0:
+            vkDestroyImageView(self.device, self.scale_depth_view, 0)
+            self.scale_depth_view = 0
+        if self.scale_depth_image != 0:
+            vkDestroyImage(self.device, self.scale_depth_image, 0)
+            self.scale_depth_image = 0
+        if self.scale_depth_memory != 0:
+            vkFreeMemory(self.device, self.scale_depth_memory, 0)
+            self.scale_depth_memory = 0
+        self.scale_width = 0
+        self.scale_height = 0
+        self.scale_format = 0
+
+    fun ensure_render_scale_target(self, rp: RenderPass, color_format: i32, width: i32, height: i32) -> i32:
+        if width <= 0:
+            return 0
+        if height <= 0:
+            return 0
+        if self.scale_framebuffer != 0:
+            if self.scale_width == width:
+                if self.scale_height == height:
+                    if self.scale_format == color_format:
+                        return 1
+
+        if self.scale_framebuffer != 0:
+            vkDeviceWaitIdle(self.device)
+            self.destroy_render_scale_target()
+
+        color_out: i64 = Memory.malloc_zeroed(8)
+        color_mem_out: i64 = Memory.malloc_zeroed(8)
+        if color_out == 0:
+            return 0
+        if color_mem_out == 0:
+            Memory.free(color_out)
+            return 0
+        # TRANSFER_SRC(1) | COLOR_ATTACHMENT(16)
+        if gpu_make_image_usage(self.device, self.phys_device, width, height, color_format, 17, color_out, color_mem_out) == 0:
+            Memory.free(color_out)
+            Memory.free(color_mem_out)
+            return 0
+        self.scale_color_image = Memory.read_ptr(color_out)
+        self.scale_color_memory = Memory.read_ptr(color_mem_out)
+        Memory.free(color_out)
+        Memory.free(color_mem_out)
+
+        self.scale_color_view = gpu_make_image_view_aspect(self.device, self.scale_color_image, color_format, 1)
+        if self.scale_color_view == 0:
+            self.destroy_render_scale_target()
+            return 0
+
+        depth_out: i64 = Memory.malloc_zeroed(8)
+        depth_mem_out: i64 = Memory.malloc_zeroed(8)
+        if depth_out == 0:
+            self.destroy_render_scale_target()
+            return 0
+        if depth_mem_out == 0:
+            Memory.free(depth_out)
+            self.destroy_render_scale_target()
+            return 0
+        # DEPTH_STENCIL_ATTACHMENT(32), VK_FORMAT_D32_SFLOAT(126)
+        if gpu_make_image_usage(self.device, self.phys_device, width, height, 126, 32, depth_out, depth_mem_out) == 0:
+            Memory.free(depth_out)
+            Memory.free(depth_mem_out)
+            self.destroy_render_scale_target()
+            return 0
+        self.scale_depth_image = Memory.read_ptr(depth_out)
+        self.scale_depth_memory = Memory.read_ptr(depth_mem_out)
+        Memory.free(depth_out)
+        Memory.free(depth_mem_out)
+
+        self.scale_depth_view = gpu_make_image_view_aspect(self.device, self.scale_depth_image, 126, 2)
+        if self.scale_depth_view == 0:
+            self.destroy_render_scale_target()
+            return 0
+
+        att_arr: i64 = Memory.malloc_zeroed(16)
+        if att_arr == 0:
+            self.destroy_render_scale_target()
+            return 0
+        Memory.write_ptr(att_arr, self.scale_color_view)
+        Memory.write_ptr(att_arr + 8, self.scale_depth_view)
+
+        fb_ci: i64 = Memory.malloc_zeroed(64)
+        if fb_ci == 0:
+            Memory.free(att_arr)
+            self.destroy_render_scale_target()
+            return 0
+        Memory.set(fb_ci, 0, 64)
+        Memory.write_i32(fb_ci, 37)
+        Memory.write_ptr(fb_ci + 24, rp.vk_render_pass)
+        Memory.write_i32(fb_ci + 32, 2)
+        Memory.write_ptr(fb_ci + 40, att_arr)
+        Memory.write_i32(fb_ci + 48, width)
+        Memory.write_i32(fb_ci + 52, height)
+        Memory.write_i32(fb_ci + 56, 1)
+        fb_ptr: i64 = Memory.malloc_zeroed(8)
+        if fb_ptr == 0:
+            Memory.free(att_arr)
+            Memory.free(fb_ci)
+            self.destroy_render_scale_target()
+            return 0
+        fb_r: i32 = vkCreateFramebuffer(self.device, fb_ci, 0, fb_ptr)
+        self.scale_framebuffer = Memory.read_ptr(fb_ptr)
+        Memory.free(fb_ptr)
+        Memory.free(att_arr)
+        Memory.free(fb_ci)
+        if fb_r != 0:
+            self.destroy_render_scale_target()
+            return 0
+
+        self.scale_width = width
+        self.scale_height = height
+        self.scale_format = color_format
+        return 1
+
+    fun _record_render_scale_blit(self, cmd: i64, src_image: i64, dst_image: i64, dst_old_layout: i32, src_width: i32, src_height: i32, dst_width: i32, dst_height: i32):
+        if src_image == 0:
+            return
+        if dst_image == 0:
+            return
+
+        # Color attachment -> transfer source.
+        gpu_tex_barrier(cmd, src_image, 2, 6, 256, 2048, 1024, 4096)
+        # Swapchain image -> transfer destination.
+        gpu_tex_barrier(cmd, dst_image, dst_old_layout, 7, 0, 4096, 1, 4096)
+
+        # VkImageBlit = srcSubresource + srcOffsets[2] + dstSubresource + dstOffsets[2].
+        blit: i64 = Memory.malloc_zeroed(80)
+        if blit != 0:
+            Memory.write_i32(blit, 1)          # src aspect color
+            Memory.write_i32(blit + 12, 1)     # src layerCount
+            Memory.write_i32(blit + 28, src_width)
+            Memory.write_i32(blit + 32, src_height)
+            Memory.write_i32(blit + 36, 1)
+            Memory.write_i32(blit + 40, 1)     # dst aspect color
+            Memory.write_i32(blit + 52, 1)     # dst layerCount
+            Memory.write_i32(blit + 68, dst_width)
+            Memory.write_i32(blit + 72, dst_height)
+            Memory.write_i32(blit + 76, 1)
+            vkCmdBlitImage(cmd, src_image, 6, dst_image, 7, 1, blit, 1)
+            Memory.free(blit)
+
+        # Return images to reusable/presentable layouts.
+        gpu_tex_barrier(cmd, src_image, 6, 2, 2048, 256, 4096, 1024)
+        gpu_tex_barrier(cmd, dst_image, 7, 1000001002, 4096, 0, 4096, 8192)
+
     fun render_frame(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32) -> void:
+        self.render_frame_scaled(rp, sc, device, gfx_queue, present_queue, cam_view, cam_proj, width, height, width, height)
+
+    fun render_frame_scaled(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32, render_width: i32, render_height: i32) -> void:
         if rp.frame_initialized == 0:
             return
         if rp.vk_command_buffers == 0:
@@ -571,8 +745,30 @@ attach GpuRendererCore:
         cmd_buf: i64 = Memory.read_ptr(rp.vk_command_buffers + self.current_frame * 8)
         vkResetCommandBuffer(cmd_buf, 0)
         fb: i64 = Memory.read_ptr(rp.framebuffers + img_idx * 8)
+        rw: i32 = render_width
+        rh: i32 = render_height
+        use_scaled: i32 = 0
+        if rw != width:
+            use_scaled = 1
+        if rh != height:
+            use_scaled = 1
+        if use_scaled == 1:
+            if self.ensure_render_scale_target(rp, sc.format, rw, rh) == 1:
+                fb = self.scale_framebuffer
+            else:
+                use_scaled = 0
+                rw = width
+                rh = height
         self.ensure_white_texture(rp, rp.vk_command_pool)
-        self._record_commands(cmd_buf, fb, rp, cam_view, cam_proj, width, height)
+        swap_img: i64 = 0
+        swap_old_layout: i32 = 0
+        if use_scaled == 1:
+            if sc.images != 0:
+                swap_img = Memory.read_ptr(sc.images + img_idx * 8)
+            swap_old_layout = sc.image_layout(img_idx)
+        self._record_commands(cmd_buf, fb, rp, cam_view, cam_proj, rw, rh, use_scaled, self.scale_color_image, swap_img, swap_old_layout, width, height)
+        if use_scaled == 1:
+            sc.set_image_layout(img_idx, 1000001002)
 
         # Submit
         render_sem: i64 = Memory.read_ptr(rp.render_finished_sems + self.current_frame * 8)
@@ -616,7 +812,7 @@ attach GpuRendererCore:
         self.current_frame = (self.current_frame + 1) % rp.max_frames
         self._debug_record_frame()
 
-    fun _record_commands(self, cmd: i64, framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32) -> void:
+    fun _record_commands(self, cmd: i64, framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32, use_scaled: i32, scale_color_image: i64, swap_image: i64, swap_old_layout: i32, swap_width: i32, swap_height: i32) -> void:
         # Begin command buffer
         begin_info: i64 = Memory.malloc_zeroed(64)
         if begin_info == 0:
@@ -843,6 +1039,8 @@ attach GpuRendererCore:
                     Memory.free(vp_mat)
 
         vkCmdEndRenderPass(cmd)
+        if use_scaled == 1:
+            self._record_render_scale_blit(cmd, scale_color_image, swap_image, swap_old_layout, width, height, swap_width, swap_height)
         vkEndCommandBuffer(cmd)
 
         if clear_vals != 0:
@@ -850,6 +1048,7 @@ attach GpuRendererCore:
         Memory.free(rpi)
 
     fun cleanup(self) -> void:
+        self.destroy_render_scale_target()
         # Only destroy VkBuffers/Memory that are owned (memory != 0)
         # Shared instances have memory = 0
         if self.vb_handles != 0:
