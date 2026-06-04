@@ -110,6 +110,12 @@ struct GpuRendererCore:
     scale_width:        i32 = 0
     scale_height:       i32 = 0
     scale_format:       i32 = 0
+    retire_buffers:     i64 = 0
+    retire_memories:    i64 = 0
+    retire_frames:      i64 = 0
+    retire_count:       i32 = 0
+    retire_capacity:    i32 = 0
+    frame_serial:       i32 = 0
 
 attach GpuRendererCore:
 
@@ -157,6 +163,9 @@ attach GpuRendererCore:
         Memory.write_i64(self.scratch_off_arr, 0)
         Memory.write_i64(self.scratch_inst_off_arr, 0)
         self.instance_culling_enabled = 0
+        self.retire_capacity = 0
+        self.retire_count = 0
+        self.frame_serial = 0
         self.initialized = 1
 
     fun set_instance_culling(self, enabled: i32):
@@ -400,6 +409,83 @@ attach GpuRendererCore:
         self.instance_capacity = new_cap
         return 1
 
+    fun _init_retire_queue(self):
+        if self.retire_capacity > 0:
+            return
+        self.retire_capacity = 1024
+        self.retire_count = 0
+        self.retire_buffers = Memory.malloc_zeroed(self.retire_capacity * 8)
+        self.retire_memories = Memory.malloc_zeroed(self.retire_capacity * 8)
+        self.retire_frames = Memory.malloc_zeroed(self.retire_capacity * 4)
+
+    fun _grow_retire_queue(self):
+        if self.retire_capacity <= 0:
+            self._init_retire_queue()
+            return
+        new_cap: i32 = self.retire_capacity * 2
+        new_buffers: i64 = Memory.malloc_zeroed(new_cap * 8)
+        new_memories: i64 = Memory.malloc_zeroed(new_cap * 8)
+        new_frames: i64 = Memory.malloc_zeroed(new_cap * 4)
+        if new_buffers == 0:
+            return
+        if new_memories == 0:
+            Memory.free(new_buffers)
+            return
+        if new_frames == 0:
+            Memory.free(new_buffers)
+            Memory.free(new_memories)
+            return
+        Memory.copy(new_buffers, self.retire_buffers, self.retire_capacity * 8)
+        Memory.copy(new_memories, self.retire_memories, self.retire_capacity * 8)
+        Memory.copy(new_frames, self.retire_frames, self.retire_capacity * 4)
+        Memory.free(self.retire_buffers)
+        Memory.free(self.retire_memories)
+        Memory.free(self.retire_frames)
+        self.retire_buffers = new_buffers
+        self.retire_memories = new_memories
+        self.retire_frames = new_frames
+        self.retire_capacity = new_cap
+
+    fun _retire_buffer_pair(self, buffer: i64, memory: i64):
+        if buffer == 0:
+            return
+        if memory == 0:
+            return
+        self._init_retire_queue()
+        if self.retire_count >= self.retire_capacity:
+            self._grow_retire_queue()
+        if self.retire_count >= self.retire_capacity:
+            return
+        idx: i32 = self.retire_count
+        Memory.write_ptr(self.retire_buffers + idx * 8, buffer)
+        Memory.write_ptr(self.retire_memories + idx * 8, memory)
+        Memory.write_i32(self.retire_frames + idx * 4, self.frame_serial)
+        self.retire_count = idx + 1
+
+    fun _release_retired_buffers(self):
+        if self.retire_buffers == 0:
+            return
+        write_idx: i32 = 0
+        i: i32 = 0
+        while i < self.retire_count:
+            queued_frame: i32 = Memory.read_i32(self.retire_frames + i * 4)
+            age: i32 = self.frame_serial - queued_frame
+            buffer: i64 = Memory.read_ptr(self.retire_buffers + i * 8)
+            memory: i64 = Memory.read_ptr(self.retire_memories + i * 8)
+            if age > 8:
+                if buffer != 0:
+                    vkDestroyBuffer(self.device, buffer, 0)
+                if memory != 0:
+                    vkFreeMemory(self.device, memory, 0)
+            else:
+                if write_idx != i:
+                    Memory.write_ptr(self.retire_buffers + write_idx * 8, buffer)
+                    Memory.write_ptr(self.retire_memories + write_idx * 8, memory)
+                    Memory.write_i32(self.retire_frames + write_idx * 4, queued_frame)
+                write_idx = write_idx + 1
+            i = i + 1
+        self.retire_count = write_idx
+
     fun upload_mesh(self, vertices: i64, vertex_count: i32) -> i32:
         if self.initialized == 0:
             return 0 - 1
@@ -451,6 +537,69 @@ attach GpuRendererCore:
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
         self.vb_count = idx + 1
         return idx
+
+    fun replace_mesh_data(self, mesh_id: i32, mesh: GpuMeshData) -> i32:
+        if self.initialized == 0:
+            return 0 - 1
+        if mesh_id < 0:
+            return 0 - 1
+        if mesh_id >= self.vb_count:
+            return 0 - 1
+        if mesh.vertices == 0:
+            return 0 - 1
+        if mesh.vertex_count <= 0:
+            return 0 - 1
+
+        old_shared_vb: i64 = Memory.read_ptr(self.vb_handles + mesh_id * 8)
+        old_shared_ib: i64 = Memory.read_ptr(self.ib_handles + mesh_id * 8)
+        si: i32 = 0
+        while si < self.vb_count:
+            if si != mesh_id:
+                sm: i64 = Memory.read_ptr(self.vb_memories + si * 8)
+                if sm == 0:
+                    svb: i64 = Memory.read_ptr(self.vb_handles + si * 8)
+                    sib: i64 = Memory.read_ptr(self.ib_handles + si * 8)
+                    if svb == old_shared_vb:
+                        return 0 - 1
+                    if old_shared_ib != 0:
+                        if sib == old_shared_ib:
+                            return 0 - 1
+            si = si + 1
+
+        vb_size: i64 = (mesh.vertex_count as i64) * 32
+        uploaded_vb: GpuBufferUpload = self._upload_buffer(mesh.vertices, vb_size, 128)
+        if uploaded_vb.ok == 0:
+            return 0 - 1
+
+        uploaded_ib: GpuBufferUpload = GpuBufferUpload()
+        if mesh.indices != 0:
+            if mesh.index_count > 0:
+                ib_size: i64 = (mesh.index_count as i64) * 4
+                uploaded_ib = self._upload_buffer(mesh.indices, ib_size, 64)
+                if uploaded_ib.ok == 0:
+                    vkDestroyBuffer(self.device, uploaded_vb.handle, 0)
+                    vkFreeMemory(self.device, uploaded_vb.memory, 0)
+                    return 0 - 1
+
+        old_vb: i64 = Memory.read_ptr(self.vb_handles + mesh_id * 8)
+        old_vm: i64 = Memory.read_ptr(self.vb_memories + mesh_id * 8)
+        if old_vm != 0:
+            self._retire_buffer_pair(old_vb, old_vm)
+
+        old_ib: i64 = Memory.read_ptr(self.ib_handles + mesh_id * 8)
+        old_im: i64 = Memory.read_ptr(self.ib_memories + mesh_id * 8)
+        if old_im != 0:
+            self._retire_buffer_pair(old_ib, old_im)
+
+        Memory.write_ptr(self.vb_handles + mesh_id * 8, uploaded_vb.handle)
+        Memory.write_ptr(self.vb_memories + mesh_id * 8, uploaded_vb.memory)
+        Memory.write_i32(self.vb_vert_counts + mesh_id * 4, mesh.vertex_count)
+        Memory.write_ptr(self.ib_handles + mesh_id * 8, uploaded_ib.handle)
+        Memory.write_ptr(self.ib_memories + mesh_id * 8, uploaded_ib.memory)
+        Memory.write_i32(self.ib_index_counts + mesh_id * 4, mesh.index_count)
+        if self.vb_visible != 0:
+            Memory.write_i32(self.vb_visible + mesh_id * 4, 1)
+        return mesh_id
 
     # Register an instance that shares VkBuffer with source but gets own model matrix
     fun register_instance(self, src_vb_idx: i32) -> i32:
@@ -810,6 +959,8 @@ attach GpuRendererCore:
         vkQueuePresentKHR(present_queue, pi)
 
         self.current_frame = (self.current_frame + 1) % rp.max_frames
+        self.frame_serial = self.frame_serial + 1
+        self._release_retired_buffers()
         self._debug_record_frame()
 
     fun _record_commands(self, cmd: i64, framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32, use_scaled: i32, scale_color_image: i64, swap_image: i64, swap_old_layout: i32, swap_width: i32, swap_height: i32) -> void:
@@ -1049,6 +1200,26 @@ attach GpuRendererCore:
 
     fun cleanup(self) -> void:
         self.destroy_render_scale_target()
+        if self.retire_buffers != 0:
+            ri: i32 = 0
+            while ri < self.retire_count:
+                rb: i64 = Memory.read_ptr(self.retire_buffers + ri * 8)
+                rm: i64 = Memory.read_ptr(self.retire_memories + ri * 8)
+                if rb != 0:
+                    vkDestroyBuffer(self.device, rb, 0)
+                if rm != 0:
+                    vkFreeMemory(self.device, rm, 0)
+                ri = ri + 1
+            Memory.free(self.retire_buffers)
+            self.retire_buffers = 0
+        if self.retire_memories != 0:
+            Memory.free(self.retire_memories)
+            self.retire_memories = 0
+        if self.retire_frames != 0:
+            Memory.free(self.retire_frames)
+            self.retire_frames = 0
+        self.retire_count = 0
+        self.retire_capacity = 0
         # Only destroy VkBuffers/Memory that are owned (memory != 0)
         # Shared instances have memory = 0
         if self.vb_handles != 0:

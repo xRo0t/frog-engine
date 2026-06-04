@@ -287,8 +287,16 @@ attach VoxelChunk:
     fun upload(self) -> i32:
         mesh: GpuMeshData = self.build_mesh()
         if mesh.vertices == 0:
+            if self.mesh_id >= 0:
+                Engine.set_instance_visible(self.mesh_id, 0)
+                return self.mesh_id
             return -1
-        self.mesh_id = Engine.upload_mesh_data(mesh)
+        if self.mesh_id >= 0:
+            next_mesh_id: i32 = Engine.replace_mesh_data(self.mesh_id, mesh)
+            if next_mesh_id >= 0:
+                self.mesh_id = next_mesh_id
+        else:
+            self.mesh_id = Engine.upload_mesh_data(mesh)
         if mesh.vertices != 0:
             Memory.free(mesh.vertices)
         if mesh.indices != 0:

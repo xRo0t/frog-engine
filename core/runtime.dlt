@@ -105,6 +105,9 @@ attach EngineRuntime:
     fun upload_mesh_data(self, mesh: GpuMeshData) -> i32:
         return self.renderer.upload_mesh_data(mesh)
 
+    fun replace_mesh_data(self, mesh_id: i32, mesh: GpuMeshData) -> i32:
+        return self.renderer.replace_mesh_data(mesh_id, mesh)
+
     fun upload_model(self, path: str) -> i32:
         return self.renderer.upload_model(path)
 
