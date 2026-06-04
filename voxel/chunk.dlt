@@ -1,0 +1,298 @@
+##############################
+# Frog - Voxel Chunk
+# Builds visible block faces into one indexed mesh.
+##############################
+
+struct BlockId:
+    _placeholder: i32 = 0
+
+attach BlockId:
+
+    static fun air() -> i32:
+        return 0
+
+@heap struct VoxelChunk:
+    size_x: i32 = 0
+    size_y: i32 = 0
+    size_z: i32 = 0
+    blocks: i64 = 0
+    palette: i64 = 0
+    mesh_id: i32 = -1
+    pos_x: f32 = 0.0
+    pos_y: f32 = 0.0
+    pos_z: f32 = 0.0
+
+fun voxel_block_r(block_id: i32) -> f32:
+    if block_id <= 0:
+        return 0.0
+    tint: i32 = (block_id * 37) % 100
+    return 0.25 + (tint as f32) * 0.005
+
+fun voxel_block_g(block_id: i32) -> f32:
+    if block_id <= 0:
+        return 0.0
+    tint: i32 = (block_id * 53) % 100
+    return 0.30 + (tint as f32) * 0.004
+
+fun voxel_block_b(block_id: i32) -> f32:
+    if block_id <= 0:
+        return 0.0
+    tint: i32 = (block_id * 71) % 100
+    return 0.25 + (tint as f32) * 0.004
+
+fun voxel_write_face_indices(indices: i64, face_index: i32, base_vertex: i32):
+    ioff: i64 = (face_index as i64) * 24
+    Memory.write_i32(indices + ioff, base_vertex)
+    Memory.write_i32(indices + ioff + 4, base_vertex + 1)
+    Memory.write_i32(indices + ioff + 8, base_vertex + 2)
+    Memory.write_i32(indices + ioff + 12, base_vertex)
+    Memory.write_i32(indices + ioff + 16, base_vertex + 2)
+    Memory.write_i32(indices + ioff + 20, base_vertex + 3)
+
+fun voxel_write_face(chunk: VoxelChunk, vertices: i64, indices: i64, face_index: i32, x: i32, y: i32, z: i32, face: i32, block_id: i32) -> i32:
+    x0: f32 = x as f32
+    y0: f32 = y as f32
+    z0: f32 = z as f32
+    x1: f32 = x0 + 1.0
+    y1: f32 = y0 + 1.0
+    z1: f32 = z0 + 1.0
+    cr: f32 = chunk.block_r(block_id)
+    cg: f32 = chunk.block_g(block_id)
+    cb: f32 = chunk.block_b(block_id)
+    off: i64 = (face_index as i64) * 128
+    base_vertex: i32 = face_index * 4
+
+    if face == 0:
+        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, 0.0, 0.0)
+        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, 1.0, 0.0)
+        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, 1.0, 1.0)
+        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, 0.0, 1.0)
+    elif face == 1:
+        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, 0.0, 0.0)
+        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, 1.0, 0.0)
+        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, 1.0, 1.0)
+        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, 0.0, 1.0)
+    elif face == 2:
+        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, 0.0, 0.0)
+        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, 1.0, 0.0)
+        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, 1.0, 1.0)
+        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, 0.0, 1.0)
+    elif face == 3:
+        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, 0.0, 0.0)
+        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, 1.0, 0.0)
+        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, 1.0, 1.0)
+        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, 0.0, 1.0)
+    elif face == 4:
+        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, 0.0, 0.0)
+        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, 1.0, 0.0)
+        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, 1.0, 1.0)
+        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, 0.0, 1.0)
+    else:
+        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, 0.0, 0.0)
+        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, 1.0, 0.0)
+        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, 1.0, 1.0)
+        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, 0.0, 1.0)
+
+    voxel_write_face_indices(indices, face_index, base_vertex)
+    return face_index + 1
+
+attach VoxelChunk:
+
+    static fun create(size_x: i32, size_y: i32, size_z: i32) -> VoxelChunk:
+        total: i32 = size_x * size_y * size_z
+        data: i64 = Memory.malloc_zeroed((total as i64) * 4)
+        palette_data: i64 = Memory.malloc_zeroed(3072)
+        pi: i32 = 0
+        while pi < 256:
+            po: i64 = (pi as i64) * 12
+            Memory.write_f32(palette_data + po, voxel_block_r(pi))
+            Memory.write_f32(palette_data + po + 4, voxel_block_g(pi))
+            Memory.write_f32(palette_data + po + 8, voxel_block_b(pi))
+            pi = pi + 1
+        return VoxelChunk(size_x=size_x, size_y=size_y, size_z=size_z, blocks=data, palette=palette_data, mesh_id=-1, pos_x=0.0, pos_y=0.0, pos_z=0.0)
+
+    fun destroy(self):
+        if self.blocks != 0:
+            Memory.free(self.blocks)
+            self.blocks = 0
+        if self.palette != 0:
+            Memory.free(self.palette)
+            self.palette = 0
+        Memory.free(self as i64)
+
+    fun index(self, x: i32, y: i32, z: i32) -> i32:
+        return z * self.size_x * self.size_y + y * self.size_x + x
+
+    fun in_bounds(self, x: i32, y: i32, z: i32) -> i32:
+        if x < 0:
+            return 0
+        if y < 0:
+            return 0
+        if z < 0:
+            return 0
+        if x >= self.size_x:
+            return 0
+        if y >= self.size_y:
+            return 0
+        if z >= self.size_z:
+            return 0
+        return 1
+
+    fun get(self, x: i32, y: i32, z: i32) -> i32:
+        if self.blocks == 0:
+            return BlockId.air()
+        if self.in_bounds(x, y, z) == 0:
+            return BlockId.air()
+        idx: i64 = self.index(x, y, z) as i64
+        return Memory.read_i32(self.blocks + idx * 4)
+
+    fun set(self, x: i32, y: i32, z: i32, block_id: i32):
+        if self.blocks == 0:
+            return
+        if self.in_bounds(x, y, z) == 0:
+            return
+        idx: i64 = self.index(x, y, z) as i64
+        Memory.write_i32(self.blocks + idx * 4, block_id)
+
+    fun fill(self, block_id: i32):
+        if self.blocks == 0:
+            return
+        total: i32 = self.size_x * self.size_y * self.size_z
+        i: i32 = 0
+        while i < total:
+            Memory.write_i32(self.blocks + ((i as i64) * 4), block_id)
+            i = i + 1
+
+    fun set_block_color(self, block_id: i32, r: f32, g: f32, b: f32):
+        if self.palette == 0:
+            return
+        if block_id < 0:
+            return
+        if block_id >= 256:
+            return
+        po: i64 = (block_id as i64) * 12
+        Memory.write_f32(self.palette + po, r)
+        Memory.write_f32(self.palette + po + 4, g)
+        Memory.write_f32(self.palette + po + 8, b)
+
+    fun block_r(self, block_id: i32) -> f32:
+        if self.palette == 0:
+            return voxel_block_r(block_id)
+        if block_id < 0:
+            return 0.0
+        if block_id >= 256:
+            return voxel_block_r(block_id)
+        return Memory.read_f32(self.palette + (block_id as i64) * 12)
+
+    fun block_g(self, block_id: i32) -> f32:
+        if self.palette == 0:
+            return voxel_block_g(block_id)
+        if block_id < 0:
+            return 0.0
+        if block_id >= 256:
+            return voxel_block_g(block_id)
+        return Memory.read_f32(self.palette + (block_id as i64) * 12 + 4)
+
+    fun block_b(self, block_id: i32) -> f32:
+        if self.palette == 0:
+            return voxel_block_b(block_id)
+        if block_id < 0:
+            return 0.0
+        if block_id >= 256:
+            return voxel_block_b(block_id)
+        return Memory.read_f32(self.palette + (block_id as i64) * 12 + 8)
+
+    fun set_position(self, x: f32, y: f32, z: f32):
+        self.pos_x = x
+        self.pos_y = y
+        self.pos_z = z
+        if self.mesh_id >= 0:
+            Engine.set_transform(self.mesh_id, self.pos_x, self.pos_y, self.pos_z, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+
+    fun face_visible(self, x: i32, y: i32, z: i32) -> i32:
+        if self.in_bounds(x, y, z) == 0:
+            return 1
+        if self.get(x, y, z) == BlockId.air():
+            return 1
+        return 0
+
+    fun visible_face_count(self) -> i32:
+        count: i32 = 0
+        x: i32 = 0
+        y: i32 = 0
+        z: i32 = 0
+        block_id: i32 = 0
+        while z < self.size_z:
+            y = 0
+            while y < self.size_y:
+                x = 0
+                while x < self.size_x:
+                    block_id = self.get(x, y, z)
+                    if block_id != BlockId.air():
+                        count = count + self.face_visible(x - 1, y, z)
+                        count = count + self.face_visible(x + 1, y, z)
+                        count = count + self.face_visible(x, y - 1, z)
+                        count = count + self.face_visible(x, y + 1, z)
+                        count = count + self.face_visible(x, y, z - 1)
+                        count = count + self.face_visible(x, y, z + 1)
+                    x = x + 1
+                y = y + 1
+            z = z + 1
+        return count
+
+    fun build_mesh(self) -> GpuMeshData:
+        faces: i32 = self.visible_face_count()
+        if faces <= 0:
+            return GpuMeshData()
+        vertex_count: i32 = faces * 4
+        index_count: i32 = faces * 6
+        vertices: i64 = Memory.malloc_zeroed((vertex_count as i64) * 32)
+        if vertices == 0:
+            return GpuMeshData()
+        indices: i64 = Memory.malloc_zeroed((index_count as i64) * 4)
+        if indices == 0:
+            Memory.free(vertices)
+            return GpuMeshData()
+
+        face_index: i32 = 0
+        x: i32 = 0
+        y: i32 = 0
+        z: i32 = 0
+        block_id: i32 = 0
+        while z < self.size_z:
+            y = 0
+            while y < self.size_y:
+                x = 0
+                while x < self.size_x:
+                    block_id = self.get(x, y, z)
+                    if block_id != BlockId.air():
+                        if self.face_visible(x - 1, y, z) == 1:
+                            face_index = voxel_write_face(self, vertices, indices, face_index, x, y, z, 0, block_id)
+                        if self.face_visible(x + 1, y, z) == 1:
+                            face_index = voxel_write_face(self, vertices, indices, face_index, x, y, z, 1, block_id)
+                        if self.face_visible(x, y - 1, z) == 1:
+                            face_index = voxel_write_face(self, vertices, indices, face_index, x, y, z, 2, block_id)
+                        if self.face_visible(x, y + 1, z) == 1:
+                            face_index = voxel_write_face(self, vertices, indices, face_index, x, y, z, 3, block_id)
+                        if self.face_visible(x, y, z - 1) == 1:
+                            face_index = voxel_write_face(self, vertices, indices, face_index, x, y, z, 4, block_id)
+                        if self.face_visible(x, y, z + 1) == 1:
+                            face_index = voxel_write_face(self, vertices, indices, face_index, x, y, z, 5, block_id)
+                    x = x + 1
+                y = y + 1
+            z = z + 1
+
+        return GpuMeshData(vertices=vertices, vertex_count=vertex_count, indices=indices, index_count=index_count)
+
+    fun upload(self) -> i32:
+        mesh: GpuMeshData = self.build_mesh()
+        if mesh.vertices == 0:
+            return -1
+        self.mesh_id = Engine.upload_mesh_data(mesh)
+        if mesh.vertices != 0:
+            Memory.free(mesh.vertices)
+        if mesh.indices != 0:
+            Memory.free(mesh.indices)
+        if self.mesh_id >= 0:
+            Engine.set_transform(self.mesh_id, self.pos_x, self.pos_y, self.pos_z, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+        return self.mesh_id

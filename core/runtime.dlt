@@ -102,6 +102,9 @@ attach EngineRuntime:
     fun upload_model_mesh(self, model: Model3D) -> i32:
         return self.renderer.upload_model_mesh(model)
 
+    fun upload_mesh_data(self, mesh: GpuMeshData) -> i32:
+        return self.renderer.upload_mesh_data(mesh)
+
     fun upload_model(self, path: str) -> i32:
         return self.renderer.upload_model(path)
 

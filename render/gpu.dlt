@@ -186,6 +186,9 @@ attach Renderer:
     fun upload_model_mesh(self, model: Model3D) -> i32:
         return self.core.upload_model_mesh(model)
 
+    fun upload_mesh_data(self, mesh: GpuMeshData) -> i32:
+        return self.core.upload_mesh_data(mesh)
+
     fun upload_model(self, path: str) -> i32:
         model: Model3D = Assets.models.load(path)
         if model.found == 0:
@@ -302,6 +305,19 @@ attach GpuRendererCore:
         Memory.free(mesh.vertices)
         if mesh.indices != 0:
             Memory.free(mesh.indices)
+        return mesh_id
+
+    fun upload_mesh_data(self, mesh: GpuMeshData) -> i32:
+        if mesh.vertices == 0:
+            return -1
+        if mesh.vertex_count <= 0:
+            return -1
+        mesh_id: i32 = -1
+        if mesh.indices != 0:
+            if mesh.index_count > 0:
+                mesh_id = self.upload_indexed_mesh(mesh.vertices, mesh.vertex_count, mesh.indices, mesh.index_count)
+        if mesh_id < 0:
+            mesh_id = self.upload_mesh(mesh.vertices, mesh.vertex_count)
         return mesh_id
 
     fun render_camera3d_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32):

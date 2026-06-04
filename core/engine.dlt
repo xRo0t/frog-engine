@@ -204,6 +204,9 @@ attach Engine:
     static fun upload_model_mesh(model: Model3D) -> i32:
         return g_engine_runtime.upload_model_mesh(model)
 
+    static fun upload_mesh_data(mesh: GpuMeshData) -> i32:
+        return g_engine_runtime.upload_mesh_data(mesh)
+
     static fun upload_model(path: str) -> i32:
         return g_engine_runtime.upload_model(path)
 
