@@ -9,28 +9,84 @@ struct GpuBufferUpload:
     memory: i64 = 0
     ok: i32 = 0
 
+struct GpuMeshBounds:
+    center_x: f32 = 0.0
+    center_y: f32 = 0.0
+    center_z: f32 = 0.0
+    radius: f32 = 1.0
+
 fun _frog_abs_f32(v: f32) -> f32:
     if v < 0.0:
         return 0.0 - v
     return v
 
-fun _frog_instance_visible(vp: i64, model: i64) -> i32:
+fun _frog_mesh_bounds(vertices: i64, vertex_count: i32) -> GpuMeshBounds:
+    if vertices == 0:
+        return GpuMeshBounds()
+    if vertex_count <= 0:
+        return GpuMeshBounds()
+
+    min_x: f32 = Memory.read_f32(vertices)
+    min_y: f32 = Memory.read_f32(vertices + 4)
+    min_z: f32 = Memory.read_f32(vertices + 8)
+    max_x: f32 = min_x
+    max_y: f32 = min_y
+    max_z: f32 = min_z
+    i: i32 = 1
+    while i < vertex_count:
+        off: i64 = (i as i64) * 32
+        x: f32 = Memory.read_f32(vertices + off)
+        y: f32 = Memory.read_f32(vertices + off + 4)
+        z: f32 = Memory.read_f32(vertices + off + 8)
+        if x < min_x:
+            min_x = x
+        if y < min_y:
+            min_y = y
+        if z < min_z:
+            min_z = z
+        if x > max_x:
+            max_x = x
+        if y > max_y:
+            max_y = y
+        if z > max_z:
+            max_z = z
+        i = i + 1
+
+    cx: f32 = (min_x + max_x) * 0.5
+    cy: f32 = (min_y + max_y) * 0.5
+    cz: f32 = (min_z + max_z) * 0.5
+    dx: f32 = max_x - min_x
+    dy: f32 = max_y - min_y
+    dz: f32 = max_z - min_z
+    radius: f32 = @sqrt(dx * dx + dy * dy + dz * dz) * 0.5 + 1.0
+    return GpuMeshBounds(center_x=cx, center_y=cy, center_z=cz, radius=radius)
+
+fun _frog_instance_visible(vp: i64, model: i64, bound_x: f32, bound_y: f32, bound_z: f32, bound_radius: f32) -> i32:
     if vp == 0:
         return 1
     if model == 0:
         return 0
 
-    x: f32 = Memory.read_f32(model + 48)
-    y: f32 = Memory.read_f32(model + 52)
-    z: f32 = Memory.read_f32(model + 56)
+    x: f32 = Memory.read_f32(model + 0) * bound_x + Memory.read_f32(model + 16) * bound_y + Memory.read_f32(model + 32) * bound_z + Memory.read_f32(model + 48)
+    y: f32 = Memory.read_f32(model + 4) * bound_x + Memory.read_f32(model + 20) * bound_y + Memory.read_f32(model + 36) * bound_z + Memory.read_f32(model + 52)
+    z: f32 = Memory.read_f32(model + 8) * bound_x + Memory.read_f32(model + 24) * bound_y + Memory.read_f32(model + 40) * bound_z + Memory.read_f32(model + 56)
 
     cx: f32 = Memory.read_f32(vp + 0) * x + Memory.read_f32(vp + 16) * y + Memory.read_f32(vp + 32) * z + Memory.read_f32(vp + 48)
     cy: f32 = Memory.read_f32(vp + 4) * x + Memory.read_f32(vp + 20) * y + Memory.read_f32(vp + 36) * z + Memory.read_f32(vp + 52)
     cz: f32 = Memory.read_f32(vp + 8) * x + Memory.read_f32(vp + 24) * y + Memory.read_f32(vp + 40) * z + Memory.read_f32(vp + 56)
     cw: f32 = Memory.read_f32(vp + 12) * x + Memory.read_f32(vp + 28) * y + Memory.read_f32(vp + 44) * z + Memory.read_f32(vp + 60)
 
-    scale_hint: f32 = _frog_abs_f32(Memory.read_f32(model + 0)) + _frog_abs_f32(Memory.read_f32(model + 20)) + _frog_abs_f32(Memory.read_f32(model + 40)) + 2.0
-    bounds: f32 = scale_hint * 2.5
+    sx: f32 = @sqrt(Memory.read_f32(model + 0) * Memory.read_f32(model + 0) + Memory.read_f32(model + 4) * Memory.read_f32(model + 4) + Memory.read_f32(model + 8) * Memory.read_f32(model + 8))
+    sy: f32 = @sqrt(Memory.read_f32(model + 16) * Memory.read_f32(model + 16) + Memory.read_f32(model + 20) * Memory.read_f32(model + 20) + Memory.read_f32(model + 24) * Memory.read_f32(model + 24))
+    sz: f32 = @sqrt(Memory.read_f32(model + 32) * Memory.read_f32(model + 32) + Memory.read_f32(model + 36) * Memory.read_f32(model + 36) + Memory.read_f32(model + 40) * Memory.read_f32(model + 40))
+    max_scale: f32 = sx
+    if sy > max_scale:
+        max_scale = sy
+    if sz > max_scale:
+        max_scale = sz
+    if max_scale < 0.001:
+        max_scale = 1.0
+    bounds: f32 = bound_radius * max_scale * 2.25 + 2.0
     limit: f32 = _frog_abs_f32(cw) * 1.08 + bounds
 
     if cw < 0.0 - bounds:
@@ -62,6 +118,10 @@ struct GpuRendererCore:
     ib_memories:       i64 = 0
     ib_index_counts:   i64 = 0
     model_matrices:    i64 = 0
+    mesh_bound_xs:     i64 = 0
+    mesh_bound_ys:     i64 = 0
+    mesh_bound_zs:     i64 = 0
+    mesh_bound_rs:     i64 = 0
     vb_visible:        i64 = 0    # i32[] per instance: 1 = drawn, 0 = hidden
     instance_buffer:   i64 = 0
     instance_memory:   i64 = 0
@@ -132,6 +192,10 @@ attach GpuRendererCore:
         self.ib_memories = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.ib_index_counts = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.model_matrices = Memory.malloc_zeroed(self.vb_capacity * 8)
+        self.mesh_bound_xs = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.mesh_bound_ys = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.mesh_bound_zs = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.mesh_bound_rs = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.vb_visible = Memory.malloc_zeroed(self.vb_capacity * 4)
         vvi: i32 = 0
         while vvi < self.vb_capacity:
@@ -208,6 +272,10 @@ attach GpuRendererCore:
         new_ib_memories: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_ib_counts: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_matrices: i64 = Memory.malloc_zeroed(new_cap * 8)
+        new_bound_xs: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_bound_ys: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_bound_zs: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_bound_rs: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_mesh_tex: i64 = Memory.malloc_zeroed(new_cap * 4)
         mti2: i32 = 0
         while mti2 < new_cap:
@@ -225,6 +293,10 @@ attach GpuRendererCore:
         Memory.copy(new_ib_memories, self.ib_memories, self.vb_capacity * 8)
         Memory.copy(new_ib_counts, self.ib_index_counts, self.vb_capacity * 4)
         Memory.copy(new_matrices, self.model_matrices, self.vb_capacity * 8)
+        Memory.copy(new_bound_xs, self.mesh_bound_xs, self.vb_capacity * 4)
+        Memory.copy(new_bound_ys, self.mesh_bound_ys, self.vb_capacity * 4)
+        Memory.copy(new_bound_zs, self.mesh_bound_zs, self.vb_capacity * 4)
+        Memory.copy(new_bound_rs, self.mesh_bound_rs, self.vb_capacity * 4)
         Memory.copy(new_visible, self.vb_visible, self.vb_capacity * 4)
         if self.mesh_tex_ids != 0:
             Memory.copy(new_mesh_tex, self.mesh_tex_ids, self.vb_capacity * 4)
@@ -235,6 +307,10 @@ attach GpuRendererCore:
         Memory.free(self.ib_memories)
         Memory.free(self.ib_index_counts)
         Memory.free(self.model_matrices)
+        Memory.free(self.mesh_bound_xs)
+        Memory.free(self.mesh_bound_ys)
+        Memory.free(self.mesh_bound_zs)
+        Memory.free(self.mesh_bound_rs)
         Memory.free(self.vb_visible)
         if self.mesh_tex_ids != 0:
             Memory.free(self.mesh_tex_ids)
@@ -245,6 +321,10 @@ attach GpuRendererCore:
         self.ib_memories = new_ib_memories
         self.ib_index_counts = new_ib_counts
         self.model_matrices = new_matrices
+        self.mesh_bound_xs = new_bound_xs
+        self.mesh_bound_ys = new_bound_ys
+        self.mesh_bound_zs = new_bound_zs
+        self.mesh_bound_rs = new_bound_rs
         self.vb_visible = new_visible
         self.mesh_tex_ids = new_mesh_tex
         self.vb_capacity = new_cap
@@ -486,6 +566,35 @@ attach GpuRendererCore:
             i = i + 1
         self.retire_count = write_idx
 
+    fun _write_mesh_bounds(self, mesh_id: i32, vertices: i64, vertex_count: i32):
+        if mesh_id < 0:
+            return
+        if mesh_id >= self.vb_capacity:
+            return
+        if self.mesh_bound_rs == 0:
+            return
+        bounds: GpuMeshBounds = _frog_mesh_bounds(vertices, vertex_count)
+        Memory.write_f32(self.mesh_bound_xs + mesh_id * 4, bounds.center_x)
+        Memory.write_f32(self.mesh_bound_ys + mesh_id * 4, bounds.center_y)
+        Memory.write_f32(self.mesh_bound_zs + mesh_id * 4, bounds.center_z)
+        Memory.write_f32(self.mesh_bound_rs + mesh_id * 4, bounds.radius)
+
+    fun _copy_mesh_bounds(self, dst: i32, src: i32):
+        if dst < 0:
+            return
+        if src < 0:
+            return
+        if dst >= self.vb_capacity:
+            return
+        if src >= self.vb_capacity:
+            return
+        if self.mesh_bound_rs == 0:
+            return
+        Memory.write_f32(self.mesh_bound_xs + dst * 4, Memory.read_f32(self.mesh_bound_xs + src * 4))
+        Memory.write_f32(self.mesh_bound_ys + dst * 4, Memory.read_f32(self.mesh_bound_ys + src * 4))
+        Memory.write_f32(self.mesh_bound_zs + dst * 4, Memory.read_f32(self.mesh_bound_zs + src * 4))
+        Memory.write_f32(self.mesh_bound_rs + dst * 4, Memory.read_f32(self.mesh_bound_rs + src * 4))
+
     fun upload_mesh(self, vertices: i64, vertex_count: i32) -> i32:
         if self.initialized == 0:
             return 0 - 1
@@ -504,6 +613,7 @@ attach GpuRendererCore:
         Memory.write_ptr(self.ib_memories + idx * 8, 0)
         Memory.write_i32(self.ib_index_counts + idx * 4, 0)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
+        self._write_mesh_bounds(idx, vertices, vertex_count)
         self.vb_count = idx + 1
         return idx
 
@@ -535,6 +645,7 @@ attach GpuRendererCore:
         Memory.write_ptr(self.ib_memories + idx * 8, uploaded_ib.memory)
         Memory.write_i32(self.ib_index_counts + idx * 4, index_count)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
+        self._write_mesh_bounds(idx, vertices, vertex_count)
         self.vb_count = idx + 1
         return idx
 
@@ -597,6 +708,7 @@ attach GpuRendererCore:
         Memory.write_ptr(self.ib_handles + mesh_id * 8, uploaded_ib.handle)
         Memory.write_ptr(self.ib_memories + mesh_id * 8, uploaded_ib.memory)
         Memory.write_i32(self.ib_index_counts + mesh_id * 4, mesh.index_count)
+        self._write_mesh_bounds(mesh_id, mesh.vertices, mesh.vertex_count)
         if self.vb_visible != 0:
             Memory.write_i32(self.vb_visible + mesh_id * 4, 1)
         return mesh_id
@@ -624,6 +736,7 @@ attach GpuRendererCore:
         Memory.write_ptr(self.ib_memories + idx * 8, 0)
         Memory.write_i32(self.ib_index_counts + idx * 4, src_ic)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
+        self._copy_mesh_bounds(idx, src_vb_idx)
         self.vb_count = idx + 1
         return idx
 
@@ -1131,7 +1244,18 @@ attach GpuRendererCore:
                                         visible = 0
                                 if visible == 1:
                                     if self.instance_culling_enabled == 1:
-                                        visible = _frog_instance_visible(vp_mat, g_model)
+                                        bound_x: f32 = 0.0
+                                        bound_y: f32 = 0.0
+                                        bound_z: f32 = 0.0
+                                        bound_r: f32 = 8.0
+                                        if self.mesh_bound_rs != 0:
+                                            bound_x = Memory.read_f32(self.mesh_bound_xs + gi * 4)
+                                            bound_y = Memory.read_f32(self.mesh_bound_ys + gi * 4)
+                                            bound_z = Memory.read_f32(self.mesh_bound_zs + gi * 4)
+                                            bound_r = Memory.read_f32(self.mesh_bound_rs + gi * 4)
+                                            if bound_r <= 0.0:
+                                                bound_r = 8.0
+                                        visible = _frog_instance_visible(vp_mat, g_model, bound_x, bound_y, bound_z, bound_r)
                                 if visible == 1:
                                     instance_dst: i64 = mapped_instances + ((instance_write as i64) * 64)
                                     if vp_mat != 0:
@@ -1256,6 +1380,14 @@ attach GpuRendererCore:
             Memory.free(self.ib_index_counts)
         if self.model_matrices != 0:
             Memory.free(self.model_matrices)
+        if self.mesh_bound_xs != 0:
+            Memory.free(self.mesh_bound_xs)
+        if self.mesh_bound_ys != 0:
+            Memory.free(self.mesh_bound_ys)
+        if self.mesh_bound_zs != 0:
+            Memory.free(self.mesh_bound_zs)
+        if self.mesh_bound_rs != 0:
+            Memory.free(self.mesh_bound_rs)
         # Destroy per-frame instance buffers (slot 0 mirrors the legacy
         # instance_buffer field, so free via the array only to avoid a
         # double free).
