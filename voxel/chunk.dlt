@@ -21,6 +21,16 @@ attach BlockId:
     pos_x: f32 = 0.0
     pos_y: f32 = 0.0
     pos_z: f32 = 0.0
+    neighbor_neg_x_ptr: i64 = 0
+    neighbor_pos_x_ptr: i64 = 0
+    neighbor_neg_y_ptr: i64 = 0
+    neighbor_pos_y_ptr: i64 = 0
+    neighbor_neg_z_ptr: i64 = 0
+    neighbor_pos_z_ptr: i64 = 0
+    tile_indices: i64 = 0
+    atlas_cols: i32 = 0
+    atlas_rows: i32 = 0
+    atlas_repeat_span: i32 = 1
 
 fun voxel_block_r(block_id: i32) -> f32:
     if block_id <= 0:
@@ -49,6 +59,42 @@ fun voxel_write_face_indices(indices: i64, face_index: i32, base_vertex: i32):
     Memory.write_i32(indices + ioff + 16, base_vertex + 2)
     Memory.write_i32(indices + ioff + 20, base_vertex + 3)
 
+fun voxel_atlas_u(chunk: VoxelChunk, block_id: i32, face: i32, local_u: f32) -> f32:
+    if chunk.atlas_cols <= 0:
+        return local_u
+    tile: i32 = chunk.block_face_tile(block_id, face)
+    col: i32 = tile % chunk.atlas_cols
+    cell_w: f32 = 1.0 / (chunk.atlas_cols as f32)
+    span: f32 = chunk.atlas_repeat_span as f32
+    if span <= 0.0:
+        span = 1.0
+    lu: f32 = local_u
+    if lu < 0.0:
+        lu = 0.0
+    if lu > span:
+        lu = span
+    inset: f32 = cell_w * 0.001
+    usable: f32 = cell_w - inset * 2.0
+    return (col as f32) * cell_w + inset + (lu / span) * usable
+
+fun voxel_atlas_v(chunk: VoxelChunk, block_id: i32, face: i32, local_v: f32) -> f32:
+    if chunk.atlas_rows <= 0:
+        return local_v
+    tile: i32 = chunk.block_face_tile(block_id, face)
+    row: i32 = tile / chunk.atlas_cols
+    cell_h: f32 = 1.0 / (chunk.atlas_rows as f32)
+    span: f32 = chunk.atlas_repeat_span as f32
+    if span <= 0.0:
+        span = 1.0
+    lv: f32 = local_v
+    if lv < 0.0:
+        lv = 0.0
+    if lv > span:
+        lv = span
+    inset: f32 = cell_h * 0.001
+    usable: f32 = cell_h - inset * 2.0
+    return (row as f32) * cell_h + inset + (lv / span) * usable
+
 fun voxel_write_face(chunk: VoxelChunk, vertices: i64, indices: i64, face_index: i32, x: i32, y: i32, z: i32, face: i32, block_id: i32) -> i32:
     x0: f32 = x as f32
     y0: f32 = y as f32
@@ -61,37 +107,41 @@ fun voxel_write_face(chunk: VoxelChunk, vertices: i64, indices: i64, face_index:
     cb: f32 = chunk.block_b(block_id)
     off: i64 = (face_index as i64) * 128
     base_vertex: i32 = face_index * 4
+    u0t: f32 = voxel_atlas_u(chunk, block_id, face, 0.0)
+    u1t: f32 = voxel_atlas_u(chunk, block_id, face, 1.0)
+    v0t: f32 = voxel_atlas_v(chunk, block_id, face, 0.0)
+    v1t: f32 = voxel_atlas_v(chunk, block_id, face, 1.0)
 
     if face == 0:
-        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, 1.0, 0.0)
-        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, 1.0, 1.0)
-        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, 0.0, 1.0)
+        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, u0t, v1t)
+        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, u0t, v0t)
+        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, u1t, v1t)
     elif face == 1:
-        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, 1.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, 1.0, 1.0)
-        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, 0.0, 1.0)
+        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, u0t, v1t)
+        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, u0t, v0t)
+        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, u1t, v1t)
     elif face == 2:
-        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, 1.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, 1.0, 1.0)
-        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, 0.0, 1.0)
+        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, u0t, v0t)
+        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, u1t, v1t)
+        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, u0t, v1t)
     elif face == 3:
-        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, 1.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, 1.0, 1.0)
-        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, 0.0, 1.0)
+        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, u0t, v0t)
+        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, u1t, v1t)
+        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, u0t, v1t)
     elif face == 4:
-        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, 1.0, 0.0)
-        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, 1.0, 1.0)
-        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, 0.0, 1.0)
+        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, u0t, v1t)
+        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, u0t, v0t)
+        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, u1t, v1t)
     else:
-        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, 1.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, 1.0, 1.0)
-        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, 0.0, 1.0)
+        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, u0t, v1t)
+        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, u1t, v1t)
+        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, u0t, v0t)
 
     voxel_write_face_indices(indices, face_index, base_vertex)
     return face_index + 1
@@ -112,47 +162,59 @@ fun voxel_write_quad(chunk: VoxelChunk, vertices: i64, indices: i64, face_index:
     vh: f32 = 1.0
 
     if face == 0:
-        uw = (y1i - y0i) as f32
-        vh = (z1i - z0i) as f32
-        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, uw, 0.0)
-        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, uw, vh)
-        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, 0.0, vh)
+        uw = (z1i - z0i) as f32
+        vh = (y1i - y0i) as f32
     elif face == 1:
-        uw = (y1i - y0i) as f32
-        vh = (z1i - z0i) as f32
-        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, uw, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, uw, vh)
-        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, 0.0, vh)
+        uw = (z1i - z0i) as f32
+        vh = (y1i - y0i) as f32
     elif face == 2:
         uw = (x1i - x0i) as f32
         vh = (z1i - z0i) as f32
-        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, uw, 0.0)
-        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, uw, vh)
-        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, 0.0, vh)
     elif face == 3:
         uw = (x1i - x0i) as f32
         vh = (z1i - z0i) as f32
-        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, uw, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, uw, vh)
-        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, 0.0, vh)
     elif face == 4:
         uw = (x1i - x0i) as f32
         vh = (y1i - y0i) as f32
-        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, uw, 0.0)
-        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, uw, vh)
-        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, 0.0, vh)
     else:
         uw = (x1i - x0i) as f32
         vh = (y1i - y0i) as f32
-        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, 0.0, 0.0)
-        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, uw, 0.0)
-        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, uw, vh)
-        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, 0.0, vh)
+
+    u0t: f32 = voxel_atlas_u(chunk, block_id, face, 0.0)
+    u1t: f32 = voxel_atlas_u(chunk, block_id, face, uw)
+    v0t: f32 = voxel_atlas_v(chunk, block_id, face, 0.0)
+    v1t: f32 = voxel_atlas_v(chunk, block_id, face, vh)
+
+    if face == 0:
+        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, u0t, v1t)
+        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, u0t, v0t)
+        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, u1t, v1t)
+    elif face == 1:
+        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, u0t, v1t)
+        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, u0t, v0t)
+        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, u1t, v1t)
+    elif face == 2:
+        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, u0t, v0t)
+        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, u1t, v1t)
+        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, u0t, v1t)
+    elif face == 3:
+        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, u0t, v0t)
+        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, u1t, v1t)
+        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, u0t, v1t)
+    elif face == 4:
+        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, u0t, v1t)
+        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, u0t, v0t)
+        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, u1t, v1t)
+    else:
+        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, u0t, v1t)
+        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, u1t, v1t)
+        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, u1t, v0t)
+        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, u0t, v0t)
 
     voxel_write_face_indices(indices, face_index, base_vertex)
     return face_index + 1
@@ -306,7 +368,86 @@ attach VoxelChunk:
             Memory.write_f32(palette_data + po + 4, voxel_block_g(pi))
             Memory.write_f32(palette_data + po + 8, voxel_block_b(pi))
             pi = pi + 1
-        return VoxelChunk(size_x=size_x, size_y=size_y, size_z=size_z, blocks=data, palette=palette_data, mesh_id=-1, pos_x=0.0, pos_y=0.0, pos_z=0.0)
+        chunk: VoxelChunk = VoxelChunk()
+        chunk.size_x = size_x
+        chunk.size_y = size_y
+        chunk.size_z = size_z
+        chunk.blocks = data
+        chunk.palette = palette_data
+        chunk.mesh_id = -1
+        chunk.pos_x = 0.0
+        chunk.pos_y = 0.0
+        chunk.pos_z = 0.0
+        chunk.neighbor_neg_x_ptr = 0
+        chunk.neighbor_pos_x_ptr = 0
+        chunk.neighbor_neg_y_ptr = 0
+        chunk.neighbor_pos_y_ptr = 0
+        chunk.neighbor_neg_z_ptr = 0
+        chunk.neighbor_pos_z_ptr = 0
+        chunk.tile_indices = 0
+        chunk.atlas_cols = 0
+        chunk.atlas_rows = 0
+        chunk.atlas_repeat_span = 1
+        return chunk
+
+    fun set_neighbor_ptr(self, face: i32, neighbor_ptr: i64):
+        if face == 0:
+            self.neighbor_neg_x_ptr = neighbor_ptr
+        elif face == 1:
+            self.neighbor_pos_x_ptr = neighbor_ptr
+        elif face == 2:
+            self.neighbor_neg_y_ptr = neighbor_ptr
+        elif face == 3:
+            self.neighbor_pos_y_ptr = neighbor_ptr
+        elif face == 4:
+            self.neighbor_neg_z_ptr = neighbor_ptr
+        else:
+            self.neighbor_pos_z_ptr = neighbor_ptr
+
+    fun set_texture_atlas(self, cols: i32, rows: i32, repeat_span: i32):
+        self.atlas_cols = cols
+        self.atlas_rows = rows
+        self.atlas_repeat_span = repeat_span
+        if self.atlas_repeat_span <= 0:
+            self.atlas_repeat_span = 1
+        if self.tile_indices == 0:
+            self.tile_indices = Memory.malloc_zeroed(6144)
+
+    fun set_block_face_tile(self, block_id: i32, face: i32, tile: i32):
+        if self.tile_indices == 0:
+            self.set_texture_atlas(self.atlas_cols, self.atlas_rows, self.atlas_repeat_span)
+        if self.tile_indices == 0:
+            return
+        if block_id < 0:
+            return
+        if block_id >= 256:
+            return
+        if face < 0:
+            return
+        if face >= 6:
+            return
+        idx: i32 = block_id * 6 + face
+        Memory.write_i32(self.tile_indices + ((idx as i64) * 4), tile)
+
+    fun set_block_tile(self, block_id: i32, tile: i32):
+        face: i32 = 0
+        while face < 6:
+            self.set_block_face_tile(block_id, face, tile)
+            face = face + 1
+
+    fun block_face_tile(self, block_id: i32, face: i32) -> i32:
+        if self.tile_indices == 0:
+            return 0
+        if block_id < 0:
+            return 0
+        if block_id >= 256:
+            return 0
+        if face < 0:
+            return 0
+        if face >= 6:
+            return 0
+        idx: i32 = block_id * 6 + face
+        return Memory.read_i32(self.tile_indices + ((idx as i64) * 4))
 
     fun destroy(self):
         if self.blocks != 0:
@@ -315,6 +456,9 @@ attach VoxelChunk:
         if self.palette != 0:
             Memory.free(self.palette)
             self.palette = 0
+        if self.tile_indices != 0:
+            Memory.free(self.tile_indices)
+            self.tile_indices = 0
         Memory.free(self as i64)
 
     fun index(self, x: i32, y: i32, z: i32) -> i32:
@@ -408,10 +552,55 @@ attach VoxelChunk:
 
     fun face_visible(self, x: i32, y: i32, z: i32) -> i32:
         if self.in_bounds(x, y, z) == 0:
-            return 1
+            return self.out_of_bounds_face_visible(x, y, z)
         if self.get(x, y, z) == BlockId.air():
             return 1
         return 0
+
+    fun out_of_bounds_face_visible(self, x: i32, y: i32, z: i32) -> i32:
+        if x < 0:
+            if self.neighbor_neg_x_ptr != 0:
+                nx: VoxelChunk = self.neighbor_neg_x_ptr as VoxelChunk
+                if nx.in_bounds(nx.size_x - 1, y, z) == 1:
+                    if nx.get(nx.size_x - 1, y, z) != BlockId.air():
+                        return 0
+            return 1
+        if x >= self.size_x:
+            if self.neighbor_pos_x_ptr != 0:
+                px: VoxelChunk = self.neighbor_pos_x_ptr as VoxelChunk
+                if px.in_bounds(0, y, z) == 1:
+                    if px.get(0, y, z) != BlockId.air():
+                        return 0
+            return 1
+        if y < 0:
+            if self.neighbor_neg_y_ptr != 0:
+                ny: VoxelChunk = self.neighbor_neg_y_ptr as VoxelChunk
+                if ny.in_bounds(x, ny.size_y - 1, z) == 1:
+                    if ny.get(x, ny.size_y - 1, z) != BlockId.air():
+                        return 0
+            return 1
+        if y >= self.size_y:
+            if self.neighbor_pos_y_ptr != 0:
+                py: VoxelChunk = self.neighbor_pos_y_ptr as VoxelChunk
+                if py.in_bounds(x, 0, z) == 1:
+                    if py.get(x, 0, z) != BlockId.air():
+                        return 0
+            return 1
+        if z < 0:
+            if self.neighbor_neg_z_ptr != 0:
+                nz: VoxelChunk = self.neighbor_neg_z_ptr as VoxelChunk
+                if nz.in_bounds(x, y, nz.size_z - 1) == 1:
+                    if nz.get(x, y, nz.size_z - 1) != BlockId.air():
+                        return 0
+            return 1
+        if z >= self.size_z:
+            if self.neighbor_pos_z_ptr != 0:
+                pz: VoxelChunk = self.neighbor_pos_z_ptr as VoxelChunk
+                if pz.in_bounds(x, y, 0) == 1:
+                    if pz.get(x, y, 0) != BlockId.air():
+                        return 0
+            return 1
+        return 1
 
     fun visible_face_count(self) -> i32:
         count: i32 = 0
