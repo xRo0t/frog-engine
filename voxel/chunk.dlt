@@ -95,6 +95,151 @@ fun voxel_atlas_v(chunk: VoxelChunk, block_id: i32, face: i32, local_v: f32) -> 
     usable: f32 = cell_h - inset * 2.0
     return (row as f32) * cell_h + inset + (lv / span) * usable
 
+fun voxel_block_at(chunk: VoxelChunk, x: i32, y: i32, z: i32) -> i32:
+    if chunk.in_bounds(x, y, z) == 1:
+        return chunk.get(x, y, z)
+    if x < 0:
+        if chunk.neighbor_neg_x_ptr != 0:
+            nx: VoxelChunk = chunk.neighbor_neg_x_ptr as VoxelChunk
+            xx: i32 = nx.size_x + x
+            if nx.in_bounds(xx, y, z) == 1:
+                return nx.get(xx, y, z)
+        return BlockId.air()
+    if x >= chunk.size_x:
+        if chunk.neighbor_pos_x_ptr != 0:
+            px: VoxelChunk = chunk.neighbor_pos_x_ptr as VoxelChunk
+            xx2: i32 = x - chunk.size_x
+            if px.in_bounds(xx2, y, z) == 1:
+                return px.get(xx2, y, z)
+        return BlockId.air()
+    if y < 0:
+        if chunk.neighbor_neg_y_ptr != 0:
+            ny: VoxelChunk = chunk.neighbor_neg_y_ptr as VoxelChunk
+            yy: i32 = ny.size_y + y
+            if ny.in_bounds(x, yy, z) == 1:
+                return ny.get(x, yy, z)
+        return BlockId.air()
+    if y >= chunk.size_y:
+        if chunk.neighbor_pos_y_ptr != 0:
+            py: VoxelChunk = chunk.neighbor_pos_y_ptr as VoxelChunk
+            yy2: i32 = y - chunk.size_y
+            if py.in_bounds(x, yy2, z) == 1:
+                return py.get(x, yy2, z)
+        return BlockId.air()
+    if z < 0:
+        if chunk.neighbor_neg_z_ptr != 0:
+            nz: VoxelChunk = chunk.neighbor_neg_z_ptr as VoxelChunk
+            zz: i32 = nz.size_z + z
+            if nz.in_bounds(x, y, zz) == 1:
+                return nz.get(x, y, zz)
+        return BlockId.air()
+    if z >= chunk.size_z:
+        if chunk.neighbor_pos_z_ptr != 0:
+            pz: VoxelChunk = chunk.neighbor_pos_z_ptr as VoxelChunk
+            zz2: i32 = z - chunk.size_z
+            if pz.in_bounds(x, y, zz2) == 1:
+                return pz.get(x, y, zz2)
+        return BlockId.air()
+    return BlockId.air()
+
+fun voxel_shadow_opaque(chunk: VoxelChunk, x: i32, y: i32, z: i32) -> i32:
+    if voxel_block_at(chunk, x, y, z) == BlockId.air():
+        return 0
+    return 1
+
+fun voxel_vertex_ao_level(chunk: VoxelChunk, bx: i32, by: i32, bz: i32, nx: i32, ny: i32, nz: i32, ax: i32, ay: i32, az: i32, bx2: i32, by2: i32, bz2: i32) -> i32:
+    ox: i32 = bx + nx
+    oy: i32 = by + ny
+    oz: i32 = bz + nz
+    side_a: i32 = voxel_shadow_opaque(chunk, ox + ax, oy + ay, oz + az)
+    side_b: i32 = voxel_shadow_opaque(chunk, ox + bx2, oy + by2, oz + bz2)
+    corner: i32 = voxel_shadow_opaque(chunk, ox + ax + bx2, oy + ay + by2, oz + az + bz2)
+    if side_a == 1:
+        if side_b == 1:
+            return 0
+    return 3 - side_a - side_b - corner
+
+fun voxel_ao_factor(level: i32) -> f32:
+    if level <= 0:
+        return 0.06
+    if level == 1:
+        return 0.18
+    if level == 2:
+        return 0.42
+    return 1.0
+
+fun voxel_write_ao_vertex(buf: i64, off: i64, px: f32, py: f32, pz: f32, cr: f32, cg: f32, cb: f32, u: f32, v: f32, ao: f32) -> i64:
+    return gpu_wv(buf, off, px, py, pz, cr * ao, cg * ao, cb * ao, u, v)
+
+fun voxel_quad_ao_level(chunk: VoxelChunk, face: i32, x0i: i32, y0i: i32, z0i: i32, x1i: i32, y1i: i32, z1i: i32, corner: i32) -> i32:
+    if face == 0:
+        if corner == 0:
+            return voxel_vertex_ao_level(chunk, x0i, y0i, z0i, -1, 0, 0, 0, -1, 0, 0, 0, -1)
+        if corner == 1:
+            return voxel_vertex_ao_level(chunk, x0i, y1i - 1, z0i, -1, 0, 0, 0, 1, 0, 0, 0, -1)
+        if corner == 2:
+            return voxel_vertex_ao_level(chunk, x0i, y1i - 1, z1i - 1, -1, 0, 0, 0, 1, 0, 0, 0, 1)
+        return voxel_vertex_ao_level(chunk, x0i, y0i, z1i - 1, -1, 0, 0, 0, -1, 0, 0, 0, 1)
+    if face == 1:
+        if corner == 0:
+            return voxel_vertex_ao_level(chunk, x1i - 1, y0i, z1i - 1, 1, 0, 0, 0, -1, 0, 0, 0, 1)
+        if corner == 1:
+            return voxel_vertex_ao_level(chunk, x1i - 1, y1i - 1, z1i - 1, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+        if corner == 2:
+            return voxel_vertex_ao_level(chunk, x1i - 1, y1i - 1, z0i, 1, 0, 0, 0, 1, 0, 0, 0, -1)
+        return voxel_vertex_ao_level(chunk, x1i - 1, y0i, z0i, 1, 0, 0, 0, -1, 0, 0, 0, -1)
+    if face == 2:
+        if corner == 0:
+            return voxel_vertex_ao_level(chunk, x0i, y0i, z0i, 0, -1, 0, -1, 0, 0, 0, 0, -1)
+        if corner == 1:
+            return voxel_vertex_ao_level(chunk, x1i - 1, y0i, z0i, 0, -1, 0, 1, 0, 0, 0, 0, -1)
+        if corner == 2:
+            return voxel_vertex_ao_level(chunk, x1i - 1, y0i, z1i - 1, 0, -1, 0, 1, 0, 0, 0, 0, 1)
+        return voxel_vertex_ao_level(chunk, x0i, y0i, z1i - 1, 0, -1, 0, -1, 0, 0, 0, 0, 1)
+    if face == 3:
+        if corner == 0:
+            return voxel_vertex_ao_level(chunk, x0i, y1i - 1, z0i, 0, 1, 0, -1, 0, 0, 0, 0, -1)
+        if corner == 1:
+            return voxel_vertex_ao_level(chunk, x1i - 1, y1i - 1, z0i, 0, 1, 0, 1, 0, 0, 0, 0, -1)
+        if corner == 2:
+            return voxel_vertex_ao_level(chunk, x1i - 1, y1i - 1, z1i - 1, 0, 1, 0, 1, 0, 0, 0, 0, 1)
+        return voxel_vertex_ao_level(chunk, x0i, y1i - 1, z1i - 1, 0, 1, 0, -1, 0, 0, 0, 0, 1)
+    if face == 4:
+        if corner == 0:
+            return voxel_vertex_ao_level(chunk, x1i - 1, y0i, z0i, 0, 0, -1, 1, 0, 0, 0, -1, 0)
+        if corner == 1:
+            return voxel_vertex_ao_level(chunk, x1i - 1, y1i - 1, z0i, 0, 0, -1, 1, 0, 0, 0, 1, 0)
+        if corner == 2:
+            return voxel_vertex_ao_level(chunk, x0i, y1i - 1, z0i, 0, 0, -1, -1, 0, 0, 0, 1, 0)
+        return voxel_vertex_ao_level(chunk, x0i, y0i, z0i, 0, 0, -1, -1, 0, 0, 0, -1, 0)
+    if corner == 0:
+        return voxel_vertex_ao_level(chunk, x0i, y0i, z1i - 1, 0, 0, 1, -1, 0, 0, 0, -1, 0)
+    if corner == 1:
+        return voxel_vertex_ao_level(chunk, x1i - 1, y0i, z1i - 1, 0, 0, 1, 1, 0, 0, 0, -1, 0)
+    if corner == 2:
+        return voxel_vertex_ao_level(chunk, x1i - 1, y1i - 1, z1i - 1, 0, 0, 1, 1, 0, 0, 0, 1, 0)
+    return voxel_vertex_ao_level(chunk, x0i, y1i - 1, z1i - 1, 0, 0, 1, -1, 0, 0, 0, 1, 0)
+
+fun voxel_quad_ao_key(chunk: VoxelChunk, face: i32, x0i: i32, y0i: i32, z0i: i32, x1i: i32, y1i: i32, z1i: i32) -> i32:
+    a0: i32 = voxel_quad_ao_level(chunk, face, x0i, y0i, z0i, x1i, y1i, z1i, 0)
+    a1: i32 = voxel_quad_ao_level(chunk, face, x0i, y0i, z0i, x1i, y1i, z1i, 1)
+    a2: i32 = voxel_quad_ao_level(chunk, face, x0i, y0i, z0i, x1i, y1i, z1i, 2)
+    a3: i32 = voxel_quad_ao_level(chunk, face, x0i, y0i, z0i, x1i, y1i, z1i, 3)
+    return a0 + a1 * 4 + a2 * 16 + a3 * 64
+
+fun voxel_face_ao_key(chunk: VoxelChunk, face: i32, u: i32, v: i32, slice: i32) -> i32:
+    if face == 0:
+        return voxel_quad_ao_key(chunk, face, slice, u, v, slice + 1, u + 1, v + 1)
+    if face == 1:
+        return voxel_quad_ao_key(chunk, face, slice, u, v, slice + 1, u + 1, v + 1)
+    if face == 2:
+        return voxel_quad_ao_key(chunk, face, u, slice, v, u + 1, slice + 1, v + 1)
+    if face == 3:
+        return voxel_quad_ao_key(chunk, face, u, slice, v, u + 1, slice + 1, v + 1)
+    if face == 4:
+        return voxel_quad_ao_key(chunk, face, u, v, slice, u + 1, v + 1, slice + 1)
+    return voxel_quad_ao_key(chunk, face, u, v, slice, u + 1, v + 1, slice + 1)
+
 fun voxel_write_face(chunk: VoxelChunk, vertices: i64, indices: i64, face_index: i32, x: i32, y: i32, z: i32, face: i32, block_id: i32) -> i32:
     x0: f32 = x as f32
     y0: f32 = y as f32
@@ -184,37 +329,41 @@ fun voxel_write_quad(chunk: VoxelChunk, vertices: i64, indices: i64, face_index:
     u1t: f32 = voxel_atlas_u(chunk, block_id, face, uw)
     v0t: f32 = voxel_atlas_v(chunk, block_id, face, 0.0)
     v1t: f32 = voxel_atlas_v(chunk, block_id, face, vh)
+    ao0: f32 = voxel_ao_factor(voxel_quad_ao_level(chunk, face, x0i, y0i, z0i, x1i, y1i, z1i, 0))
+    ao1: f32 = voxel_ao_factor(voxel_quad_ao_level(chunk, face, x0i, y0i, z0i, x1i, y1i, z1i, 1))
+    ao2: f32 = voxel_ao_factor(voxel_quad_ao_level(chunk, face, x0i, y0i, z0i, x1i, y1i, z1i, 2))
+    ao3: f32 = voxel_ao_factor(voxel_quad_ao_level(chunk, face, x0i, y0i, z0i, x1i, y1i, z1i, 3))
 
     if face == 0:
-        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, u0t, v1t)
-        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, u0t, v0t)
-        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, u1t, v0t)
-        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, u1t, v1t)
+        off = voxel_write_ao_vertex(vertices, off, x0, y0, z0, cr, cg, cb, u0t, v1t, ao0)
+        off = voxel_write_ao_vertex(vertices, off, x0, y1, z0, cr, cg, cb, u0t, v0t, ao1)
+        off = voxel_write_ao_vertex(vertices, off, x0, y1, z1, cr, cg, cb, u1t, v0t, ao2)
+        off = voxel_write_ao_vertex(vertices, off, x0, y0, z1, cr, cg, cb, u1t, v1t, ao3)
     elif face == 1:
-        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, u0t, v1t)
-        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, u0t, v0t)
-        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, u1t, v0t)
-        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, u1t, v1t)
+        off = voxel_write_ao_vertex(vertices, off, x1, y0, z1, cr, cg, cb, u0t, v1t, ao0)
+        off = voxel_write_ao_vertex(vertices, off, x1, y1, z1, cr, cg, cb, u0t, v0t, ao1)
+        off = voxel_write_ao_vertex(vertices, off, x1, y1, z0, cr, cg, cb, u1t, v0t, ao2)
+        off = voxel_write_ao_vertex(vertices, off, x1, y0, z0, cr, cg, cb, u1t, v1t, ao3)
     elif face == 2:
-        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, u0t, v0t)
-        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, u1t, v0t)
-        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, u1t, v1t)
-        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, u0t, v1t)
+        off = voxel_write_ao_vertex(vertices, off, x0, y0, z0, cr, cg, cb, u0t, v0t, ao0)
+        off = voxel_write_ao_vertex(vertices, off, x1, y0, z0, cr, cg, cb, u1t, v0t, ao1)
+        off = voxel_write_ao_vertex(vertices, off, x1, y0, z1, cr, cg, cb, u1t, v1t, ao2)
+        off = voxel_write_ao_vertex(vertices, off, x0, y0, z1, cr, cg, cb, u0t, v1t, ao3)
     elif face == 3:
-        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, u0t, v0t)
-        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, u1t, v0t)
-        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, u1t, v1t)
-        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, u0t, v1t)
+        off = voxel_write_ao_vertex(vertices, off, x0, y1, z0, cr, cg, cb, u0t, v0t, ao0)
+        off = voxel_write_ao_vertex(vertices, off, x1, y1, z0, cr, cg, cb, u1t, v0t, ao1)
+        off = voxel_write_ao_vertex(vertices, off, x1, y1, z1, cr, cg, cb, u1t, v1t, ao2)
+        off = voxel_write_ao_vertex(vertices, off, x0, y1, z1, cr, cg, cb, u0t, v1t, ao3)
     elif face == 4:
-        off = gpu_wv(vertices, off, x1, y0, z0, cr, cg, cb, u0t, v1t)
-        off = gpu_wv(vertices, off, x1, y1, z0, cr, cg, cb, u0t, v0t)
-        off = gpu_wv(vertices, off, x0, y1, z0, cr, cg, cb, u1t, v0t)
-        off = gpu_wv(vertices, off, x0, y0, z0, cr, cg, cb, u1t, v1t)
+        off = voxel_write_ao_vertex(vertices, off, x1, y0, z0, cr, cg, cb, u0t, v1t, ao0)
+        off = voxel_write_ao_vertex(vertices, off, x1, y1, z0, cr, cg, cb, u0t, v0t, ao1)
+        off = voxel_write_ao_vertex(vertices, off, x0, y1, z0, cr, cg, cb, u1t, v0t, ao2)
+        off = voxel_write_ao_vertex(vertices, off, x0, y0, z0, cr, cg, cb, u1t, v1t, ao3)
     else:
-        off = gpu_wv(vertices, off, x0, y0, z1, cr, cg, cb, u0t, v1t)
-        off = gpu_wv(vertices, off, x1, y0, z1, cr, cg, cb, u1t, v1t)
-        off = gpu_wv(vertices, off, x1, y1, z1, cr, cg, cb, u1t, v0t)
-        off = gpu_wv(vertices, off, x0, y1, z1, cr, cg, cb, u0t, v0t)
+        off = voxel_write_ao_vertex(vertices, off, x0, y0, z1, cr, cg, cb, u0t, v1t, ao0)
+        off = voxel_write_ao_vertex(vertices, off, x1, y0, z1, cr, cg, cb, u1t, v1t, ao1)
+        off = voxel_write_ao_vertex(vertices, off, x1, y1, z1, cr, cg, cb, u1t, v0t, ao2)
+        off = voxel_write_ao_vertex(vertices, off, x0, y1, z1, cr, cg, cb, u0t, v0t, ao3)
 
     voxel_write_face_indices(indices, face_index, base_vertex)
     return face_index + 1
@@ -276,13 +425,15 @@ fun voxel_greedy_mark_rect(used: i64, u_count: i32, u0: i32, v0: i32, width: i32
             uu = uu + 1
         vv = vv + 1
 
-fun voxel_greedy_can_grow(chunk: VoxelChunk, used: i64, face: i32, slice: i32, u_count: i32, u0: i32, v: i32, width: i32, block_id: i32) -> i32:
+fun voxel_greedy_can_grow(chunk: VoxelChunk, used: i64, face: i32, slice: i32, u_count: i32, u0: i32, v: i32, width: i32, block_id: i32, ao_key: i32) -> i32:
     uu: i32 = 0
     while uu < width:
         mi: i32 = v * u_count + u0 + uu
         if Memory.read_i32(used + mi * 4) != 0:
             return 0
         if voxel_face_block_at(chunk, face, u0 + uu, v, slice) != block_id:
+            return 0
+        if voxel_face_ao_key(chunk, face, u0 + uu, v, slice) != ao_key:
             return 0
         uu = uu + 1
     return 1
@@ -329,6 +480,7 @@ fun voxel_write_greedy_face(chunk: VoxelChunk, vertices: i64, indices: i64, star
                     if block_id == BlockId.air():
                         u = u + 1
                     else:
+                        ao_key: i32 = voxel_face_ao_key(chunk, face, u, v, slice)
                         width: i32 = 1
                         while u + width < u_count:
                             next_idx: i32 = v * u_count + u + width
@@ -336,12 +488,14 @@ fun voxel_write_greedy_face(chunk: VoxelChunk, vertices: i64, indices: i64, star
                                 break
                             if voxel_face_block_at(chunk, face, u + width, v, slice) != block_id:
                                 break
+                            if voxel_face_ao_key(chunk, face, u + width, v, slice) != ao_key:
+                                break
                             width = width + 1
 
                         height: i32 = 1
                         can_grow: i32 = 1
                         while v + height < v_count:
-                            can_grow = voxel_greedy_can_grow(chunk, used, face, slice, u_count, u, v + height, width, block_id)
+                            can_grow = voxel_greedy_can_grow(chunk, used, face, slice, u_count, u, v + height, width, block_id, ao_key)
                             if can_grow == 0:
                                 break
                             height = height + 1
