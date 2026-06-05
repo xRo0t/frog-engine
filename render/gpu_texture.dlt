@@ -13,6 +13,7 @@ struct GpuTexture:
     sampler:  i64 = 0
     width:    i32 = 0
     height:   i32 = 0
+    mip_levels: i32 = 1
     ok:       i32 = 0
 
 # How a texture should look on screen. Filtering, wrapping, color space.
@@ -22,6 +23,7 @@ struct GpuTexture:
 #   address:   0 = REPEAT, 1 = MIRRORED_REPEAT, 2 = CLAMP_TO_EDGE, 3 = CLAMP_TO_BORDER
 #   srgb:      1 = color texture (gamma-corrected), 0 = linear data (normal/roughness)
 #   anisotropy: 0.0 = off, else max anisotropy (e.g. 8.0 / 16.0)
+#   mipmaps:   0 = base level only, 1 = generate mip chain on upload
 struct TextureSpec:
     mag_filter:  i32 = 1
     min_filter:  i32 = 1
@@ -31,6 +33,8 @@ struct TextureSpec:
     anisotropy:  f32 = 0.0
     border_color: i32 = 0
     srgb:        i32 = 1
+    mipmaps:     i32 = 0
+    mipmap_filter: i32 = 1
 
 attach TextureSpec:
 
@@ -48,10 +52,24 @@ attach TextureSpec:
         s.address_w = 2
         return s
 
+    # Sharp pixels + repeat + mipmaps. For tiled pixel art and atlases.
+    static fun pixel_tiled() -> TextureSpec:
+        s: TextureSpec = TextureSpec()
+        s.mag_filter = 0
+        s.min_filter = 0
+        s.address_u = 0
+        s.address_v = 0
+        s.address_w = 0
+        s.mipmaps = 1
+        s.mipmap_filter = 1
+        return s
+
     # Smooth + repeat + anisotropy. For tiled ground/walls seen at glancing angles.
     static fun ground() -> TextureSpec:
         s: TextureSpec = TextureSpec()
         s.anisotropy = 8.0
+        s.mipmaps = 1
+        s.mipmap_filter = 1
         return s
 
     # Mark this texture as linear (non-color) data: normal maps, roughness, etc.
@@ -71,6 +89,11 @@ attach TextureSpec:
         if self.srgb == 0:
             return 37
         return 43
+
+    fun wants_mipmaps(self) -> i32:
+        if self.mipmaps == 0:
+            return 0
+        return 1
 
 # ---- low-level helpers -------------------------------------------------
 
@@ -157,11 +180,26 @@ fun gpu_tex_make_staging(device: i64, phys_device: i64, data: i64, size: i64, bu
     Memory.write_ptr(mem_out, mem)
     return 1
 
-# Create a device-local VkImage with caller-provided usage flags.
+fun gpu_tex_mip_count(width: i32, height: i32) -> i32:
+    levels: i32 = 1
+    w: i32 = width
+    h: i32 = height
+    while w > 1 or h > 1:
+        if w > 1:
+            w = w / 2
+        if h > 1:
+            h = h / 2
+        levels = levels + 1
+    return levels
+
+# Create a device-local VkImage with caller-provided usage flags and mip count.
 # Writes the image + memory to out pointers. Returns 1 on success.
-fun gpu_make_image_usage(device: i64, phys_device: i64, width: i32, height: i32, fmt: i32, usage: i32, img_out: i64, mem_out: i64) -> i32:
+fun gpu_make_image_usage_mips(device: i64, phys_device: i64, width: i32, height: i32, fmt: i32, usage: i32, mip_levels: i32, img_out: i64, mem_out: i64) -> i32:
     Memory.write_ptr(img_out, 0)
     Memory.write_ptr(mem_out, 0)
+    levels: i32 = mip_levels
+    if mip_levels < 1:
+        levels = 1
 
     # VkImageCreateInfo (sType = 14). Layout (offsets):
     #  0 sType, 8 pNext, 16 flags, 20 imageType, 24 format,
@@ -178,7 +216,7 @@ fun gpu_make_image_usage(device: i64, phys_device: i64, width: i32, height: i32,
     Memory.write_i32(ci + 28, width)
     Memory.write_i32(ci + 32, height)
     Memory.write_i32(ci + 36, 1)         # depth
-    Memory.write_i32(ci + 40, 1)         # mipLevels
+    Memory.write_i32(ci + 40, levels)     # mipLevels
     Memory.write_i32(ci + 44, 1)         # arrayLayers
     Memory.write_i32(ci + 48, 1)         # SAMPLE_COUNT_1
     Memory.write_i32(ci + 52, 0)         # TILING_OPTIMAL
@@ -223,6 +261,15 @@ fun gpu_make_image_usage(device: i64, phys_device: i64, width: i32, height: i32,
     Memory.write_ptr(img_out, img)
     Memory.write_ptr(mem_out, mem)
     return 1
+
+# Create a device-local VkImage with caller-provided usage flags.
+# Writes the image + memory to out pointers. Returns 1 on success.
+fun gpu_make_image_usage(device: i64, phys_device: i64, width: i32, height: i32, fmt: i32, usage: i32, img_out: i64, mem_out: i64) -> i32:
+    return gpu_make_image_usage_mips(device, phys_device, width, height, fmt, usage, 1, img_out, mem_out)
+
+# Create a device-local texture image (sampled + transfer dst/src) with mips.
+fun gpu_tex_make_image_mips(device: i64, phys_device: i64, width: i32, height: i32, fmt: i32, mip_levels: i32, img_out: i64, mem_out: i64) -> i32:
+    return gpu_make_image_usage_mips(device, phys_device, width, height, fmt, 7, mip_levels, img_out, mem_out)
 
 # Create a device-local texture image (sampled + transfer dst).
 fun gpu_tex_make_image(device: i64, phys_device: i64, width: i32, height: i32, fmt: i32, img_out: i64, mem_out: i64) -> i32:
@@ -273,10 +320,13 @@ fun gpu_tex_end_oneshot(device: i64, cmd_pool: i64, gfx_queue: i64, cmd: i64):
 # 24 oldLayout, 28 newLayout, 32 srcQueueFamilyIndex, 36 dstQueueFamilyIndex,
 # 40 image, 48 subresourceRange { aspectMask(48), baseMipLevel(52),
 #   levelCount(56), baseArrayLayer(60), layerCount(64) }  => 72 bytes
-fun gpu_tex_barrier(cmd: i64, image: i64, old_layout: i32, new_layout: i32, src_access: i32, dst_access: i32, src_stage: i64, dst_stage: i64):
+fun gpu_tex_barrier_level(cmd: i64, image: i64, base_mip: i32, level_count: i32, old_layout: i32, new_layout: i32, src_access: i32, dst_access: i32, src_stage: i64, dst_stage: i64):
     b: i64 = Memory.malloc_zeroed(72)
     if b == 0:
         return
+    levels: i32 = level_count
+    if level_count < 1:
+        levels = 1
     Memory.write_i32(b, 45)
     Memory.write_i32(b + 16, src_access)
     Memory.write_i32(b + 20, dst_access)
@@ -286,12 +336,15 @@ fun gpu_tex_barrier(cmd: i64, image: i64, old_layout: i32, new_layout: i32, src_
     Memory.write_i32(b + 36, 0 - 1)
     Memory.write_ptr(b + 40, image)
     Memory.write_i32(b + 48, 1)         # ASPECT_COLOR
-    Memory.write_i32(b + 52, 0)         # baseMipLevel
-    Memory.write_i32(b + 56, 1)         # levelCount
+    Memory.write_i32(b + 52, base_mip)  # baseMipLevel
+    Memory.write_i32(b + 56, levels)      # levelCount
     Memory.write_i32(b + 60, 0)         # baseArrayLayer
     Memory.write_i32(b + 64, 1)         # layerCount
     vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, 0, 0, 0, 1, b)
     Memory.free(b)
+
+fun gpu_tex_barrier(cmd: i64, image: i64, old_layout: i32, new_layout: i32, src_access: i32, dst_access: i32, src_stage: i64, dst_stage: i64):
+    gpu_tex_barrier_level(cmd, image, 0, 1, old_layout, new_layout, src_access, dst_access, src_stage, dst_stage)
 
 # Copy the staging buffer into the image (full extent).
 # VkBufferImageCopy (56 bytes). Offsets:
@@ -311,8 +364,55 @@ fun gpu_tex_copy(cmd: i64, staging: i64, image: i64, width: i32, height: i32):
     vkCmdCopyBufferToImage(cmd, staging, image, 7, 1, region)
     Memory.free(region)
 
+fun gpu_tex_blit_mip(cmd: i64, image: i64, src_level: i32, dst_level: i32, src_width: i32, src_height: i32, dst_width: i32, dst_height: i32, filter: i32):
+    # VkImageBlit = srcSubresource + srcOffsets[2] + dstSubresource + dstOffsets[2].
+    blit: i64 = Memory.malloc_zeroed(80)
+    if blit == 0:
+        return
+    Memory.write_i32(blit, 1)             # src aspect color
+    Memory.write_i32(blit + 4, src_level)
+    Memory.write_i32(blit + 12, 1)        # src layerCount
+    Memory.write_i32(blit + 28, src_width)
+    Memory.write_i32(blit + 32, src_height)
+    Memory.write_i32(blit + 36, 1)
+    Memory.write_i32(blit + 40, 1)        # dst aspect color
+    Memory.write_i32(blit + 44, dst_level)
+    Memory.write_i32(blit + 52, 1)        # dst layerCount
+    Memory.write_i32(blit + 68, dst_width)
+    Memory.write_i32(blit + 72, dst_height)
+    Memory.write_i32(blit + 76, 1)
+    vkCmdBlitImage(cmd, image, 6, image, 7, 1, blit, filter as i64)
+    Memory.free(blit)
+
+fun gpu_tex_generate_mips(cmd: i64, image: i64, width: i32, height: i32, mip_levels: i32, filter: i32):
+    if mip_levels <= 1:
+        gpu_tex_barrier_level(cmd, image, 0, 1, 7, 5, 4096, 32, 4096, 128)
+        return
+
+    mip_width: i32 = width
+    mip_height: i32 = height
+    level: i32 = 1
+    while level < mip_levels:
+        next_width: i32 = mip_width
+        next_height: i32 = mip_height
+        if next_width > 1:
+            next_width = next_width / 2
+        if next_height > 1:
+            next_height = next_height / 2
+
+        gpu_tex_barrier_level(cmd, image, level - 1, 1, 7, 6, 4096, 2048, 4096, 4096)
+        gpu_tex_barrier_level(cmd, image, level, 1, 0, 7, 0, 4096, 1, 4096)
+        gpu_tex_blit_mip(cmd, image, level - 1, level, mip_width, mip_height, next_width, next_height, filter)
+        gpu_tex_barrier_level(cmd, image, level - 1, 1, 6, 5, 2048, 32, 4096, 128)
+
+        mip_width = next_width
+        mip_height = next_height
+        level = level + 1
+
+    gpu_tex_barrier_level(cmd, image, mip_levels - 1, 1, 7, 5, 4096, 32, 4096, 128)
+
 # Create a VkImageView (2D, color format from spec) for the texture image.
-fun gpu_make_image_view_aspect(device: i64, image: i64, fmt: i32, aspect: i32) -> i64:
+fun gpu_make_image_view_aspect_mips(device: i64, image: i64, fmt: i32, aspect: i32, mip_levels: i32) -> i64:
     # VkImageViewCreateInfo (sType = 15). Offsets:
     #  0 sType, 8 pNext, 16 flags, 24 image, 32 viewType, 36 format,
     # 40 components {r,g,b,a = 40,44,48,52}, 56 subresourceRange
@@ -320,13 +420,16 @@ fun gpu_make_image_view_aspect(device: i64, image: i64, fmt: i32, aspect: i32) -
     ci: i64 = Memory.malloc_zeroed(80)
     if ci == 0:
         return 0
+    levels: i32 = mip_levels
+    if mip_levels < 1:
+        levels = 1
     Memory.write_i32(ci, 15)
     Memory.write_ptr(ci + 24, image)
     Memory.write_i32(ci + 32, 1)        # VIEW_TYPE_2D
     Memory.write_i32(ci + 36, fmt)      # FORMAT (must match the image)
     Memory.write_i32(ci + 56, aspect)
     Memory.write_i32(ci + 60, 0)
-    Memory.write_i32(ci + 64, 1)        # levelCount
+    Memory.write_i32(ci + 64, levels)     # levelCount
     Memory.write_i32(ci + 68, 0)
     Memory.write_i32(ci + 72, 1)        # layerCount
     vp: i64 = Memory.malloc_zeroed(8)
@@ -338,11 +441,17 @@ fun gpu_make_image_view_aspect(device: i64, image: i64, fmt: i32, aspect: i32) -
         return 0
     return view
 
+fun gpu_make_image_view_aspect(device: i64, image: i64, fmt: i32, aspect: i32) -> i64:
+    return gpu_make_image_view_aspect_mips(device, image, fmt, aspect, 1)
+
+fun gpu_tex_make_view_mips(device: i64, image: i64, fmt: i32, mip_levels: i32) -> i64:
+    return gpu_make_image_view_aspect_mips(device, image, fmt, 1, mip_levels)
+
 fun gpu_tex_make_view(device: i64, image: i64, fmt: i32) -> i64:
     return gpu_make_image_view_aspect(device, image, fmt, 1)
 
 # Create a sampler from a TextureSpec (filtering, wrapping, anisotropy).
-fun gpu_tex_make_sampler(device: i64, spec: TextureSpec) -> i64:
+fun gpu_tex_make_sampler_mips(device: i64, spec: TextureSpec, mip_levels: i32) -> i64:
     # VkSamplerCreateInfo (sType = 31). Offsets:
     #  0 sType, 8 pNext, 16 flags, 20 magFilter, 24 minFilter, 28 mipmapMode,
     # 32 addressModeU, 36 addressModeV, 40 addressModeW, 44 mipLodBias(f32),
@@ -351,6 +460,9 @@ fun gpu_tex_make_sampler(device: i64, spec: TextureSpec) -> i64:
     ci: i64 = Memory.malloc_zeroed(80)
     if ci == 0:
         return 0
+    levels: i32 = mip_levels
+    if mip_levels < 1:
+        levels = 1
     aniso_enable: i32 = 0
     aniso_max: f32 = 1.0
     if spec.anisotropy > 0.0:
@@ -359,7 +471,7 @@ fun gpu_tex_make_sampler(device: i64, spec: TextureSpec) -> i64:
     Memory.write_i32(ci, 31)
     Memory.write_i32(ci + 20, spec.mag_filter)   # magFilter (0 NEAREST, 1 LINEAR)
     Memory.write_i32(ci + 24, spec.min_filter)   # minFilter
-    Memory.write_i32(ci + 28, 0)                 # mipmapMode NEAREST
+    Memory.write_i32(ci + 28, spec.mipmap_filter) # mipmapMode
     Memory.write_i32(ci + 32, spec.address_u)    # addressU
     Memory.write_i32(ci + 36, spec.address_v)    # addressV
     Memory.write_i32(ci + 40, spec.address_w)    # addressW
@@ -368,7 +480,7 @@ fun gpu_tex_make_sampler(device: i64, spec: TextureSpec) -> i64:
     Memory.write_i32(ci + 56, 0)                 # compareEnable false
     Memory.write_i32(ci + 60, 0)                 # compareOp NEVER
     Memory.write_f32(ci + 64, 0.0)               # minLod
-    Memory.write_f32(ci + 68, 0.0)               # maxLod
+    Memory.write_f32(ci + 68, (levels - 1) as f32) # maxLod
     Memory.write_i32(ci + 72, spec.border_color) # borderColor
     Memory.write_i32(ci + 76, 0)                 # unnormalizedCoordinates false
     sp: i64 = Memory.malloc_zeroed(8)
@@ -379,6 +491,9 @@ fun gpu_tex_make_sampler(device: i64, spec: TextureSpec) -> i64:
     if r != 0:
         return 0
     return samp
+
+fun gpu_tex_make_sampler(device: i64, spec: TextureSpec) -> i64:
+    return gpu_tex_make_sampler_mips(device, spec, 1)
 
 # ---- public upload --------------------------------------------------------
 
@@ -395,6 +510,9 @@ fun gpu_texture_upload_rgba_spec(device: i64, phys_device: i64, gfx_queue: i64, 
 
     fmt: i32 = spec.vk_format()
     size: i64 = (width as i64) * (height as i64) * 4
+    mip_levels: i32 = 1
+    if spec.wants_mipmaps() == 1:
+        mip_levels = gpu_tex_mip_count(width, height)
 
     buf_out: i64 = Memory.malloc_zeroed(8)
     mem_out: i64 = Memory.malloc_zeroed(8)
@@ -409,7 +527,7 @@ fun gpu_texture_upload_rgba_spec(device: i64, phys_device: i64, gfx_queue: i64, 
 
     img_out: i64 = Memory.malloc_zeroed(8)
     imem_out: i64 = Memory.malloc_zeroed(8)
-    if gpu_tex_make_image(device, phys_device, width, height, fmt, img_out, imem_out) == 0:
+    if gpu_tex_make_image_mips(device, phys_device, width, height, fmt, mip_levels, img_out, imem_out) == 0:
         Memory.free(img_out)
         Memory.free(imem_out)
         vkDestroyBuffer(device, staging, 0)
@@ -420,7 +538,7 @@ fun gpu_texture_upload_rgba_spec(device: i64, phys_device: i64, gfx_queue: i64, 
     Memory.free(img_out)
     Memory.free(imem_out)
 
-    # Record: UNDEFINED -> TRANSFER_DST, copy, TRANSFER_DST -> SHADER_READ_ONLY
+    # Record: UNDEFINED -> TRANSFER_DST, copy, optional mip chain, then SHADER_READ_ONLY.
     cmd: i64 = gpu_tex_begin_oneshot(device, cmd_pool)
     if cmd == 0:
         vkDestroyImage(device, image, 0)
@@ -431,19 +549,16 @@ fun gpu_texture_upload_rgba_spec(device: i64, phys_device: i64, gfx_queue: i64, 
 
     # UNDEFINED(0) -> TRANSFER_DST_OPTIMAL(7): srcAccess 0, dstAccess TRANSFER_WRITE(0x1000=4096)
     # stages: TOP_OF_PIPE(1) -> TRANSFER(0x1000=4096)
-    gpu_tex_barrier(cmd, image, 0, 7, 0, 4096, 1, 4096)
+    gpu_tex_barrier_level(cmd, image, 0, 1, 0, 7, 0, 4096, 1, 4096)
     gpu_tex_copy(cmd, staging, image, width, height)
-    # TRANSFER_DST_OPTIMAL(7) -> SHADER_READ_ONLY_OPTIMAL(5):
-    # srcAccess TRANSFER_WRITE(4096), dstAccess SHADER_READ(0x20=32)
-    # stages: TRANSFER(4096) -> FRAGMENT_SHADER(0x80=128)
-    gpu_tex_barrier(cmd, image, 7, 5, 4096, 32, 4096, 128)
+    gpu_tex_generate_mips(cmd, image, width, height, mip_levels, spec.mipmap_filter)
     gpu_tex_end_oneshot(device, cmd_pool, gfx_queue, cmd)
 
     vkDestroyBuffer(device, staging, 0)
     vkFreeMemory(device, staging_mem, 0)
 
-    view: i64 = gpu_tex_make_view(device, image, fmt)
-    sampler: i64 = gpu_tex_make_sampler(device, spec)
+    view: i64 = gpu_tex_make_view_mips(device, image, fmt, mip_levels)
+    sampler: i64 = gpu_tex_make_sampler_mips(device, spec, mip_levels)
     if view == 0:
         vkDestroyImage(device, image, 0)
         vkFreeMemory(device, image_mem, 0)
@@ -460,6 +575,7 @@ fun gpu_texture_upload_rgba_spec(device: i64, phys_device: i64, gfx_queue: i64, 
     tex.sampler = sampler
     tex.width = width
     tex.height = height
+    tex.mip_levels = mip_levels
     tex.ok = 1
     return tex
 

@@ -699,13 +699,15 @@ actor.set_texture(actor_tex)</code></pre>
         <tr><th>Preset</th><th>Use for</th></tr>
         <tr><td><code>TextureSpec.smooth()</code></td><td>Default. Linear filtering, repeat wrap, sRGB color. Models and photos.</td></tr>
         <tr><td><code>TextureSpec.pixel()</code></td><td>Sharp nearest filtering + clamp. Pixel art and crisp sprites.</td></tr>
-        <tr><td><code>TextureSpec.ground()</code></td><td>Linear + repeat + anisotropy. Tiled floors/walls seen at glancing angles.</td></tr>
+        <tr><td><code>TextureSpec.pixel_tiled()</code></td><td>Sharp nearest filtering + repeat + mipmaps. Pixel-art tiles and atlases.</td></tr>
+        <tr><td><code>TextureSpec.ground()</code></td><td>Linear + repeat + anisotropy + mipmaps. Tiled floors/walls seen at glancing angles.</td></tr>
       </table>
       <table>
         <tr><th>Modifier / field</th><th>Effect</th></tr>
         <tr><td><code>.as_data()</code></td><td>Mark as linear (non-color) data: normal/roughness maps.</td></tr>
         <tr><td><code>.wrap(mode)</code></td><td>Set U/V/W wrap: 0 REPEAT, 1 MIRROR, 2 CLAMP_EDGE, 3 CLAMP_BORDER.</td></tr>
         <tr><td><code>mag_filter</code> / <code>min_filter</code></td><td>0 = NEAREST (sharp), 1 = LINEAR (smooth).</td></tr>
+        <tr><td><code>mipmaps</code> / <code>mipmap_filter</code></td><td>Generate distance texture levels and choose mip filtering.</td></tr>
         <tr><td><code>anisotropy</code></td><td>0 = off, else max anisotropy (e.g. 8.0 / 16.0).</td></tr>
         <tr><td><code>srgb</code></td><td>1 = color (gamma-corrected), 0 = linear data.</td></tr>
       </table>
@@ -717,6 +719,9 @@ chicken_b.set_texture(blue)
 
 <span class="tok-com"># Tiled ground, no shimmer at distance</span>
 ground.set_texture(Assets.textures.load(<span class="tok-str">"textures/grass.png"</span>, TextureSpec.ground()))
+
+<span class="tok-com"># Pixel-art atlas: crisp close-up pixels, mipmapped distance</span>
+tiles: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/tiles_atlas.png"</span>, TextureSpec.pixel_tiled())
 
 <span class="tok-com"># Normal map — linear data, not color</span>
 n: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/wall_normal.png"</span>, TextureSpec.smooth().as_data())</code></pre>
