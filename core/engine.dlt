@@ -195,6 +195,12 @@ attach Engine:
     static fun mouse_y() -> i32:
         return g_engine_runtime.mouse_y()
 
+    static fun mouse_delta_x() -> f32:
+        return g_engine_runtime.mouse_delta_x()
+
+    static fun mouse_delta_y() -> f32:
+        return g_engine_runtime.mouse_delta_y()
+
     static fun upload_plane_mesh() -> i32:
         return g_engine_runtime.upload_plane_mesh()
 

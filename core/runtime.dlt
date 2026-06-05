@@ -90,6 +90,12 @@ attach EngineRuntime:
     fun mouse_y(self) -> i32:
         return self.app.mouse_y()
 
+    fun mouse_delta_x(self) -> f32:
+        return self.app.mouse_delta_x()
+
+    fun mouse_delta_y(self) -> f32:
+        return self.app.mouse_delta_y()
+
     fun active_renderer(self) -> Renderer:
         return self.renderer
 

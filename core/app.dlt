@@ -85,6 +85,12 @@ attach App:
     fun mouse_y(self) -> i32:
         return Input.mouse_y(self.handle())
 
+    fun mouse_delta_x(self) -> f32:
+        return Input.mouse_delta_x()
+
+    fun mouse_delta_y(self) -> f32:
+        return Input.mouse_delta_y()
+
     fun close(self):
         self.running_flag = 0
         Window.request_close()

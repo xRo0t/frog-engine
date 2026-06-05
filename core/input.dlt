@@ -75,7 +75,15 @@ attach Input:
         set_cursor_locked(1, hwnd)
         set_cursor_visible(0)
         Input.center_mouse(hwnd, width, height)
+        window_clear_mouse_delta()
 
     static fun release_mouse():
         set_cursor_locked(0, 0)
         set_cursor_visible(1)
+        window_clear_mouse_delta()
+
+    static fun mouse_delta_x() -> f32:
+        return window_consume_mouse_delta_x() as f32
+
+    static fun mouse_delta_y() -> f32:
+        return window_consume_mouse_delta_y() as f32
