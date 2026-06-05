@@ -15,6 +15,9 @@ struct GpuPreference:
 struct Debug:
     _placeholder: i32 = 0
 
+struct EngineMouse:
+    _placeholder: i32 = 0
+
 struct EngineScene:
     _placeholder: i32 = 0
 
@@ -23,6 +26,7 @@ struct Engine:
     static window: DisplayWindow = DisplayWindow()
     static properties: Properties = Properties()
     static debug: Debug = Debug()
+    static mouse: EngineMouse = EngineMouse()
     static scene: EngineScene = EngineScene()
 
 static g_engine_title: str = "Frog Engine"
@@ -137,6 +141,29 @@ attach Debug:
     static fun render_stats_enabled() -> i32:
         return g_engine_render_stats_enabled
 
+attach EngineMouse:
+
+    static fun capture():
+        g_engine_runtime.capture_mouse()
+
+    static fun release():
+        g_engine_runtime.release_mouse()
+
+    static fun center():
+        g_engine_runtime.center_mouse()
+
+    static fun x() -> i32:
+        return g_engine_runtime.mouse_x()
+
+    static fun y() -> i32:
+        return g_engine_runtime.mouse_y()
+
+    static fun delta_x() -> f32:
+        return g_engine_runtime.mouse_delta_x()
+
+    static fun delta_y() -> f32:
+        return g_engine_runtime.mouse_delta_y()
+
 attach EngineScene:
 
     static fun set(scene: Scene):
@@ -179,27 +206,6 @@ attach Engine:
 
     static fun begin_frame() -> f32:
         return g_engine_runtime.begin_frame_limited(g_engine_target_fps)
-
-    static fun capture_mouse():
-        g_engine_runtime.capture_mouse()
-
-    static fun release_mouse():
-        g_engine_runtime.release_mouse()
-
-    static fun center_mouse():
-        g_engine_runtime.center_mouse()
-
-    static fun mouse_x() -> i32:
-        return g_engine_runtime.mouse_x()
-
-    static fun mouse_y() -> i32:
-        return g_engine_runtime.mouse_y()
-
-    static fun mouse_delta_x() -> f32:
-        return g_engine_runtime.mouse_delta_x()
-
-    static fun mouse_delta_y() -> f32:
-        return g_engine_runtime.mouse_delta_y()
 
     static fun upload_plane_mesh() -> i32:
         return g_engine_runtime.upload_plane_mesh()

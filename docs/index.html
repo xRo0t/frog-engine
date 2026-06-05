@@ -286,7 +286,7 @@ Engine.scene.set(scene)</code></pre>
       <pre><code><span class="tok-kw">if</span> Engine.start() == <span class="tok-num">0</span>:
     <span class="tok-kw">return</span>
 
-Engine.capture_mouse()
+Engine.mouse.capture()
 <span class="tok-kw">while</span> Engine.running() == <span class="tok-num">1</span>:
     dt: <span class="tok-type">f32</span> = Engine.begin_frame()
     <span class="tok-com"># ... update your game state with dt ...</span>
@@ -313,13 +313,13 @@ Engine.shutdown()</code></pre>
       <h3>Mouse</h3>
       <table>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
-        <tr><td><code>Engine.capture_mouse()</code></td><td>—</td><td>Locks and hides the cursor for FPS-style look.</td></tr>
-        <tr><td><code>Engine.release_mouse()</code></td><td>—</td><td>Unlocks and shows the cursor.</td></tr>
-        <tr><td><code>Engine.center_mouse()</code></td><td>—</td><td>Recenters the cursor in the window.</td></tr>
-        <tr><td><code>Engine.mouse_x()</code></td><td>i32</td><td>Cursor X in client coordinates.</td></tr>
-        <tr><td><code>Engine.mouse_y()</code></td><td>i32</td><td>Cursor Y in client coordinates.</td></tr>
-        <tr><td><code>Engine.mouse_delta_x()</code></td><td>f32</td><td>Frame-drained relative mouse movement on X for camera look.</td></tr>
-        <tr><td><code>Engine.mouse_delta_y()</code></td><td>f32</td><td>Frame-drained relative mouse movement on Y for camera look.</td></tr>
+        <tr><td><code>Engine.mouse.capture()</code></td><td>—</td><td>Locks and hides the cursor for FPS-style look.</td></tr>
+        <tr><td><code>Engine.mouse.release()</code></td><td>—</td><td>Unlocks and shows the cursor.</td></tr>
+        <tr><td><code>Engine.mouse.center()</code></td><td>—</td><td>Recenters the cursor in the window.</td></tr>
+        <tr><td><code>Engine.mouse.x()</code></td><td>i32</td><td>Cursor X in client coordinates.</td></tr>
+        <tr><td><code>Engine.mouse.y()</code></td><td>i32</td><td>Cursor Y in client coordinates.</td></tr>
+        <tr><td><code>Engine.mouse.delta_x()</code></td><td>f32</td><td>Frame-drained relative mouse movement on X for camera look.</td></tr>
+        <tr><td><code>Engine.mouse.delta_y()</code></td><td>f32</td><td>Frame-drained relative mouse movement on Y for camera look.</td></tr>
       </table>
 
       <h3>Meshes &amp; Instances</h3>
@@ -443,7 +443,7 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
         <tr><td><code>Input.capture_mouse(hwnd, w, h)</code></td><td>—</td><td>Locks and hides the cursor.</td></tr>
         <tr><td><code>Input.release_mouse()</code></td><td>—</td><td>Unlocks and shows the cursor.</td></tr>
       </table>
-      <div class="note">For typical games, prefer the <code>Engine.capture_mouse()</code> / <code>Engine.mouse_delta_x()</code> / <code>Engine.mouse_delta_y()</code> wrappers for FPS camera look.</div>
+      <div class="note">For typical games, prefer the <code>Engine.mouse.capture()</code> / <code>Engine.mouse.delta_x()</code> / <code>Engine.mouse.delta_y()</code> wrappers for FPS camera look.</div>
 
       <h3>Key Constants</h3>
       <table>
