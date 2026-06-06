@@ -5,8 +5,6 @@
 
 extern lib "user32":
     fun GetAsyncKeyState(vKey: i32) -> i16
-    fun SetCursorPos(X: i32, Y: i32) -> i32
-    fun GetWindowRect(hWnd: i64, lpRect: i64) -> i32
 
 KEY_A: i32 = 65
 KEY_D: i32 = 68
@@ -32,16 +30,6 @@ KEY_CTRL: i32 = 17
 MOUSE_LEFT: i32 = 1
 MOUSE_RIGHT: i32 = 2
 
-struct Point:
-    x: i32 = 0
-    y: i32 = 0
-
-struct Rect:
-    left: i32 = 0
-    top: i32 = 0
-    right: i32 = 0
-    bottom: i32 = 0
-
 struct Input:
     _placeholder: i32 = 0
 
@@ -64,18 +52,15 @@ attach Input:
     static fun center_mouse(hwnd: i64, width: i32, height: i32):
         if hwnd == 0:
             return
-        rect: Rect = Rect()
-        if GetWindowRect(hwnd, rect as i64) == 0:
-            return
-        SetCursorPos((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)
+        window_center_mouse(hwnd)
 
     static fun capture_mouse(hwnd: i64, width: i32, height: i32):
         if hwnd == 0:
             return
         set_cursor_locked(1, hwnd)
         set_cursor_visible(0)
-        Input.center_mouse(hwnd, width, height)
         window_clear_mouse_delta()
+        Input.center_mouse(hwnd, width, height)
 
     static fun release_mouse():
         set_cursor_locked(0, 0)
