@@ -184,6 +184,7 @@
       <a href="#node3d">Node3D</a>
       <a href="#camera">Camera3D</a>
       <a href="#scene">Scene &amp; GameObject</a>
+      <a href="#environment">Environment</a>
       <a class="section">Math</a>
       <a href="#vec3">Vec3</a>
       <a href="#mat4">Mat4</a>
@@ -258,6 +259,11 @@ Engine.debug.render_stats(<span class="tok-num">1</span>)
 <span class="tok-com"># 2. Mount assets and build a scene</span>
 Assets.mount(<span class="tok-str">"assets"</span>)
 scene: <span class="tok-type">Scene</span> = Scene.create()
+
+env: <span class="tok-type">Environment</span> = Environment.create()
+env.set_clear_color(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>))
+env.set_fog(Fog.minecraft(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>), <span class="tok-num">480.0</span>))
+scene.set_environment(env)
 
 actor: <span class="tok-type">Node3D</span> = Node3D.create(<span class="tok-str">"Actor"</span>)
 actor_model: <span class="tok-type">Model3D</span> = Assets.models.load(<span class="tok-str">"models/actor.gltf"</span>)
@@ -587,6 +593,8 @@ scene.add_child(camera)</code></pre>
         <tr><td><code>Scene.create(capacity)</code></td><td>Scene</td><td>Creates a scene with a packed object store of <code>capacity</code> slots.</td></tr>
         <tr><td><code>add_child(node)</code></td><td>—</td><td>Adds a <code>Node3D</code> / <code>Camera3D</code> under the root.</td></tr>
         <tr><td><code>set_camera(camera)</code></td><td>—</td><td>Sets the active camera.</td></tr>
+        <tr><td><code>set_environment(env)</code></td><td>—</td><td>Sets the scene render environment.</td></tr>
+        <tr><td><code>environment()</code></td><td>Environment</td><td>Returns the scene render environment.</td></tr>
         <tr><td><code>camera()</code></td><td>Camera3D</td><td>Returns the active camera.</td></tr>
         <tr><td><code>spawn(name)</code></td><td>GameObject</td><td>Allocates a packed object (capacity scenes only).</td></tr>
         <tr><td><code>object_at(id)</code></td><td>GameObject</td><td>Returns the object at an index.</td></tr>
@@ -603,6 +611,35 @@ scene.add_child(camera)</code></pre>
         <tr><td><code>name()</code> / <code>set_active(v)</code> / <code>is_active()</code></td><td>Identity and enabled state.</td></tr>
         <tr><td><code>update(dt)</code> / <code>model_matrix()</code></td><td>Integrate one object / build its TRS matrix.</td></tr>
       </table>
+    </section>
+    <section id="environment">
+      <h2>Environment</h2>
+      <p class="lead">Per-scene render settings. Use it for background clear color now, and fog/sky/lighting controls as the renderer grows.</p>
+
+      <h4>Environment</h4>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Environment.create()</code></td><td>Environment</td><td>Creates the default scene environment.</td></tr>
+        <tr><td><code>set_clear_color(color)</code></td><td>Environment</td><td>Sets the Vulkan clear color for this scene.</td></tr>
+        <tr><td><code>set_fog(fog)</code></td><td>Environment</td><td>Stores fog settings for this scene.</td></tr>
+        <tr><td><code>clear_fog()</code></td><td>Environment</td><td>Disables fog on this environment.</td></tr>
+      </table>
+
+      <h4>Fog</h4>
+      <table>
+        <tr><th>Constructor</th><th>Description</th></tr>
+        <tr><td><code>Fog.none()</code></td><td>No fog.</td></tr>
+        <tr><td><code>Fog.minecraft(color, view_distance)</code></td><td>Minecraft-style linear fog near the far edge of the view distance.</td></tr>
+        <tr><td><code>Fog.linear(color, start, end)</code></td><td>Linear distance fog.</td></tr>
+        <tr><td><code>Fog.exponential(color, density)</code></td><td>Exponential distance fog.</td></tr>
+        <tr><td><code>Fog.exponential_squared(color, density)</code></td><td>Stronger exponential fog.</td></tr>
+      </table>
+
+      <pre><code>env: <span class="tok-type">Environment</span> = Environment.create()
+env.set_clear_color(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>))
+env.set_fog(Fog.minecraft(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>), <span class="tok-num">480.0</span>))
+scene.set_environment(env)</code></pre>
+      <div class="note">Clear color is applied by the current Vulkan renderer. Fog is part of the scene environment API and is ready for shader-side rendering.</div>
     </section>
     <section id="vec3">
       <h2>Vec3</h2>

@@ -196,13 +196,14 @@ attach RenderPass:
         if dp_r != 0:
             return 0
 
-        # 3. Create pipeline layout: descriptor set 0 + push constants (64 bytes VP).
+        # 3. Create pipeline layout: descriptor set 0 + push constants
+        # (64 bytes MVP-era payload + 32 bytes scene fog).
         pc_range: i64 = Memory.malloc_zeroed(12)
         if pc_range == 0:
             return 0
-        Memory.write_i32(pc_range, 1)
+        Memory.write_i32(pc_range, 17)
         Memory.write_i32(pc_range + 4, 0)
-        Memory.write_i32(pc_range + 8, 64)
+        Memory.write_i32(pc_range + 8, 96)
 
         dsl_arr: i64 = Memory.malloc_zeroed(8)
         Memory.write_ptr(dsl_arr, self.desc_set_layout)

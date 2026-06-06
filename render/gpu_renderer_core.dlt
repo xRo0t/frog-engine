@@ -997,9 +997,15 @@ attach GpuRendererCore:
         gpu_tex_barrier(cmd, dst_image, 7, 1000001002, 4096, 0, 4096, 8192)
 
     fun render_frame(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32) -> void:
-        self.render_frame_scaled(rp, sc, device, gfx_queue, present_queue, cam_view, cam_proj, width, height, width, height)
+        self.render_frame_scaled_with_environment(rp, sc, device, gfx_queue, present_queue, cam_view, cam_proj, width, height, width, height, Environment.create())
+
+    fun render_frame_with_environment(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32, env: Environment) -> void:
+        self.render_frame_scaled_with_environment(rp, sc, device, gfx_queue, present_queue, cam_view, cam_proj, width, height, width, height, env)
 
     fun render_frame_scaled(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32, render_width: i32, render_height: i32) -> void:
+        self.render_frame_scaled_with_environment(rp, sc, device, gfx_queue, present_queue, cam_view, cam_proj, width, height, render_width, render_height, Environment.create())
+
+    fun render_frame_scaled_with_environment(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32, render_width: i32, render_height: i32, env: Environment) -> void:
         if rp.frame_initialized == 0:
             return
         if rp.vk_command_buffers == 0:
@@ -1046,7 +1052,7 @@ attach GpuRendererCore:
             if sc.images != 0:
                 swap_img = Memory.read_ptr(sc.images + img_idx * 8)
             swap_old_layout = sc.image_layout(img_idx)
-        self._record_commands(cmd_buf, fb, rp, cam_view, cam_proj, rw, rh, use_scaled, self.scale_color_image, swap_img, swap_old_layout, width, height)
+        self._record_commands(cmd_buf, fb, rp, cam_view, cam_proj, rw, rh, env, use_scaled, self.scale_color_image, swap_img, swap_old_layout, width, height)
         if use_scaled == 1:
             sc.set_image_layout(img_idx, 1000001002)
 
@@ -1094,7 +1100,7 @@ attach GpuRendererCore:
         self._release_retired_buffers()
         self._debug_record_frame()
 
-    fun _record_commands(self, cmd: i64, framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32, use_scaled: i32, scale_color_image: i64, swap_image: i64, swap_old_layout: i32, swap_width: i32, swap_height: i32) -> void:
+    fun _record_commands(self, cmd: i64, framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32, env: Environment, use_scaled: i32, scale_color_image: i64, swap_image: i64, swap_old_layout: i32, swap_width: i32, swap_height: i32) -> void:
         # Begin command buffer
         begin_info: i64 = Memory.malloc_zeroed(64)
         if begin_info == 0:
@@ -1126,10 +1132,10 @@ attach GpuRendererCore:
         # Two clear values: color (RGBA float) + depth (float + uint)
         clear_vals: i64 = Memory.malloc_zeroed(32)
         if clear_vals != 0:
-            Memory.write_f32(clear_vals, 0.15)
-            Memory.write_f32(clear_vals + 4, 0.15)
-            Memory.write_f32(clear_vals + 8, 0.2)
-            Memory.write_f32(clear_vals + 12, 1.0)
+            Memory.write_f32(clear_vals, env.clear_color.r)
+            Memory.write_f32(clear_vals + 4, env.clear_color.g)
+            Memory.write_f32(clear_vals + 8, env.clear_color.b)
+            Memory.write_f32(clear_vals + 12, env.clear_color.a)
             Memory.write_f32(clear_vals + 16, 1.0)
             Memory.write_i32(clear_vals + 20, 0)
             Memory.write_i32(rpi + 48, 2)
@@ -1171,6 +1177,7 @@ attach GpuRendererCore:
                 if cam_view != 0:
                     if cam_proj != 0:
                         vp_mat = multiply_4x4_matrices(cam_proj, cam_view)
+                pc_data: i64 = 0
 
                 instance_ready: i32 = self._ensure_instance_capacity(self.vb_count)
                 # Select this frame's instance buffer slot (double-buffered to
@@ -1197,7 +1204,18 @@ attach GpuRendererCore:
                             Memory.free(instance_map_pp)
 
                 if vp_mat != 0:
-                    vkCmdPushConstants(cmd, rp.vk_pipeline_layout, 1, 0, 64, vp_mat)
+                    pc_data = Memory.malloc_zeroed(96)
+                    if pc_data != 0:
+                        Memory.copy(pc_data, vp_mat, 64)
+                        Memory.write_f32(pc_data + 64, env.fog.color.r)
+                        Memory.write_f32(pc_data + 68, env.fog.color.g)
+                        Memory.write_f32(pc_data + 72, env.fog.color.b)
+                        Memory.write_f32(pc_data + 76, env.fog.color.a)
+                        Memory.write_f32(pc_data + 80, env.fog.mode as f32)
+                        Memory.write_f32(pc_data + 84, env.fog.start_distance)
+                        Memory.write_f32(pc_data + 88, env.fog.end_distance)
+                        Memory.write_f32(pc_data + 92, env.fog.density)
+                        vkCmdPushConstants(cmd, rp.vk_pipeline_layout, 17, 0, 96, pc_data)
 
                 last_bound: i64 = 0
                 last_index_bound: i64 = 0
@@ -1330,6 +1348,8 @@ attach GpuRendererCore:
                     vkUnmapMemory(self.device, frame_inst_mem)
                 if vp_mat != 0:
                     Memory.free(vp_mat)
+                if pc_data != 0:
+                    Memory.free(pc_data)
 
         vkCmdEndRenderPass(cmd)
         if use_scaled == 1:

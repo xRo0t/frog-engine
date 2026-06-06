@@ -1,0 +1,86 @@
+##############################
+# Frog - Scene Environment
+# Per-scene render environment: clear color, fog, and future sky/lighting.
+##############################
+
+const FOG_MODE_NONE: i32 = 0
+const FOG_MODE_LINEAR: i32 = 1
+const FOG_MODE_EXPONENTIAL: i32 = 2
+const FOG_MODE_EXPONENTIAL_SQUARED: i32 = 3
+
+struct Fog:
+    mode: i32 = FOG_MODE_NONE
+    color: Color = Color()
+    start_distance: f32 = 0.0
+    end_distance: f32 = 0.0
+    density: f32 = 0.0
+
+struct Environment:
+    clear_color: Color = Color()
+    fog: Fog = Fog()
+
+attach Fog:
+
+    static fun none() -> Fog:
+        return Fog(mode=FOG_MODE_NONE, color=Color.rgb(0.15, 0.15, 0.20), start_distance=0.0, end_distance=0.0, density=0.0)
+
+    static fun linear(color: Color, start_distance: f32, end_distance: f32) -> Fog:
+        fog: Fog = Fog.none()
+        fog.mode = FOG_MODE_LINEAR
+        fog.color = color
+        fog.start_distance = start_distance
+        fog.end_distance = end_distance
+        fog.density = 0.0
+        if fog.start_distance < 0.0:
+            fog.start_distance = 0.0
+        if fog.end_distance <= fog.start_distance:
+            fog.end_distance = fog.start_distance + 1.0
+        return fog
+
+    static fun minecraft(color: Color, view_distance: f32) -> Fog:
+        distance: f32 = view_distance
+        if distance < 16.0:
+            distance = 16.0
+        start_distance: f32 = distance * 0.72
+        return Fog.linear(color, start_distance, distance)
+
+    static fun exponential(color: Color, density: f32) -> Fog:
+        fog: Fog = Fog.none()
+        fog.mode = FOG_MODE_EXPONENTIAL
+        fog.color = color
+        fog.start_distance = 0.0
+        fog.end_distance = 0.0
+        fog.density = density
+        if fog.density < 0.0:
+            fog.density = 0.0
+        return fog
+
+    static fun exponential_squared(color: Color, density: f32) -> Fog:
+        fog: Fog = Fog.exponential(color, density)
+        fog.mode = FOG_MODE_EXPONENTIAL_SQUARED
+        return fog
+
+    fun enabled(self) -> i32:
+        if self.mode == FOG_MODE_NONE:
+            return 0
+        return 1
+
+attach Environment:
+
+    static fun create() -> Environment:
+        env: Environment = Environment()
+        env.clear_color = Color.rgb(0.15, 0.15, 0.20)
+        env.fog = Fog.none()
+        return env
+
+    fun set_clear_color(self, color: Color) -> Environment:
+        self.clear_color = color
+        return self
+
+    fun set_fog(self, fog: Fog) -> Environment:
+        self.fog = fog
+        return self
+
+    fun clear_fog(self) -> Environment:
+        self.fog = Fog.none()
+        return self

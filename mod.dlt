@@ -28,6 +28,7 @@ load frog/assets/gltf_loader
 load frog/assets/assets
 
 # Phase 3: Scene objects
+load frog/scene/environment
 load frog/scene/node
 load frog/scene/game_object
 
@@ -65,6 +66,7 @@ export MOUSE_LEFT, MOUSE_RIGHT
 export Assets, AssetModels, AssetTextures, AssetAudio, AssetShaders
 export Model3D, Texture2D, AudioClip, Shader
 export GpuTexture, TextureSpec, GpuMeshData
+export Environment, Fog
 export Node, Node3D, Camera3D, RootNode
 export node3d_create, camera3d_create, root_node_create
 export Scene, GameObject, ObjectBench

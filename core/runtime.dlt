@@ -222,11 +222,17 @@ attach EngineRuntime:
         return self.recreate_swapchain(new_width, new_height)
 
     fun render_camera(self, camera: Camera3D):
+        self.render_camera_with_environment(camera, Environment.create())
+
+    fun render_camera_with_environment(self, camera: Camera3D, env: Environment):
         if self.recreate_swapchain_if_needed() == 0:
             return
-        self.renderer.render_camera3d_frame(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height)
+        self.renderer.render_camera3d_frame_with_environment(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height, env)
 
     fun render_camera_scaled(self, camera: Camera3D, render_scale: f32):
+        self.render_camera_scaled_with_environment(camera, render_scale, Environment.create())
+
+    fun render_camera_scaled_with_environment(self, camera: Camera3D, render_scale: f32, env: Environment):
         if self.recreate_swapchain_if_needed() == 0:
             return
         scale: f32 = render_scale
@@ -240,7 +246,7 @@ attach EngineRuntime:
             rw = 1
         if rh < 1:
             rh = 1
-        self.renderer.render_camera3d_frame_scaled(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height, rw, rh)
+        self.renderer.render_camera3d_frame_scaled_with_environment(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height, rw, rh, env)
 
     fun shutdown(self):
         if self.ready_flag == 0:

@@ -284,7 +284,8 @@ attach Engine:
         camera: Camera3D = g_engine_scene.camera()
         if (camera as i64) == 0:
             return
-        g_engine_runtime.render_camera_scaled(camera, g_engine_render_scale)
+        env: Environment = g_engine_scene.environment()
+        g_engine_runtime.render_camera_scaled_with_environment(camera, g_engine_render_scale, env)
 
     static fun destroy_scene():
         if g_engine_has_scene == 1:

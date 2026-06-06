@@ -6,6 +6,8 @@
 struct Scene:
     root_ptr: i64 = 0
     active_camera_ptr: i64 = 0
+    env: Environment = Environment()
+    env_initialized: i32 = 0
     capacity: i32 = 0
     count_ptr: i64 = 0
     names: i64 = 0
@@ -61,10 +63,10 @@ attach Scene:
 
     static fun create() -> Scene:
         root: RootNode = root_node_create("Root", 0)
-        return Scene(root_ptr=root as i64, active_camera_ptr=0)
+        return Scene(root_ptr=root as i64, active_camera_ptr=0, env=Environment.create(), env_initialized=1)
 
     static fun create(capacity: i32) -> Scene:
-        scene: Scene = Scene(capacity=capacity, count_ptr=0)
+        scene: Scene = Scene(capacity=capacity, count_ptr=0, env=Environment.create(), env_initialized=1)
         if capacity <= 0:
             return scene
         cap64: i64 = capacity as i64
@@ -118,6 +120,16 @@ attach Scene:
         if self.active_camera_ptr == 0:
             self.resolve_camera()
         return self.active_camera_ptr as Camera3D
+
+    fun set_environment(self, env: Environment):
+        self.env = env
+        self.env_initialized = 1
+
+    fun environment(self) -> Environment:
+        if self.env_initialized == 0:
+            self.env = Environment.create()
+            self.env_initialized = 1
+        return self.env
 
     fun destroy(self):
         if self.root_ptr != 0:
