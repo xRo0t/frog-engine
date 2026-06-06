@@ -246,6 +246,8 @@
 
 <span class="tok-com"># 1. Configure the window before starting</span>
 Engine.window.create(<span class="tok-str">"My Game"</span>, <span class="tok-num">1280</span>, <span class="tok-num">720</span>)
+<span class="tok-com"># Optional: switch display mode. Windowed size comes from create(...).</span>
+<span class="tok-com"># Engine.window.set_mode(WindowMode.fullscreen())</span>
 Engine.properties.set_vsync(<span class="tok-num">0</span>)
 Engine.properties.set_target_fps(<span class="tok-num">0</span>)
 Engine.properties.set_render_scale(<span class="tok-num">1.0</span>)
@@ -359,8 +361,23 @@ Engine.shutdown()</code></pre>
       <table>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
         <tr><td><code>create(title, width, height)</code></td><td>—</td><td>Sets the window title and size. Resets scene state.</td></tr>
+        <tr><td><code>set_mode(mode)</code></td><td>—</td><td>Switches display mode. Use <code>WindowMode.fullscreen()</code>, <code>WindowMode.borderless_fullscreen()</code>, or <code>WindowMode.windowed()</code>.</td></tr>
+        <tr><td><code>mode()</code></td><td>WindowMode</td><td>Returns the current configured window mode.</td></tr>
         <tr><td><code>width()</code></td><td>i32</td><td>Configured window width.</td></tr>
         <tr><td><code>height()</code></td><td>i32</td><td>Configured window height.</td></tr>
+      </table>
+
+      <pre><code>Engine.window.create(<span class="tok-str">"My Game"</span>, <span class="tok-num">1200</span>, <span class="tok-num">720</span>)
+Engine.window.set_mode(WindowMode.fullscreen())
+Engine.window.set_mode(WindowMode.windowed())</code></pre>
+      <div class="note"><code>WindowMode.windowed()</code> does not take a size; the windowed size comes from <code>Engine.window.create(title, width, height)</code> or from the saved windowed size when returning from fullscreen.</div>
+
+      <h4>WindowMode</h4>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>WindowMode.windowed()</code></td><td>WindowMode</td><td>Windowed mode. Uses the size configured by <code>Engine.window.create(...)</code>.</td></tr>
+        <tr><td><code>WindowMode.fullscreen()</code></td><td>WindowMode</td><td>Fullscreen mode. Currently implemented as borderless fullscreen for Vulkan stability.</td></tr>
+        <tr><td><code>WindowMode.borderless_fullscreen()</code></td><td>WindowMode</td><td>Borderless fullscreen on the primary display.</td></tr>
       </table>
 
       <h4>Engine.properties</h4>
