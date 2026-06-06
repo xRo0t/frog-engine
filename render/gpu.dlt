@@ -225,6 +225,12 @@ attach Renderer:
             return 0 - 1
         return tid
 
+    fun rebuild_texture_descriptors(self, rp: RenderPass) -> i32:
+        return self.core.rebuild_texture_descriptors(rp)
+
+    fun destroy_render_scale_target(self):
+        self.core.destroy_render_scale_target()
+
     fun bind_texture(self, mesh_id: i32, tex_id: i32):
         self.core.bind_texture(mesh_id, tex_id)
 

@@ -161,10 +161,74 @@ attach EngineRuntime:
     fun set_instance_culling(self, enabled: i32):
         self.renderer.set_instance_culling(enabled)
 
+    fun set_window_mode(self, mode: WindowMode) -> i32:
+        if self.ready_flag == 0:
+            return 0
+        if Window.set_mode(mode.kind, mode.width, mode.height) == 0:
+            return 0
+        new_width: i32 = self.app.width()
+        new_height: i32 = self.app.height()
+        return self.recreate_swapchain(new_width, new_height)
+
+    fun recreate_swapchain(self, new_width: i32, new_height: i32) -> i32:
+        if self.ready_flag == 0:
+            return 0
+        if new_width <= 0:
+            return 0
+        if new_height <= 0:
+            return 0
+
+        vkDeviceWaitIdle(self.ctx.vk_device)
+        self.renderer.destroy_render_scale_target()
+        self.render_pass.cleanup(self.ctx.vk_device)
+        self.swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
+
+        swapchain: Swapchain = Swapchain()
+        if swapchain.init(self.ctx.vk_instance, self.ctx.vk_physical_device, self.ctx.vk_device, self.ctx.vk_surface, new_width, new_height, self.ctx.graphics_family, self.ctx.present_family, self.vsync_enabled) == 0:
+            print("GPU swapchain resize failed")
+            self.ready_flag = 0
+            return 0
+        self.swapchain = swapchain
+
+        vert_shader: EmbeddedShader = get_textured_vert_shader()
+        frag_shader: EmbeddedShader = get_textured_frag_shader()
+        render_pass: RenderPass = RenderPass()
+        if render_pass.init(self.ctx.vk_device, swapchain.format, swapchain.image_count, swapchain.image_views, swapchain.depth_view, new_width, new_height, self.ctx.graphics_family, vert_shader.data, vert_shader.size, frag_shader.data, frag_shader.size) == 0:
+            print("GPU render pass resize failed")
+            swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
+            self.ready_flag = 0
+            return 0
+        self.render_pass = render_pass
+        if self.renderer.rebuild_texture_descriptors(self.render_pass) == 0:
+            print("GPU texture descriptor resize failed")
+            self.ready_flag = 0
+            return 0
+        self.width = new_width
+        self.height = new_height
+        return 1
+
+    fun recreate_swapchain_if_needed(self) -> i32:
+        if self.ready_flag == 0:
+            return 0
+        new_width: i32 = self.app.width()
+        new_height: i32 = self.app.height()
+        if new_width <= 0:
+            return 0
+        if new_height <= 0:
+            return 0
+        if new_width == self.width:
+            if new_height == self.height:
+                return 1
+        return self.recreate_swapchain(new_width, new_height)
+
     fun render_camera(self, camera: Camera3D):
+        if self.recreate_swapchain_if_needed() == 0:
+            return
         self.renderer.render_camera3d_frame(self.render_pass, self.swapchain, self.ctx, camera, self.width, self.height)
 
     fun render_camera_scaled(self, camera: Camera3D, render_scale: f32):
+        if self.recreate_swapchain_if_needed() == 0:
+            return
         scale: f32 = render_scale
         if scale < 0.25:
             scale = 0.25

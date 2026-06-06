@@ -42,6 +42,10 @@ static g_engine_gpu_preference: i32 = 0
 static g_engine_render_stats_enabled: i32 = 0
 static g_engine_frustum_culling_enabled: i32 = 0
 static g_engine_current_camera_ptr: i64 = 0
+static g_engine_has_window_mode: i32 = 0
+static g_engine_window_mode_kind: i32 = WINDOW_MODE_WINDOWED
+static g_engine_window_mode_width: i32 = 0
+static g_engine_window_mode_height: i32 = 0
 
 attach DisplayWindow:
 
@@ -59,12 +63,32 @@ attach DisplayWindow:
         g_engine_render_stats_enabled = 0
         g_engine_frustum_culling_enabled = 0
         g_engine_current_camera_ptr = 0
+        g_engine_has_window_mode = 0
+        g_engine_window_mode_kind = WINDOW_MODE_WINDOWED
+        g_engine_window_mode_width = 0
+        g_engine_window_mode_height = 0
 
     static fun width() -> i32:
         return g_engine_width
 
     static fun height() -> i32:
         return g_engine_height
+
+    static fun set_mode(mode: WindowMode):
+        g_engine_has_window_mode = 1
+        g_engine_window_mode_kind = mode.kind
+        g_engine_window_mode_width = mode.width
+        g_engine_window_mode_height = mode.height
+        if mode.kind == WINDOW_MODE_WINDOWED:
+            if mode.width > 0:
+                g_engine_width = mode.width
+            if mode.height > 0:
+                g_engine_height = mode.height
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_window_mode(mode)
+
+    static fun mode() -> WindowMode:
+        return WindowMode(kind=g_engine_window_mode_kind, width=g_engine_window_mode_width, height=g_engine_window_mode_height)
 
 attach Properties:
 
@@ -199,6 +223,9 @@ attach Engine:
         if g_engine_runtime.ready() == 1:
             g_engine_runtime.set_render_stats(g_engine_render_stats_enabled)
             g_engine_runtime.set_instance_culling(g_engine_frustum_culling_enabled)
+            if g_engine_has_window_mode == 1:
+                mode: WindowMode = WindowMode(kind=g_engine_window_mode_kind, width=g_engine_window_mode_width, height=g_engine_window_mode_height)
+                g_engine_runtime.set_window_mode(mode)
         return g_engine_runtime.ready()
 
     static fun running() -> i32:

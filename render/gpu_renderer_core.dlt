@@ -799,6 +799,24 @@ attach GpuRendererCore:
         self.white_desc_set = Memory.read_ptr(self.tex_desc_sets + tid * 8)
         return tid
 
+    fun rebuild_texture_descriptors(self, rp: RenderPass) -> i32:
+        if self.tex_desc_sets == 0:
+            return 1
+        index: i32 = 0
+        while index < self.tex_count:
+            view: i64 = Memory.read_ptr(self.tex_views + index * 8)
+            sampler: i64 = Memory.read_ptr(self.tex_samplers + index * 8)
+            dset: i64 = rp.make_texture_descriptor(self.device, view, sampler)
+            if dset == 0:
+                return 0
+            Memory.write_ptr(self.tex_desc_sets + index * 8, dset)
+            index = index + 1
+        self.white_desc_set = 0
+        if self.white_tex_id >= 0:
+            if self.white_tex_id < self.tex_count:
+                self.white_desc_set = Memory.read_ptr(self.tex_desc_sets + self.white_tex_id * 8)
+        return 1
+
     # Assign a texture id to a mesh/instance.
     fun bind_texture(self, mesh_id: i32, tex_id: i32):
         if mesh_id < 0:

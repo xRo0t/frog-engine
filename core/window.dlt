@@ -10,6 +10,22 @@ struct AppWindow:
     handle: i64 = 0
     opened: i32 = 0
 
+struct WindowMode:
+    kind: i32 = WINDOW_MODE_WINDOWED
+    width: i32 = 0
+    height: i32 = 0
+
+attach WindowMode:
+
+    static fun windowed() -> WindowMode:
+        return WindowMode(kind=WINDOW_MODE_WINDOWED, width=0, height=0)
+
+    static fun fullscreen() -> WindowMode:
+        return WindowMode(kind=WINDOW_MODE_FULLSCREEN, width=0, height=0)
+
+    static fun borderless_fullscreen() -> WindowMode:
+        return WindowMode(kind=WINDOW_MODE_BORDERLESS_FULLSCREEN, width=0, height=0)
+
 attach AppWindow:
 
     static fun open(title: str, width: i32, height: i32) -> AppWindow:
