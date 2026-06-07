@@ -184,6 +184,7 @@
       <a href="#node3d">Node3D</a>
       <a href="#camera">Camera3D</a>
       <a href="#scene">Scene &amp; GameObject</a>
+      <a href="#physics">Physics</a>
       <a href="#environment">Environment</a>
       <a class="section">Math</a>
       <a href="#vec3">Vec3</a>
@@ -548,6 +549,8 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
         <tr><td><code>as_dynamic()</code></td><td>Marks the body as dynamic (default).</td></tr>
         <tr><td><code>as_player()</code></td><td>Marks the body as the player.</td></tr>
         <tr><td><code>with_box_collision()</code></td><td>Enables box collision.</td></tr>
+        <tr><td><code>collision_box(x, y, z)</code></td><td>Enables box collision and sets the box size in local units.</td></tr>
+        <tr><td><code>collision_offset(x, y, z)</code></td><td>Offsets the collision box from the node origin.</td></tr>
         <tr><td><code>without_collision()</code></td><td>Disables collision.</td></tr>
         <tr><td><code>set_model(model)</code></td><td>Binds a loaded <code>Model3D</code> (uploads to GPU if needed, sets <code>mesh_id</code>).</td></tr>
         <tr><td><code>set_texture(texture)</code></td><td>Dresses the node with a loaded <code>Texture2D</code>. Safe before or after <code>set_model</code>.</td></tr>
@@ -611,6 +614,49 @@ scene.add_child(camera)</code></pre>
         <tr><td><code>name()</code> / <code>set_active(v)</code> / <code>is_active()</code></td><td>Identity and enabled state.</td></tr>
         <tr><td><code>update(dt)</code> / <code>model_matrix()</code></td><td>Integrate one object / build its TRS matrix.</td></tr>
       </table>
+    </section>
+
+    <section id="physics">
+      <h2>Physics</h2>
+      <p class="lead">Lightweight gameplay helpers for scene picking, shooting, and interaction. The first pass raycasts against <code>Node3D</code> box colliders; voxel terrain or custom physics worlds stay game-owned.</p>
+
+      <h4>Collision setup</h4>
+      <pre><code>target: <span class="tok-type">Node3D</span> = Node3D.create(<span class="tok-str">"Target"</span>)
+target.position(<span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">-5.0</span>)
+target.collision_box(<span class="tok-num">1.0</span>, <span class="tok-num">2.0</span>, <span class="tok-num">1.0</span>)
+scene.add_child(target)</code></pre>
+
+      <h4>RaycastHit</h4>
+      <table>
+        <tr><th>Field / Method</th><th>Description</th></tr>
+        <tr><td><code>hit</code></td><td>1 when the ray hit a collider, otherwise 0.</td></tr>
+        <tr><td><code>distance</code></td><td>Distance from ray origin to the hit point.</td></tr>
+        <tr><td><code>point</code></td><td>World-space hit point.</td></tr>
+        <tr><td><code>normal</code></td><td>Approximate box-face normal. Zero when the ray starts inside the box.</td></tr>
+        <tr><td><code>node()</code></td><td>Returns the hit <code>Node3D</code>.</td></tr>
+      </table>
+
+      <h4>Physics</h4>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Physics.ray(origin, direction)</code></td><td>Ray3D</td><td>Builds a normalized ray.</td></tr>
+        <tr><td><code>Physics.raycast_node(node, origin, direction, max_distance)</code></td><td>RaycastHit</td><td>Tests one <code>Node3D</code> box collider.</td></tr>
+        <tr><td><code>Physics.raycast_scene(scene, origin, direction, max_distance)</code></td><td>RaycastHit</td><td>Tests scene nodes and returns the closest hit.</td></tr>
+        <tr><td><code>Physics.raycast_camera(camera, scene, max_distance)</code></td><td>RaycastHit</td><td>Builds a ray from camera position/rotation and tests the scene.</td></tr>
+      </table>
+
+      <h4>Engine.scene shortcuts</h4>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Engine.scene.raycast(origin, direction, max_distance)</code></td><td>RaycastHit</td><td>Raycasts against the active engine scene.</td></tr>
+        <tr><td><code>Engine.scene.raycast_ray(ray, max_distance)</code></td><td>RaycastHit</td><td>Raycasts an existing <code>Ray3D</code> against the active scene.</td></tr>
+        <tr><td><code>Engine.scene.raycast_camera(camera, max_distance)</code></td><td>RaycastHit</td><td>Common FPS interaction ray from the active camera.</td></tr>
+      </table>
+
+      <pre><code>hit: <span class="tok-type">RaycastHit</span> = Engine.scene.raycast_camera(camera, <span class="tok-num">8.0</span>)
+<span class="tok-kw">if</span> hit.hit == <span class="tok-num">1</span>:
+    target: <span class="tok-type">Node3D</span> = hit.node()</code></pre>
+      <div class="note">This is intentionally a gameplay helper, not a full physics solver. It does not replace game-specific terrain collision, rigid bodies, or swept character movement.</div>
     </section>
     <section id="environment">
       <h2>Environment</h2>

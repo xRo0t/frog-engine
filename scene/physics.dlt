@@ -1,0 +1,260 @@
+##############################
+# Frog - Physics Helpers
+# Lightweight scene raycasts against Node3D box collision.
+##############################
+
+struct Ray3D:
+    origin: Vec3 = Vec3()
+    direction: Vec3 = Vec3()
+
+struct RaycastHit:
+    hit: i32 = 0
+    distance: f32 = 0.0
+    point: Vec3 = Vec3()
+    normal: Vec3 = Vec3()
+    node_ptr: i64 = 0
+    mesh_id: i32 = -1
+
+struct Physics:
+    _placeholder: i32 = 0
+
+fun physics_abs_f32(v: f32) -> f32:
+    if v < 0.0:
+        return 0.0 - v
+    return v
+
+fun physics_node_world_position(node_ptr: i64) -> Vec3:
+    if node_ptr == 0:
+        return Vec3.zero()
+    node: Node = node_ptr as Node
+    x: f32 = node.pos_x
+    y: f32 = node.pos_y
+    z: f32 = node.pos_z
+    parent_ptr: i64 = node.parent_ptr
+    while parent_ptr != 0:
+        parent: Node = parent_ptr as Node
+        x = x + parent.pos_x
+        y = y + parent.pos_y
+        z = z + parent.pos_z
+        parent_ptr = parent.parent_ptr
+    return Vec3.make(x, y, z)
+
+fun physics_node_world_scale(node_ptr: i64) -> Vec3:
+    if node_ptr == 0:
+        return Vec3.one()
+    node: Node = node_ptr as Node
+    x: f32 = node.scale_x
+    y: f32 = node.scale_y
+    z: f32 = node.scale_z
+    parent_ptr: i64 = node.parent_ptr
+    while parent_ptr != 0:
+        parent: Node = parent_ptr as Node
+        x = x * parent.scale_x
+        y = y * parent.scale_y
+        z = z * parent.scale_z
+        parent_ptr = parent.parent_ptr
+    return Vec3.make(x, y, z)
+
+fun physics_make_hit(distance: f32, origin: Vec3, dir: Vec3, normal: Vec3, node: Node3D) -> RaycastHit:
+    point: Vec3 = origin.add(dir.scale(distance))
+    return RaycastHit(hit=1, distance=distance, point=point, normal=normal, node_ptr=node as i64, mesh_id=node.mesh_id)
+
+fun physics_raycast_node_box(node: Node3D, origin: Vec3, direction: Vec3, max_distance: f32) -> RaycastHit:
+    if (node as i64) == 0:
+        return RaycastHit()
+    if node.active == 0:
+        return RaycastHit()
+    if node.collision_type != 1:
+        return RaycastHit()
+    if max_distance <= 0.0:
+        return RaycastHit()
+
+    dir: Vec3 = direction.normalize()
+    if dir.length_sq() < 0.000001:
+        return RaycastHit()
+
+    center: Vec3 = physics_node_world_position(node as i64)
+    world_scale: Vec3 = physics_node_world_scale(node as i64)
+    hx: f32 = node.collision_size_x * world_scale.x * 0.5
+    hy: f32 = node.collision_size_y * world_scale.y * 0.5
+    hz: f32 = node.collision_size_z * world_scale.z * 0.5
+    if hx < 0.001:
+        hx = 0.001
+    if hy < 0.001:
+        hy = 0.001
+    if hz < 0.001:
+        hz = 0.001
+
+    cx: f32 = center.x + node.collision_offset_x * world_scale.x
+    cy: f32 = center.y + node.collision_offset_y * world_scale.y
+    cz: f32 = center.z + node.collision_offset_z * world_scale.z
+    min_x: f32 = cx - hx
+    max_x: f32 = cx + hx
+    min_y: f32 = cy - hy
+    max_y: f32 = cy + hy
+    min_z: f32 = cz - hz
+    max_z: f32 = cz + hz
+
+    t_min: f32 = 0.0
+    t_max: f32 = max_distance
+    normal: Vec3 = Vec3.zero()
+    eps: f32 = 0.00001
+
+    if physics_abs_f32(dir.x) < eps:
+        if origin.x < min_x:
+            return RaycastHit()
+        if origin.x > max_x:
+            return RaycastHit()
+    else:
+        tx1: f32 = (min_x - origin.x) / dir.x
+        tx2: f32 = (max_x - origin.x) / dir.x
+        nx: f32 = 0.0 - 1.0
+        if tx1 > tx2:
+            tmp: f32 = tx1
+            tx1 = tx2
+            tx2 = tmp
+            nx = 1.0
+        if tx1 > t_min:
+            t_min = tx1
+            normal = Vec3.make(nx, 0.0, 0.0)
+        if tx2 < t_max:
+            t_max = tx2
+        if t_min > t_max:
+            return RaycastHit()
+
+    if physics_abs_f32(dir.y) < eps:
+        if origin.y < min_y:
+            return RaycastHit()
+        if origin.y > max_y:
+            return RaycastHit()
+    else:
+        ty1: f32 = (min_y - origin.y) / dir.y
+        ty2: f32 = (max_y - origin.y) / dir.y
+        ny: f32 = 0.0 - 1.0
+        if ty1 > ty2:
+            tmp2: f32 = ty1
+            ty1 = ty2
+            ty2 = tmp2
+            ny = 1.0
+        if ty1 > t_min:
+            t_min = ty1
+            normal = Vec3.make(0.0, ny, 0.0)
+        if ty2 < t_max:
+            t_max = ty2
+        if t_min > t_max:
+            return RaycastHit()
+
+    if physics_abs_f32(dir.z) < eps:
+        if origin.z < min_z:
+            return RaycastHit()
+        if origin.z > max_z:
+            return RaycastHit()
+    else:
+        tz1: f32 = (min_z - origin.z) / dir.z
+        tz2: f32 = (max_z - origin.z) / dir.z
+        nz: f32 = 0.0 - 1.0
+        if tz1 > tz2:
+            tmp3: f32 = tz1
+            tz1 = tz2
+            tz2 = tmp3
+            nz = 1.0
+        if tz1 > t_min:
+            t_min = tz1
+            normal = Vec3.make(0.0, 0.0, nz)
+        if tz2 < t_max:
+            t_max = tz2
+        if t_min > t_max:
+            return RaycastHit()
+
+    if t_min < 0.0:
+        t_min = 0.0
+        normal = Vec3.zero()
+    if t_min > max_distance:
+        return RaycastHit()
+    return physics_make_hit(t_min, origin, dir, normal, node)
+
+fun physics_raycast_node_tree(node_ptr: i64, origin: Vec3, direction: Vec3, max_distance: f32, best: RaycastHit) -> RaycastHit:
+    if node_ptr == 0:
+        return best
+    current_best: RaycastHit = best
+    root_node: Node = node_ptr as Node
+    current_ptr: i64 = root_node.first_child_ptr
+    while current_ptr != 0:
+        node: Node = current_ptr as Node
+        if node.active == 1:
+            can_test: i32 = 0
+            if node.kind == 2:
+                can_test = 1
+            if node.kind == 3:
+                can_test = 1
+            if can_test == 1:
+                candidate: RaycastHit = physics_raycast_node_box(current_ptr as Node3D, origin, direction, max_distance)
+                if candidate.hit == 1:
+                    if current_best.hit == 0:
+                        current_best = candidate
+                    elif candidate.distance < current_best.distance:
+                        current_best = candidate
+
+            child_ptr: i64 = node.first_child_ptr
+            while child_ptr != 0:
+                child_node: Node = child_ptr as Node
+                child_can_test: i32 = 0
+                if child_node.kind == 2:
+                    child_can_test = 1
+                if child_node.kind == 3:
+                    child_can_test = 1
+                if child_node.active == 1:
+                    if child_can_test == 1:
+                        child_candidate: RaycastHit = physics_raycast_node_box(child_ptr as Node3D, origin, direction, max_distance)
+                        if child_candidate.hit == 1:
+                            if current_best.hit == 0:
+                                current_best = child_candidate
+                            elif child_candidate.distance < current_best.distance:
+                                current_best = child_candidate
+                child_ptr = child_node.next_sibling_ptr
+        current_ptr = node.next_sibling_ptr
+    return current_best
+
+attach Ray3D:
+
+    static fun create(origin: Vec3, direction: Vec3) -> Ray3D:
+        return Ray3D(origin=origin, direction=direction.normalize())
+
+    static fun from_camera(camera: Camera3D) -> Ray3D:
+        yaw: f32 = deg2rad(camera.rot_y)
+        pitch: f32 = deg2rad(camera.rot_x)
+        cp: f32 = @cos(pitch)
+        dir: Vec3 = Vec3.make((0.0 - @sin(yaw)) * cp, @sin(pitch), (0.0 - @cos(yaw)) * cp)
+        return Ray3D.create(Vec3.make(camera.pos_x, camera.pos_y, camera.pos_z), dir)
+
+attach RaycastHit:
+
+    static fun miss() -> RaycastHit:
+        return RaycastHit()
+
+    fun node(self) -> Node3D:
+        return self.node_ptr as Node3D
+
+attach Physics:
+
+    static fun ray(origin: Vec3, direction: Vec3) -> Ray3D:
+        return Ray3D.create(origin, direction)
+
+    static fun raycast_node(node: Node3D, origin: Vec3, direction: Vec3, max_distance: f32) -> RaycastHit:
+        return physics_raycast_node_box(node, origin, direction, max_distance)
+
+    static fun raycast_ray_node(ray: Ray3D, node: Node3D, max_distance: f32) -> RaycastHit:
+        return physics_raycast_node_box(node, ray.origin, ray.direction, max_distance)
+
+    static fun raycast_scene(scene: Scene, origin: Vec3, direction: Vec3, max_distance: f32) -> RaycastHit:
+        if max_distance <= 0.0:
+            return RaycastHit()
+        root: RootNode = scene.root()
+        return physics_raycast_node_tree(root as i64, origin, direction, max_distance, RaycastHit())
+
+    static fun raycast_ray_scene(ray: Ray3D, scene: Scene, max_distance: f32) -> RaycastHit:
+        return Physics.raycast_scene(scene, ray.origin, ray.direction, max_distance)
+
+    static fun raycast_camera(camera: Camera3D, scene: Scene, max_distance: f32) -> RaycastHit:
+        ray: Ray3D = Ray3D.from_camera(camera)
+        return Physics.raycast_ray_scene(ray, scene, max_distance)

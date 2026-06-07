@@ -211,6 +211,24 @@ attach EngineScene:
             return g_engine_current_camera_ptr as Camera3D
         return g_engine_scene.camera()
 
+    static fun current() -> Scene:
+        return g_engine_scene
+
+    static fun raycast(origin: Vec3, direction: Vec3, max_distance: f32) -> RaycastHit:
+        if g_engine_has_scene == 0:
+            return RaycastHit.miss()
+        return Physics.raycast_scene(g_engine_scene, origin, direction, max_distance)
+
+    static fun raycast_ray(ray: Ray3D, max_distance: f32) -> RaycastHit:
+        if g_engine_has_scene == 0:
+            return RaycastHit.miss()
+        return Physics.raycast_ray_scene(ray, g_engine_scene, max_distance)
+
+    static fun raycast_camera(camera: Camera3D, max_distance: f32) -> RaycastHit:
+        if g_engine_has_scene == 0:
+            return RaycastHit.miss()
+        return Physics.raycast_camera(camera, g_engine_scene, max_distance)
+
     static fun destroy():
         Engine.destroy_scene()
 

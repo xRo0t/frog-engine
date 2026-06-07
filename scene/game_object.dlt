@@ -87,13 +87,21 @@ attach Scene:
 
     fun add_child(self, child: Node3D):
         root: RootNode = self.root()
-        root.add_child(child as i64)
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = root as i64
+        child.next_sibling_ptr = root.first_child_ptr
+        root.first_child_ptr = child as i64
         if self.active_camera_ptr == 0:
             self.resolve_camera()
 
     fun add_child(self, child: Camera3D):
         root: RootNode = self.root()
-        root.add_child(child as i64)
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = root as i64
+        child.next_sibling_ptr = root.first_child_ptr
+        root.first_child_ptr = child as i64
         if self.active_camera_ptr == 0:
             self.set_camera(child)
 

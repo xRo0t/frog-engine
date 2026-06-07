@@ -28,6 +28,12 @@ struct Node:
 @heap struct Node3D extends Node:
     body_type: i32 = 0
     collision_type: i32 = 0
+    collision_size_x: f32 = 1.0
+    collision_size_y: f32 = 1.0
+    collision_size_z: f32 = 1.0
+    collision_offset_x: f32 = 0.0
+    collision_offset_y: f32 = 0.0
+    collision_offset_z: f32 = 0.0
     velocity_x: f32 = 0.0
     velocity_y: f32 = 0.0
     velocity_z: f32 = 0.0
@@ -188,6 +194,19 @@ attach Node3D:
         self.collision_type = 1
         return self
 
+    fun collision_box(self, x: f32, y: f32, z: f32) -> Node3D:
+        self.collision_type = 1
+        self.collision_size_x = x
+        self.collision_size_y = y
+        self.collision_size_z = z
+        return self
+
+    fun collision_offset(self, x: f32, y: f32, z: f32) -> Node3D:
+        self.collision_offset_x = x
+        self.collision_offset_y = y
+        self.collision_offset_z = z
+        return self
+
     fun without_collision(self) -> Node3D:
         self.collision_type = 0
         return self
@@ -314,6 +333,12 @@ fun node3d_create(name: str) -> Node3D:
     node.scale_z = 1.0
     node.body_type = 0
     node.collision_type = 0
+    node.collision_size_x = 1.0
+    node.collision_size_y = 1.0
+    node.collision_size_z = 1.0
+    node.collision_offset_x = 0.0
+    node.collision_offset_y = 0.0
+    node.collision_offset_z = 0.0
     node.velocity_x = 0.0
     node.velocity_y = 0.0
     node.velocity_z = 0.0
@@ -341,6 +366,12 @@ fun camera3d_create(name: str) -> Camera3D:
     node.scale_z = 1.0
     node.body_type = 0
     node.collision_type = 0
+    node.collision_size_x = 1.0
+    node.collision_size_y = 1.0
+    node.collision_size_z = 1.0
+    node.collision_offset_x = 0.0
+    node.collision_offset_y = 0.0
+    node.collision_offset_z = 0.0
     node.velocity_x = 0.0
     node.velocity_y = 0.0
     node.velocity_z = 0.0
