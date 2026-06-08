@@ -15,6 +15,12 @@ struct RaycastHit:
     node_ptr: i64 = 0
     mesh_id: i32 = -1
 
+@heap struct Raycast3D extends Node3D:
+    enabled: i32 = 1
+    max_distance: f32 = 10.0
+    last_hit: RaycastHit = RaycastHit()
+    updated_frame: i32 = -1
+
 struct Physics:
     _placeholder: i32 = 0
 
@@ -54,6 +60,28 @@ fun physics_node_world_scale(node_ptr: i64) -> Vec3:
         z = z * parent.scale_z
         parent_ptr = parent.parent_ptr
     return Vec3.make(x, y, z)
+
+fun physics_node_world_rotation(node_ptr: i64) -> Vec3:
+    if node_ptr == 0:
+        return Vec3.zero()
+    node: Node = node_ptr as Node
+    x: f32 = node.rot_x
+    y: f32 = node.rot_y
+    z: f32 = node.rot_z
+    parent_ptr: i64 = node.parent_ptr
+    while parent_ptr != 0:
+        parent: Node = parent_ptr as Node
+        x = x + parent.rot_x
+        y = y + parent.rot_y
+        z = z + parent.rot_z
+        parent_ptr = parent.parent_ptr
+    return Vec3.make(x, y, z)
+
+fun physics_direction_from_rotation(rotation: Vec3) -> Vec3:
+    yaw: f32 = deg2rad(rotation.y)
+    pitch: f32 = deg2rad(rotation.x)
+    cp: f32 = @cos(pitch)
+    return Vec3.make((0.0 - @sin(yaw)) * cp, @sin(pitch), (0.0 - @cos(yaw)) * cp).normalize()
 
 fun physics_make_hit(distance: f32, origin: Vec3, dir: Vec3, normal: Vec3, node: Node3D) -> RaycastHit:
     point: Vec3 = origin.add(dir.scale(distance))
@@ -221,10 +249,7 @@ attach Ray3D:
         return Ray3D(origin=origin, direction=direction.normalize())
 
     static fun from_camera(camera: Camera3D) -> Ray3D:
-        yaw: f32 = deg2rad(camera.rot_y)
-        pitch: f32 = deg2rad(camera.rot_x)
-        cp: f32 = @cos(pitch)
-        dir: Vec3 = Vec3.make((0.0 - @sin(yaw)) * cp, @sin(pitch), (0.0 - @cos(yaw)) * cp)
+        dir: Vec3 = physics_direction_from_rotation(Vec3.make(camera.rot_x, camera.rot_y, camera.rot_z))
         return Ray3D.create(Vec3.make(camera.pos_x, camera.pos_y, camera.pos_z), dir)
 
 attach RaycastHit:
@@ -234,6 +259,164 @@ attach RaycastHit:
 
     fun node(self) -> Node3D:
         return self.node_ptr as Node3D
+
+fun raycast3d_create(name: str) -> Raycast3D:
+    node: Raycast3D = Raycast3D()
+    node.id = -1
+    node.name = name
+    node.active = 1
+    node.kind = 4
+    node.parent_ptr = 0
+    node.first_child_ptr = 0
+    node.next_sibling_ptr = 0
+    node.mesh_id = -1
+    node.pos_x = 0.0
+    node.pos_y = 0.0
+    node.pos_z = 0.0
+    node.rot_x = 0.0
+    node.rot_y = 0.0
+    node.rot_z = 0.0
+    node.scale_x = 1.0
+    node.scale_y = 1.0
+    node.scale_z = 1.0
+    node.body_type = 0
+    node.collision_type = 0
+    node.collision_size_x = 1.0
+    node.collision_size_y = 1.0
+    node.collision_size_z = 1.0
+    node.collision_offset_x = 0.0
+    node.collision_offset_y = 0.0
+    node.collision_offset_z = 0.0
+    node.velocity_x = 0.0
+    node.velocity_y = 0.0
+    node.velocity_z = 0.0
+    node.mass = 1.0
+    node.texture_id = -1
+    node.enabled = 1
+    node.max_distance = 10.0
+    node.last_hit = RaycastHit.miss()
+    node.updated_frame = -1
+    return node
+
+attach Raycast3D:
+
+    static fun create(name: str) -> Raycast3D:
+        return raycast3d_create(name)
+
+    fun position(self, x: f32, y: f32, z: f32) -> Raycast3D:
+        self.pos_x = x
+        self.pos_y = y
+        self.pos_z = z
+        return self
+
+    fun rotation(self, x: f32, y: f32, z: f32) -> Raycast3D:
+        self.rot_x = x
+        self.rot_y = y
+        self.rot_z = z
+        return self
+
+    fun set_enabled(self, enabled: i32) -> Raycast3D:
+        if enabled == 0:
+            self.enabled = 0
+        else:
+            self.enabled = 1
+        return self
+
+    fun set_max_distance(self, distance: f32) -> Raycast3D:
+        if distance <= 0.0:
+            self.max_distance = 0.0
+            return self
+        self.max_distance = distance
+        return self
+
+    fun ray(self) -> Ray3D:
+        origin: Vec3 = physics_node_world_position(self as i64)
+        rotation: Vec3 = physics_node_world_rotation(self as i64)
+        direction: Vec3 = physics_direction_from_rotation(rotation)
+        return Ray3D.create(origin, direction)
+
+    fun force_update(self) -> Raycast3D:
+        self.updated_frame = Engine.frame_count()
+        if self.enabled == 0:
+            self.last_hit = RaycastHit.miss()
+            return self
+        if self.max_distance <= 0.0:
+            self.last_hit = RaycastHit.miss()
+            return self
+        scene: Scene = Engine.scene.current()
+        self.last_hit = Physics.raycast_ray_scene(self.ray(), scene, self.max_distance)
+        return self
+
+    fun refresh(self) -> Raycast3D:
+        frame: i32 = Engine.frame_count()
+        if self.updated_frame == frame:
+            return self
+        return self.force_update()
+
+    fun update(self) -> Raycast3D:
+        return self.force_update()
+
+    fun update_scene(self, scene: Scene) -> Raycast3D:
+        self.updated_frame = Engine.frame_count()
+        if self.enabled == 0:
+            self.last_hit = RaycastHit.miss()
+            return self
+        if self.max_distance <= 0.0:
+            self.last_hit = RaycastHit.miss()
+            return self
+        self.last_hit = Physics.raycast_ray_scene(self.ray(), scene, self.max_distance)
+        return self
+
+    fun is_colliding(self) -> i32:
+        self.refresh()
+        return self.last_hit.hit
+
+    fun hit(self) -> RaycastHit:
+        self.refresh()
+        return self.last_hit
+
+    fun collider(self) -> Node3D:
+        self.refresh()
+        return self.last_hit.node()
+
+    fun hit_point(self) -> Vec3:
+        self.refresh()
+        return self.last_hit.point
+
+    fun hit_normal(self) -> Vec3:
+        self.refresh()
+        return self.last_hit.normal
+
+    fun destroy(self):
+        node_destroy(self as i64)
+
+attach Node3D:
+
+    fun add_child(self, child: Raycast3D):
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = self as i64
+        child.next_sibling_ptr = self.first_child_ptr
+        self.first_child_ptr = child as i64
+
+attach Camera3D:
+
+    fun add_child(self, child: Raycast3D):
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = self as i64
+        child.next_sibling_ptr = self.first_child_ptr
+        self.first_child_ptr = child as i64
+
+attach Scene:
+
+    fun add_child(self, child: Raycast3D):
+        root: RootNode = self.root()
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = root as i64
+        child.next_sibling_ptr = root.first_child_ptr
+        root.first_child_ptr = child as i64
 
 attach Physics:
 

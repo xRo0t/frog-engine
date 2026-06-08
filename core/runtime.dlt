@@ -75,6 +75,9 @@ attach EngineRuntime:
     fun begin_frame_limited(self, target_fps: i32) -> f32:
         return self.app.begin_frame_limited(target_fps)
 
+    fun frame_count(self) -> i32:
+        return self.app.frame_count()
+
     fun capture_mouse(self):
         self.app.capture_mouse()
 
@@ -102,8 +105,14 @@ attach EngineRuntime:
     fun upload_plane_mesh(self) -> i32:
         return self.renderer.upload_plane_mesh()
 
+    fun upload_colored_plane_mesh(self, color: Color) -> i32:
+        return self.renderer.upload_colored_plane_mesh(color)
+
     fun upload_cube_mesh(self) -> i32:
         return self.renderer.upload_cube_mesh()
+
+    fun upload_colored_cube_mesh(self, color: Color) -> i32:
+        return self.renderer.upload_colored_cube_mesh(color)
 
     fun upload_model_mesh(self, model: Model3D) -> i32:
         return self.renderer.upload_model_mesh(model)

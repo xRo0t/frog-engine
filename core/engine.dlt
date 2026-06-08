@@ -252,11 +252,22 @@ attach Engine:
     static fun begin_frame() -> f32:
         return g_engine_runtime.begin_frame_limited(g_engine_target_fps)
 
+    static fun frame_count() -> i32:
+        if g_engine_runtime.ready() == 0:
+            return 0
+        return g_engine_runtime.frame_count()
+
     static fun upload_plane_mesh() -> i32:
         return g_engine_runtime.upload_plane_mesh()
 
+    static fun upload_colored_plane_mesh(color: Color) -> i32:
+        return g_engine_runtime.upload_colored_plane_mesh(color)
+
     static fun upload_cube_mesh() -> i32:
         return g_engine_runtime.upload_cube_mesh()
+
+    static fun upload_colored_cube_mesh(color: Color) -> i32:
+        return g_engine_runtime.upload_colored_cube_mesh(color)
 
     static fun upload_model_mesh(model: Model3D) -> i32:
         return g_engine_runtime.upload_model_mesh(model)

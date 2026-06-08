@@ -31,6 +31,8 @@ load frog/assets/assets
 load frog/scene/environment
 load frog/scene/node
 load frog/scene/game_object
+load frog/scene/material3d
+load frog/scene/mesh3d
 load frog/scene/physics
 
 # Phase 3.5: Early software rendering
@@ -59,7 +61,7 @@ export Vec3, Mat4, Quat, Color, Spring
 export clamp, lerp, damp, min_f32, max_f32, deg2rad, rad2deg
 export normalize_angle_deg, lerp_angle_deg, yaw_from_dir
 export rand01, rand_range, approx_atan, approx_atan2
-export Clock, AppWindow, WindowMode, App, Engine, EngineMouse, GpuPreference, Input
+export Clock, Timer, AppWindow, WindowMode, App, Engine, EngineMouse, GpuPreference, Input
 export KEY_A, KEY_D, KEY_E, KEY_F, KEY_G, KEY_M, KEY_Q, KEY_S, KEY_W
 export KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN
 export KEY_ESCAPE, KEY_SPACE, KEY_SHIFT, KEY_CTRL
@@ -68,9 +70,9 @@ export Assets, AssetModels, AssetTextures, AssetAudio, AssetShaders
 export Model3D, Texture2D, AudioClip, Shader
 export GpuTexture, TextureSpec, GpuMeshData
 export Environment, Fog
-export Node, Node3D, Camera3D, RootNode
+export Node, Node3D, Mesh3D, Mesh3DShape, Material3D, Camera3D, RootNode
 export node3d_create, camera3d_create, root_node_create
 export Scene, GameObject, ObjectBench
-export Ray3D, RaycastHit, Physics
+export Ray3D, RaycastHit, Raycast3D, Physics
 export SoftwareRenderer
 export init_engine_timer, engine_time_seconds

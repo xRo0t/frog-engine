@@ -45,6 +45,12 @@ struct Clock:
     elapsed: f32 = 0.0
     frame_count: i32 = 0
 
+struct Timer:
+    duration: f32 = 0.0
+    elapsed: f32 = 0.0
+    repeat: i32 = 0
+    running: i32 = 1
+
 attach Clock:
 
     static fun start() -> Clock:
@@ -66,3 +72,71 @@ attach Clock:
         self.dt = 0.0
         self.elapsed = 0.0
         self.frame_count = 0
+
+attach Timer:
+
+    static fun create(duration: f32) -> Timer:
+        return Timer(duration=duration, elapsed=0.0, repeat=0, running=1)
+
+    static fun every(duration: f32) -> Timer:
+        return Timer(duration=duration, elapsed=0.0, repeat=1, running=1)
+
+    fun start(self) -> Timer:
+        self.running = 1
+        return self
+
+    fun stop(self) -> Timer:
+        self.running = 0
+        return self
+
+    fun reset(self) -> Timer:
+        self.elapsed = 0.0
+        self.running = 1
+        return self
+
+    fun set_duration(self, duration: f32) -> Timer:
+        self.duration = duration
+        return self
+
+    fun set_repeat(self, repeat: i32) -> Timer:
+        if repeat == 0:
+            self.repeat = 0
+        else:
+            self.repeat = 1
+        return self
+
+    fun tick(self, dt: f32) -> i32:
+        if self.running == 0:
+            return 0
+        if self.duration <= 0.0:
+            if self.repeat == 0:
+                self.running = 0
+            return 1
+        self.elapsed = self.elapsed + dt
+        if self.elapsed < self.duration:
+            return 0
+        if self.repeat == 1:
+            self.elapsed = self.elapsed - self.duration
+            if self.elapsed < 0.0:
+                self.elapsed = 0.0
+        else:
+            self.elapsed = self.duration
+            self.running = 0
+        return 1
+
+    fun done(self) -> i32:
+        if self.duration <= 0.0:
+            return 1
+        if self.elapsed >= self.duration:
+            return 1
+        return 0
+
+    fun progress(self) -> f32:
+        if self.duration <= 0.0:
+            return 1.0
+        p: f32 = self.elapsed / self.duration
+        if p < 0.0:
+            return 0.0
+        if p > 1.0:
+            return 1.0
+        return p

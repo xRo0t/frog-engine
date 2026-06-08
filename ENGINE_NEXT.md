@@ -71,12 +71,15 @@ inside a single game project.
      collisions. Voxel-specific terrain collision stays in the game project.
    - Current API:
      ```dolet
-     target: Node3D = Node3D.create("Target").collision_box(1.0, 2.0, 1.0)
-     hit: RaycastHit = Engine.scene.raycast_camera(camera, 8.0)
-     if hit.hit == 1:
-         node: Node3D = hit.node()
+     raycast: Raycast3D = Raycast3D.create("InteractRay")
+     raycast.set_max_distance(8.0)
+     camera.add_child(raycast)
+
+     if raycast.is_colliding() == 1:
+         node: Node3D = raycast.collider()
      ```
-   - Current scope: `Node3D` box colliders, scene raycasts, camera raycasts.
+   - Current scope: `Node3D` box colliders, reusable `Raycast3D` nodes,
+     scene raycasts, and camera-ray convenience helpers.
    - Still future work: swept collision, rigid bodies, layers/masks, and
      game-specific terrain adapters.
 

@@ -1,0 +1,114 @@
+##############################
+# Frog - Material3D
+# High-level material descriptor for renderable 3D nodes.
+##############################
+
+struct Material3D:
+    color: Color = Color()
+    albedo: Texture2D = Texture2D()
+    normal_map: Texture2D = Texture2D()
+    roughness_map: Texture2D = Texture2D()
+    metallic_map: Texture2D = Texture2D()
+    shader: Shader = Shader()
+    has_albedo: i32 = 0
+    has_normal_map: i32 = 0
+    has_roughness_map: i32 = 0
+    has_metallic_map: i32 = 0
+    has_shader: i32 = 0
+    metallic: f32 = 0.0
+    roughness: f32 = 1.0
+    alpha: f32 = 1.0
+    unlit: i32 = 0
+    double_sided: i32 = 0
+
+attach Material3D:
+
+    static fun create() -> Material3D:
+        mat: Material3D = Material3D()
+        mat.color = Color.white()
+        mat.alpha = 1.0
+        mat.metallic = 0.0
+        mat.roughness = 1.0
+        return mat
+
+    static fun colored(color: Color) -> Material3D:
+        mat: Material3D = Material3D.create()
+        return mat.set_color(color)
+
+    static fun textured(texture: Texture2D) -> Material3D:
+        mat: Material3D = Material3D.create()
+        return mat.set_texture(texture)
+
+    fun set_color(self, color: Color) -> Material3D:
+        self.color = color
+        self.alpha = color.a
+        return self
+
+    fun set_alpha(self, alpha: f32) -> Material3D:
+        self.alpha = alpha
+        self.color = self.color.with_alpha(alpha)
+        return self
+
+    fun set_texture(self, texture: Texture2D) -> Material3D:
+        return self.set_albedo(texture)
+
+    fun set_albedo(self, texture: Texture2D) -> Material3D:
+        self.albedo = texture
+        self.has_albedo = 0
+        if texture.texture_id >= 0:
+            self.has_albedo = 1
+        return self
+
+    fun clear_texture(self) -> Material3D:
+        self.albedo = Texture2D()
+        self.has_albedo = 0
+        return self
+
+    fun set_normal_map(self, texture: Texture2D) -> Material3D:
+        self.normal_map = texture
+        self.has_normal_map = 0
+        if texture.texture_id >= 0:
+            self.has_normal_map = 1
+        return self
+
+    fun set_roughness_map(self, texture: Texture2D) -> Material3D:
+        self.roughness_map = texture
+        self.has_roughness_map = 0
+        if texture.texture_id >= 0:
+            self.has_roughness_map = 1
+        return self
+
+    fun set_metallic_map(self, texture: Texture2D) -> Material3D:
+        self.metallic_map = texture
+        self.has_metallic_map = 0
+        if texture.texture_id >= 0:
+            self.has_metallic_map = 1
+        return self
+
+    fun set_shader(self, shader: Shader) -> Material3D:
+        self.shader = shader
+        self.has_shader = 0
+        if shader.found == 1:
+            self.has_shader = 1
+        return self
+
+    fun set_metallic(self, value: f32) -> Material3D:
+        self.metallic = clamp(value, 0.0, 1.0)
+        return self
+
+    fun set_roughness(self, value: f32) -> Material3D:
+        self.roughness = clamp(value, 0.0, 1.0)
+        return self
+
+    fun set_surface(self, metallic: f32, roughness: f32) -> Material3D:
+        self.metallic = clamp(metallic, 0.0, 1.0)
+        self.roughness = clamp(roughness, 0.0, 1.0)
+        return self
+
+    fun set_unlit(self, enabled: i32) -> Material3D:
+        self.unlit = enabled
+        return self
+
+    fun set_double_sided(self, enabled: i32) -> Material3D:
+        self.double_sided = enabled
+        return self

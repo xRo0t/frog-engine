@@ -285,6 +285,32 @@ fun gpu_make_cube_vertices() -> i64:
     off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 0.0, 1.0, 1.0, 0.0, 0.0)
     return buf
 
+fun gpu_make_colored_cube_vertices(color: Color) -> i64:
+    buf: i64 = gpu_make_cube_vertices()
+    if buf == 0:
+        return 0
+    i: i32 = 0
+    off: i64 = 0
+    while i < 36:
+        Memory.write_f32(buf + off + 12, color.r)
+        Memory.write_f32(buf + off + 16, color.g)
+        Memory.write_f32(buf + off + 20, color.b)
+        off = off + 32
+        i = i + 1
+    return buf
+fun gpu_make_colored_plane_vertices(color: Color) -> i64:
+    buf: i64 = gpu_make_plane_vertices()
+    if buf == 0:
+        return 0
+    i: i32 = 0
+    off: i64 = 0
+    while i < 6:
+        Memory.write_f32(buf + off + 12, color.r)
+        Memory.write_f32(buf + off + 16, color.g)
+        Memory.write_f32(buf + off + 20, color.b)
+        off = off + 32
+        i = i + 1
+    return buf
 fun gpu_make_plane_vertices() -> i64:
     buf: i64 = Memory.malloc_zeroed(192)
     if buf == 0:

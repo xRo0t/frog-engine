@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Frog Engine — API Reference</title>
+<title>Frog Engine - Guide & API Reference</title>
 <style>
   :root {
     --bg: #0e1116;
@@ -25,6 +25,25 @@
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
+  html {
+    scrollbar-width: thin;
+    scrollbar-color: #4b5568 #0c1016;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0c1016;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #3a4352;
+    border: 2px solid #0c1016;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #586274;
+  }
   body {
     margin: 0;
     font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -49,6 +68,21 @@
     height: 100vh;
     overflow-y: auto;
     padding: 24px 0;
+    scrollbar-width: thin;
+    scrollbar-color: #334155 var(--bg-alt);
+  }
+  .sidebar::-webkit-scrollbar { width: 8px; }
+  .sidebar::-webkit-scrollbar-track {
+    background: var(--bg-alt);
+    border-left: 1px solid var(--border);
+  }
+  .sidebar::-webkit-scrollbar-thumb {
+    background: #334155;
+    border: 2px solid var(--bg-alt);
+    border-radius: 999px;
+  }
+  .sidebar::-webkit-scrollbar-thumb:hover {
+    background: #475569;
   }
   .sidebar .brand {
     display: flex; align-items: center; gap: 10px;
@@ -171,17 +205,22 @@
     <nav>
       <a class="section">Getting Started</a>
       <a href="#overview">Overview</a>
+      <a href="#mental-model">Mental Model</a>
       <a href="#install">Project Setup</a>
       <a href="#quickstart">Quick Start</a>
+      <a href="#first-object">First Object</a>
       <a href="#gameloop">The Game Loop</a>
       <a class="section">Core API</a>
       <a href="#engine">Engine</a>
+      <a href="#timer">Time &amp; Timer</a>
       <a href="#window">Window &amp; Properties</a>
       <a href="#assets">Assets</a>
       <a href="#input">Input</a>
       <a class="section">Scene Graph</a>
       <a href="#nodes">Nodes</a>
       <a href="#node3d">Node3D</a>
+      <a href="#material3d">Material3D</a>
+      <a href="#mesh3d">Mesh3D</a>
       <a href="#camera">Camera3D</a>
       <a href="#scene">Scene &amp; GameObject</a>
       <a href="#physics">Physics</a>
@@ -193,8 +232,10 @@
       <a href="#color">Color</a>
       <a href="#mathutils">Math Utils</a>
       <a class="section">Guides</a>
+      <a href="#materials-guide">Materials</a>
       <a href="#textures">Textures</a>
       <a href="#viewmodel">Viewmodels</a>
+      <a href="#performance">Performance Rules</a>
       <a href="#build">Building &amp; -O</a>
     </nav>
   </aside>
@@ -212,15 +253,31 @@
     </div>
     <section id="overview">
       <h2>Overview</h2>
-      <p class="lead">Frog is a classic object-oriented 3D engine. Every object in the world is a <code>Node</code> in a scene graph, and you drive the whole thing through a small static <code>Engine</code> facade. The Vulkan backend, swapchain, and descriptor plumbing stay hidden &mdash; you work with cameras, models, transforms, and textures.</p>
+      <p class="lead">Frog is a classic object-oriented 3D engine. Every object in the world is a <code>Node</code> in a scene graph, and you drive the whole thing through a small static <code>Engine</code> facade. The Vulkan backend, swapchain, and descriptor plumbing stay hidden; you work with scenes, cameras, meshes, materials, transforms, and textures.</p>
       <div class="cards">
-        <div class="card"><h4>Engine</h4><p>Static lifecycle: window, frames, meshes, textures, camera rendering.</p></div>
-        <div class="card"><h4>Assets</h4><p>Load models (glTF/glb), textures (PNG), audio, and shaders from a mounted root.</p></div>
-        <div class="card"><h4>Scene</h4><p>Node tree with Node3D, Camera3D, transforms, parenting, and collision flags.</p></div>
+        <div class="card"><h4>Engine</h4><p>Window, lifecycle, frame timing, rendering, GPU selection, and debug flags.</p></div>
+        <div class="card"><h4>Scene</h4><p>The active world. It owns a node tree, an active camera, and an environment.</p></div>
+        <div class="card"><h4>Mesh3D</h4><p>A visible node: transform, built-in shape, material, texture, and collision helpers.</p></div>
+        <div class="card"><h4>Material3D</h4><p>Reusable surface data: color, texture, alpha, roughness, metallic, and future shader data.</p></div>
+        <div class="card"><h4>Assets</h4><p>Load models, textures, audio, and shaders from a mounted game-owned root.</p></div>
         <div class="card"><h4>Math</h4><p>Vec3, Mat4, Quat, Color plus angle / rng / clamp helpers.</p></div>
       </div>
       <p>Bring everything into scope with a single import:</p>
       <pre><code><span class="tok-kw">import</span> frog</code></pre>
+    </section>
+
+    <section id="mental-model">
+      <h2>Mental Model</h2>
+      <p class="lead">Think in layers. The game owns code and assets. Frog owns reusable engine objects. The renderer stays behind the <code>Engine</code> facade unless you explicitly choose a low-level path.</p>
+      <table>
+        <tr><th>Layer</th><th>You write</th><th>Purpose</th></tr>
+        <tr><td>Application</td><td><code>Engine.window.create(...)</code>, <code>Engine.start()</code>, loop</td><td>Boot and drive the native game executable.</td></tr>
+        <tr><td>World</td><td><code>Scene.create()</code>, <code>scene.set_environment(env)</code></td><td>Own the active world, camera, and node tree.</td></tr>
+        <tr><td>Objects</td><td><code>Node3D</code>, <code>Mesh3D</code>, <code>Camera3D</code>, <code>Raycast3D</code></td><td>Represent things that exist in the scene.</td></tr>
+        <tr><td>Resources</td><td><code>Material3D</code>, <code>Texture2D</code>, <code>Model3D</code>, <code>Shader</code></td><td>Reusable data shared by one or many objects.</td></tr>
+        <tr><td>Low level</td><td><code>Engine.upload_model_mesh</code>, <code>Engine.register_instance</code></td><td>Optional path for high-count rendering and special systems.</td></tr>
+      </table>
+      <div class="note"><strong>Default path.</strong> New games should start with <code>Scene</code> + <code>Mesh3D</code> + <code>Material3D</code>. Drop to raw mesh ids only when you are building a performance system such as instancing, terrain chunks, particles, or a viewmodel.</div>
     </section>
 
     <section id="install">
@@ -242,14 +299,12 @@
 
     <section id="quickstart">
       <h2>Quick Start</h2>
-      <p class="lead">A complete minimal scene: a window, a ground plane, one model, and a camera.</p>
+      <p class="lead">A complete minimal scene with no external assets: one camera, one floor, one cube, and a render loop.</p>
       <pre><code><span class="tok-kw">import</span> std
 <span class="tok-kw">import</span> frog
 
-<span class="tok-com"># 1. Configure the window before starting</span>
+<span class="tok-com"># 1. Configure before Engine.start()</span>
 Engine.window.create(<span class="tok-str">"My Game"</span>, <span class="tok-num">1280</span>, <span class="tok-num">720</span>)
-<span class="tok-com"># Optional: switch display mode. Windowed size comes from create(...).</span>
-<span class="tok-com"># Engine.window.set_mode(WindowMode.fullscreen())</span>
 Engine.properties.set_vsync(<span class="tok-num">0</span>)
 Engine.properties.set_target_fps(<span class="tok-num">0</span>)
 Engine.properties.set_render_scale(<span class="tok-num">1.0</span>)
@@ -257,52 +312,93 @@ Engine.properties.set_gpu_preference(GpuPreference.auto())
 Engine.properties.set_frustum_culling(<span class="tok-num">1</span>)
 Engine.debug.render_stats(<span class="tok-num">1</span>)
 
-<span class="tok-com"># 2. Mount assets and build a scene</span>
-Assets.mount(<span class="tok-str">"assets"</span>)
+<span class="tok-com"># 2. Build the scene</span>
 scene: <span class="tok-type">Scene</span> = Scene.create()
 
 env: <span class="tok-type">Environment</span> = Environment.create()
 env.set_clear_color(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>))
-env.set_fog(Fog.minecraft(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>), <span class="tok-num">480.0</span>))
+env.set_fog(Fog.minecraft(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>), <span class="tok-num">240.0</span>))
 scene.set_environment(env)
 
-actor: <span class="tok-type">Node3D</span> = Node3D.create(<span class="tok-str">"Actor"</span>)
-actor_model: <span class="tok-type">Model3D</span> = Assets.models.load(<span class="tok-str">"models/actor.gltf"</span>)
 camera: <span class="tok-type">Camera3D</span> = Camera3D.create(<span class="tok-str">"Camera"</span>)
-ground: <span class="tok-type">Node3D</span> = Node3D.create(<span class="tok-str">"Ground"</span>)
-
-<span class="tok-com"># 3. Configure nodes (chainable)</span>
-actor.position(<span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0.0</span>)
-actor.set_model(actor_model)
-camera.position(<span class="tok-num">0.0</span>, <span class="tok-num">2.0</span>, <span class="tok-num">6.0</span>)
-camera.rotation(<span class="tok-num">0.0</span> - <span class="tok-num">12.0</span>, <span class="tok-num">180.0</span>, <span class="tok-num">0.0</span>)
+camera.position(<span class="tok-num">0.0</span>, <span class="tok-num">3.0</span>, <span class="tok-num">8.0</span>)
+camera.rotation(<span class="tok-num">0.0</span> - <span class="tok-num">18.0</span>, <span class="tok-num">180.0</span>, <span class="tok-num">0.0</span>)
 camera.set_fov(<span class="tok-num">82.0</span>)
-ground.as_static()
-ground.with_box_collision()
-ground.scale(<span class="tok-num">800.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">800.0</span>)
+scene.add_child(camera)
 
-<span class="tok-com"># 4. Build the tree and hand it to the engine</span>
-actor.add_child(camera)
-scene.add_child(actor)
-scene.add_child(ground)
-Engine.scene.set(scene)</code></pre>
-      <div class="note"><strong>Method chaining.</strong> Node setters such as <code>position</code>, <code>rotation</code>, <code>scale</code>, and <code>set_model</code> return the node, so you can chain them: <code>actor.position(0,1,0).scale(2,2,2)</code>.</div>
+floor_mat: <span class="tok-type">Material3D</span> = Material3D.colored(Color.rgb(<span class="tok-num">0.18</span>, <span class="tok-num">0.45</span>, <span class="tok-num">0.22</span>))
+floor: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Floor"</span>)
+floor.set_mesh(Mesh3D.shape.plane())
+floor.set_material(floor_mat)
+floor.scale(<span class="tok-num">12.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">12.0</span>)
+floor.as_static()
+floor.collision_box(<span class="tok-num">12.0</span>, <span class="tok-num">0.25</span>, <span class="tok-num">12.0</span>)
+scene.add_child(floor)
+
+cube_mat: <span class="tok-type">Material3D</span> = Material3D.colored(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>))
+cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Cube"</span>)
+cube.set_mesh(Mesh3D.shape.cube())
+cube.set_material(cube_mat)
+cube.position(<span class="tok-num">0.0</span>, <span class="tok-num">0.75</span>, <span class="tok-num">0.0</span>)
+cube.scale(<span class="tok-num">1.5</span>, <span class="tok-num">1.5</span>, <span class="tok-num">1.5</span>)
+cube.collision_box(<span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>)
+scene.add_child(cube)
+
+Engine.scene.set(scene)
+
+<span class="tok-com"># 3. Start and render</span>
+<span class="tok-kw">if</span> Engine.start() == <span class="tok-num">1</span>:
+    <span class="tok-kw">while</span> Engine.running() == <span class="tok-num">1</span>:
+        dt: <span class="tok-type">f32</span> = Engine.begin_frame()
+        cube.rotate(<span class="tok-num">0.0</span>, <span class="tok-num">45.0</span> * dt, <span class="tok-num">0.0</span>)
+        Engine.render()
+
+    Engine.destroy_scene()
+    Engine.shutdown()</code></pre>
+      <div class="note"><strong>Order matters.</strong> Configure window/properties, create your scene, call <code>Engine.scene.set(scene)</code>, then call <code>Engine.start()</code>. Load assets before the loop; do not load textures or rebuild materials every frame.</div>
+    </section>
+
+    <section id="first-object">
+      <h2>First Object</h2>
+      <p class="lead">For a visible object, create a <code>Mesh3D</code>, choose a mesh shape, assign a material, set transform/collision, then add it to the scene.</p>
+      <p>When the object uses a texture or model file, mount assets once during setup:</p>
+      <pre><code>Assets.mount(<span class="tok-str">"assets"</span>)</code></pre>
+      <pre><code>texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/crate.png"</span>, TextureSpec.pixel())
+
+mat: <span class="tok-type">Material3D</span> = Material3D.create()
+mat.set_color(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>))
+mat.set_texture(texture)
+mat.set_surface(<span class="tok-num">0.0</span>, <span class="tok-num">0.85</span>)
+
+cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Crate"</span>)
+cube.set_mesh(Mesh3D.shape.cube())
+cube.set_material(mat)
+cube.position(<span class="tok-num">0.0</span>, <span class="tok-num">0.75</span>, <span class="tok-num">4.0</span>)
+cube.scale(<span class="tok-num">1.5</span>, <span class="tok-num">1.5</span>, <span class="tok-num">1.5</span>)
+cube.as_static()
+cube.collision_box(<span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>)
+scene.add_child(cube)</code></pre>
+      <table>
+        <tr><th>Use</th><th>When</th></tr>
+        <tr><td><code>Mesh3D</code></td><td>The object is visible geometry in the scene.</td></tr>
+        <tr><td><code>Node3D</code></td><td>The object is only a transform, parent, trigger, controller, or gameplay node.</td></tr>
+        <tr><td><code>Material3D</code></td><td>The visual surface should be reusable or has more than one property.</td></tr>
+        <tr><td><code>cube.set_color(...)</code></td><td>Fast shortcut for one-off debug/simple objects.</td></tr>
+      </table>
     </section>
 
     <section id="gameloop">
       <h2>The Game Loop</h2>
       <p>Frog does not hide the main loop. You own it. <code>Engine.start()</code> brings up Vulkan, <code>begin_frame()</code> returns the delta time in seconds, and a render call submits the frame for the current camera.</p>
-      <pre><code><span class="tok-kw">if</span> Engine.start() == <span class="tok-num">0</span>:
-    <span class="tok-kw">return</span>
+      <pre><code><span class="tok-kw">if</span> Engine.start() == <span class="tok-num">1</span>:
+    Engine.mouse.capture()
+    <span class="tok-kw">while</span> Engine.running() == <span class="tok-num">1</span>:
+        dt: <span class="tok-type">f32</span> = Engine.begin_frame()
+        <span class="tok-com"># ... update your game state with dt ...</span>
+        Engine.render()
 
-Engine.mouse.capture()
-<span class="tok-kw">while</span> Engine.running() == <span class="tok-num">1</span>:
-    dt: <span class="tok-type">f32</span> = Engine.begin_frame()
-    <span class="tok-com"># ... update your game state with dt ...</span>
-    Engine.render()
-
-Engine.destroy_scene()
-Engine.shutdown()</code></pre>
+    Engine.destroy_scene()
+    Engine.shutdown()</code></pre>
       <div class="note">Wrap this in your own <code>attach Engine: static fun run()</code> to keep <code>main</code> tidy, then just call <code>Engine.run()</code>.</div>
     </section>
     <section id="engine">
@@ -357,6 +453,25 @@ Engine.shutdown()</code></pre>
       <table>
         <tr><th>Method</th><th>Description</th></tr>
         <tr><td><code>Engine.render()</code></td><td>Renders the active scene from the current <code>Camera3D</code> and presents the frame.</td></tr>
+      </table>
+    </section>
+
+    <section id="timer">
+      <h2>Time &amp; Timer</h2>
+      <p class="lead">Small frame-time helpers. Use <code>Clock</code> when you need a standalone delta clock, and <code>Timer</code> for gameplay intervals.</p>
+      <pre><code>timer: <span class="tok-type">Timer</span> = Timer.every(<span class="tok-num">0.25</span>)
+
+<span class="tok-kw">while</span> Engine.running() == <span class="tok-num">1</span>:
+    dt: <span class="tok-type">f32</span> = Engine.begin_frame()
+    <span class="tok-kw">if</span> timer.tick(dt) == <span class="tok-num">1</span>:
+        <span class="tok-com"># interval fired</span></code></pre>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>Timer.create(seconds)</code></td><td>One-shot timer.</td></tr>
+        <tr><td><code>Timer.every(seconds)</code></td><td>Repeating timer.</td></tr>
+        <tr><td><code>tick(dt)</code></td><td>Advances the timer and returns 1 when it fires.</td></tr>
+        <tr><td><code>reset()</code> / <code>start()</code> / <code>stop()</code></td><td>Controls timer state.</td></tr>
+        <tr><td><code>progress()</code></td><td>Returns 0..1 progress through the current interval.</td></tr>
       </table>
     </section>
 
@@ -500,7 +615,7 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
         <tr><td><code>set_rotation(x, y, z)</code></td><td>Sets local rotation. Returns the node.</td></tr>
         <tr><td><code>set_scale(x, y, z)</code></td><td>Sets local scale. Returns the node.</td></tr>
       </table>
-      <div class="note">Built-in node types: <code>Node3D</code>, <code>Camera3D</code>, and <code>RootNode</code>. Keep game-specific node structs in your game project; the Frog package should only carry reusable engine types.</div>
+      <div class="note">Built-in node types: <code>Node3D</code>, <code>Mesh3D</code>, <code>Camera3D</code>, and <code>RootNode</code>. Keep game-specific node structs in your game project; the Frog package should only carry reusable engine types.</div>
 
       <h4>Custom game nodes</h4>
       <p>For normal gameplay objects, start with <code>Node3D</code> and add behavior in your game modules. For high-count custom data, define a game-owned struct that keeps the base node fields first, then add game fields after them.</p>
@@ -528,7 +643,7 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
 
     <section id="node3d">
       <h2>Node3D</h2>
-      <p class="lead">The everyday scene object: a transform with physics flags, velocity, and a mesh. All setters return the node, so calls chain.</p>
+      <p class="lead">The base 3D scene object: transform, physics flags, velocity, and tree links. Use <code>Mesh3D</code> for visible geometry.</p>
       <div class="api-sig">Node3D.create(name: str) -&gt; Node3D</div>
 
       <h4>Transform (chainable)</h4>
@@ -566,6 +681,62 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
       </table>
     </section>
 
+    <section id="material3d">
+      <h2>Material3D</h2>
+      <p class="lead">A reusable surface descriptor for <code>Mesh3D</code>. Color and albedo texture are applied by the current renderer; roughness, metallic, normal maps, and shader slots are stored on the material so the API is ready for the richer pipeline.</p>
+      <pre><code>mat: <span class="tok-type">Material3D</span> = Material3D.create()
+mat.set_color(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>))
+mat.set_texture(Assets.textures.load(<span class="tok-str">"textures/crate.png"</span>, TextureSpec.pixel()))
+mat.set_surface(<span class="tok-num">0.0</span>, <span class="tok-num">0.85</span>)
+
+cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Cube"</span>)
+cube.set_mesh(Mesh3D.shape.cube())
+cube.set_material(mat)</code></pre>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>Material3D.create()</code></td><td>Creates a default white material.</td></tr>
+        <tr><td><code>Material3D.colored(color)</code></td><td>Creates a material with a color in one call.</td></tr>
+        <tr><td><code>Material3D.textured(texture)</code></td><td>Creates a white material with an albedo texture.</td></tr>
+        <tr><td><code>set_color(color)</code></td><td>Changes the material color.</td></tr>
+        <tr><td><code>set_alpha(alpha)</code></td><td>Sets color alpha and stores the material alpha.</td></tr>
+        <tr><td><code>set_texture(texture)</code> / <code>set_albedo(texture)</code></td><td>Sets the albedo texture applied to the mesh.</td></tr>
+        <tr><td><code>clear_texture()</code></td><td>Returns the material to the white fallback texture.</td></tr>
+        <tr><td><code>set_normal_map(texture)</code></td><td>Stores a normal map for the future lighting pipeline.</td></tr>
+        <tr><td><code>set_roughness_map(texture)</code> / <code>set_metallic_map(texture)</code></td><td>Stores PBR data maps.</td></tr>
+        <tr><td><code>set_roughness(value)</code> / <code>set_metallic(value)</code></td><td>Stores scalar PBR surface values clamped to 0..1.</td></tr>
+        <tr><td><code>set_surface(metallic, roughness)</code></td><td>Sets both scalar PBR values together.</td></tr>
+        <tr><td><code>set_shader(shader)</code></td><td>Stores a custom shader descriptor for the future shader pipeline.</td></tr>
+        <tr><td><code>set_unlit(enabled)</code> / <code>set_double_sided(enabled)</code></td><td>Stores render flags for later pipeline support.</td></tr>
+      </table>
+    </section>
+
+    <section id="mesh3d">
+      <h2>Mesh3D</h2>
+      <p class="lead">A visible 3D node. It owns the mesh upload, color, transform syncing, and still supports <code>Node3D</code> collision helpers.</p>
+      <div class="api-sig">Mesh3D.create(name: str) -&gt; Mesh3D</div>
+
+      <pre><code>cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Cube"</span>)
+cube.set_mesh(Mesh3D.shape.cube())
+cube.set_material(Material3D.colored(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>)))
+cube.position(<span class="tok-num">0.0</span>, <span class="tok-num">0.75</span>, <span class="tok-num">10.0</span>)
+cube.scale(<span class="tok-num">1.5</span>, <span class="tok-num">1.5</span>, <span class="tok-num">1.5</span>)
+cube.collision_box(<span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>)
+scene.add_child(cube)</code></pre>
+
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>Mesh3D.create(name)</code></td><td>Creates a renderable node without a mesh shape yet.</td></tr>
+        <tr><td><code>set_mesh(Mesh3D.shape.cube())</code></td><td>Uses the built-in cube mesh.</td></tr>
+        <tr><td><code>set_mesh(Mesh3D.shape.plane())</code></td><td>Uses the built-in plane mesh.</td></tr>
+        <tr><td><code>set_material(material)</code></td><td>Applies a <code>Material3D</code>.</td></tr>
+        <tr><td><code>set_color(color)</code></td><td>Convenience shortcut for simple colored primitives.</td></tr>
+        <tr><td><code>set_texture(texture)</code></td><td>Convenience shortcut that edits this mesh's material texture.</td></tr>
+        <tr><td><code>set_alpha(alpha)</code></td><td>Convenience shortcut that edits this mesh's material alpha.</td></tr>
+        <tr><td><code>position(x,y,z)</code> / <code>rotation(x,y,z)</code> / <code>scale(x,y,z)</code></td><td>Updates the node transform and renderer transform together.</td></tr>
+        <tr><td><code>collision_box(x,y,z)</code></td><td>Enables box collision in local units.</td></tr>
+      </table>
+    </section>
+
     <section id="camera">
       <h2>Camera3D</h2>
       <p class="lead">A <code>Node3D</code> with projection settings. Defaults: FOV 82°, near 0.1, far 1000.</p>
@@ -594,7 +765,7 @@ scene.add_child(camera)</code></pre>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
         <tr><td><code>Scene.create()</code></td><td>Scene</td><td>Creates a scene with a root node.</td></tr>
         <tr><td><code>Scene.create(capacity)</code></td><td>Scene</td><td>Creates a scene with a packed object store of <code>capacity</code> slots.</td></tr>
-        <tr><td><code>add_child(node)</code></td><td>—</td><td>Adds a <code>Node3D</code> / <code>Camera3D</code> under the root.</td></tr>
+        <tr><td><code>add_child(node)</code></td><td>—</td><td>Adds a <code>Node3D</code> / <code>Mesh3D</code> / <code>Camera3D</code> under the root.</td></tr>
         <tr><td><code>set_camera(camera)</code></td><td>—</td><td>Sets the active camera.</td></tr>
         <tr><td><code>set_environment(env)</code></td><td>—</td><td>Sets the scene render environment.</td></tr>
         <tr><td><code>environment()</code></td><td>Environment</td><td>Returns the scene render environment.</td></tr>
@@ -636,6 +807,29 @@ scene.add_child(target)</code></pre>
         <tr><td><code>node()</code></td><td>Returns the hit <code>Node3D</code>.</td></tr>
       </table>
 
+      <h4>Raycast3D</h4>
+      <p class="lead">A reusable ray node. Parent it manually to a camera, weapon, hand, or any other node; its local transform becomes part of the ray's world transform.</p>
+      <pre><code>raycast: <span class="tok-type">Raycast3D</span> = Raycast3D.create(<span class="tok-str">"InteractRay"</span>)
+raycast.position(<span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>)
+raycast.rotation(<span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>)
+raycast.set_max_distance(<span class="tok-num">8.0</span>)
+camera.add_child(raycast)
+
+<span class="tok-kw">if</span> raycast.is_colliding() == <span class="tok-num">1</span>:
+    target: <span class="tok-type">Node3D</span> = raycast.collider()</code></pre>
+      <table>
+        <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+        <tr><td><code>Raycast3D.create(name)</code></td><td>Raycast3D</td><td>Creates a reusable ray node.</td></tr>
+        <tr><td><code>position(x,y,z)</code> / <code>rotation(x,y,z)</code></td><td>Raycast3D</td><td>Sets the ray's local transform.</td></tr>
+        <tr><td><code>set_enabled(enabled)</code></td><td>Raycast3D</td><td>Turns the raycast on or off.</td></tr>
+        <tr><td><code>set_max_distance(distance)</code></td><td>Raycast3D</td><td>Sets the ray length.</td></tr>
+        <tr><td><code>force_update()</code></td><td>Raycast3D</td><td>Manually refreshes against the active engine scene.</td></tr>
+        <tr><td><code>update_scene(scene)</code></td><td>Raycast3D</td><td>Manually refreshes against a specific scene.</td></tr>
+        <tr><td><code>is_colliding()</code></td><td>i32</td><td>Refreshes once per frame and returns 1 when the ray hit a collider.</td></tr>
+        <tr><td><code>collider()</code></td><td>Node3D</td><td>Returns the latest hit node.</td></tr>
+        <tr><td><code>hit()</code></td><td>RaycastHit</td><td>Returns the full hit record.</td></tr>
+      </table>
+
       <h4>Physics</h4>
       <table>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
@@ -646,6 +840,7 @@ scene.add_child(target)</code></pre>
       </table>
 
       <h4>Engine.scene shortcuts</h4>
+      <p class="lead">Convenience helpers for one-off calls. Prefer <code>Raycast3D</code> for gameplay tools that live in the scene tree.</p>
       <table>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
         <tr><td><code>Engine.scene.raycast(origin, direction, max_distance)</code></td><td>RaycastHit</td><td>Raycasts against the active engine scene.</td></tr>
@@ -653,9 +848,6 @@ scene.add_child(target)</code></pre>
         <tr><td><code>Engine.scene.raycast_camera(camera, max_distance)</code></td><td>RaycastHit</td><td>Common FPS interaction ray from the active camera.</td></tr>
       </table>
 
-      <pre><code>hit: <span class="tok-type">RaycastHit</span> = Engine.scene.raycast_camera(camera, <span class="tok-num">8.0</span>)
-<span class="tok-kw">if</span> hit.hit == <span class="tok-num">1</span>:
-    target: <span class="tok-type">Node3D</span> = hit.node()</code></pre>
       <div class="note">This is intentionally a gameplay helper, not a full physics solver. It does not replace game-specific terrain collision, rigid bodies, or swept character movement.</div>
     </section>
     <section id="environment">
@@ -784,6 +976,35 @@ fov.stiffness = <span class="tok-num">120.0</span>
 <span class="tok-com"># each frame: ease the FOV toward its target with weight</span>
 cam.set_fov(fov.advance(target_fov, dt))</code></pre>
     </section>
+    <section id="materials-guide">
+      <h2>Guide: Materials</h2>
+      <p class="lead">Use <code>Material3D</code> as the official path for real game objects. Keep <code>Mesh3D.set_color(...)</code> and <code>Mesh3D.set_texture(...)</code> for quick debug objects or one-off prototypes.</p>
+      <h3>Recommended: reusable material</h3>
+      <pre><code>crate_texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/crate.png"</span>, TextureSpec.pixel())
+
+crate_mat: <span class="tok-type">Material3D</span> = Material3D.create()
+crate_mat.set_color(Color.white())
+crate_mat.set_texture(crate_texture)
+crate_mat.set_surface(<span class="tok-num">0.0</span>, <span class="tok-num">0.85</span>)
+
+crate_a.set_material(crate_mat)
+crate_b.set_material(crate_mat)
+crate_c.set_material(crate_mat)</code></pre>
+      <p>This is the better long-term shape because one material can be shared by many meshes. The renderer can later sort or batch objects by material without changing your game code.</p>
+
+      <h3>Shortcut: simple object</h3>
+      <pre><code>debug_cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"DebugCube"</span>)
+debug_cube.set_mesh(Mesh3D.shape.cube())
+debug_cube.set_color(Color.rgb(<span class="tok-num">0.95</span>, <span class="tok-num">0.20</span>, <span class="tok-num">0.18</span>))</code></pre>
+      <table>
+        <tr><th>Choice</th><th>Use when</th><th>Performance note</th></tr>
+        <tr><td><code>Material3D</code></td><td>Shared visuals, textures, PBR values, or production objects.</td><td>Best for reuse and future batching.</td></tr>
+        <tr><td><code>Mesh3D.set_color</code></td><td>One debug cube, simple primitive, quick test.</td><td>Fine during setup; avoid changing it every frame.</td></tr>
+        <tr><td><code>Mesh3D.set_texture</code></td><td>One mesh with one texture.</td><td>Load the texture once; do not call <code>Assets.textures.load</code> inside the loop.</td></tr>
+      </table>
+      <div class="note warn"><strong>Current renderer.</strong> Color and albedo texture are applied now. Roughness, metallic, normal maps, custom shaders, unlit, and double-sided flags are stored on <code>Material3D</code> for the future lighting/material pipeline.</div>
+    </section>
+
     <section id="textures">
       <h2>Guide: Textures</h2>
       <p class="lead">A texture is a resource, so it loads through <code>Assets</code> and gets worn by a node &mdash; exactly like a model. One call reads the PNG and uploads it to the GPU; the node binds it. A <code>TextureSpec</code> describes how the image should appear.</p>
@@ -843,6 +1064,29 @@ model.write_to_ptr(buf)
 Engine.set_model_matrix_raw(item_mesh, buf)</code></pre>
       <p>Because <code>set_model_matrix_raw</code> bypasses the usual TRS pipeline, the item follows the camera exactly each frame and reads as a true held viewmodel.</p>
       <div class="note warn"><strong>Rig tip.</strong> A clean setup is a <code>head</code> node with the camera and the held item as its children, so look direction drives both together.</div>
+    </section>
+
+    <section id="performance">
+      <h2>Guide: Performance Rules</h2>
+      <p class="lead">Most frame-time problems come from doing setup work inside the update loop. Build resources once, reuse them, and only update transforms/game state per frame.</p>
+      <table>
+        <tr><th>Do</th><th>Avoid</th><th>Why</th></tr>
+        <tr><td>Load textures/models before the loop.</td><td><code>Assets.textures.load(...)</code> every frame.</td><td>Loading reads files, decodes data, and uploads to GPU.</td></tr>
+        <tr><td>Create shared <code>Material3D</code> resources once.</td><td>Rebuilding materials for thousands of objects per frame.</td><td>Material changes may cause future descriptor/pipeline work.</td></tr>
+        <tr><td>Use <code>position</code>, <code>rotation</code>, <code>translate</code>, <code>rotate</code> for motion.</td><td>Calling <code>set_mesh</code> repeatedly for animated objects.</td><td>Changing mesh shape uploads/rebuilds geometry.</td></tr>
+        <tr><td>Reuse a mesh/material for many objects.</td><td>Uploading the same model or texture many times.</td><td>Shared resources reduce memory and prepare batching.</td></tr>
+        <tr><td>Use <code>Engine.register_instance</code> or game-owned batching for huge counts.</td><td>Thousands of unique primitive uploads for identical objects.</td><td>Instancing keeps draw/data cost lower.</td></tr>
+        <tr><td>Enable <code>Engine.debug.render_stats(1)</code> while measuring.</td><td>Guessing based only on FPS.</td><td>Frame time and render stats show where the cost is.</td></tr>
+      </table>
+      <pre><code><span class="tok-com"># Good: setup once</span>
+texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/crate.png"</span>, TextureSpec.pixel())
+mat: <span class="tok-type">Material3D</span> = Material3D.textured(texture)
+
+<span class="tok-kw">while</span> Engine.running() == <span class="tok-num">1</span>:
+    dt: <span class="tok-type">f32</span> = Engine.begin_frame()
+    cube.rotate(<span class="tok-num">0.0</span>, <span class="tok-num">45.0</span> * dt, <span class="tok-num">0.0</span>)
+    Engine.render()</code></pre>
+      <div class="note"><strong>Rule of thumb.</strong> Setup code belongs before <code>Engine.start()</code> or before the first frame. Per-frame code should mostly update input, transforms, physics, AI, timers, visibility, and camera state.</div>
     </section>
 
     <section id="build">

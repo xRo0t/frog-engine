@@ -1,0 +1,210 @@
+##############################
+# Frog - Mesh3D
+# High-level renderable 3D node. Hides mesh ids and primitive uploads from
+# game code.
+##############################
+
+const MESH3D_SHAPE_NONE: i32 = 0
+const MESH3D_SHAPE_CUBE: i32 = 1
+const MESH3D_SHAPE_PLANE: i32 = 2
+
+struct Mesh3DShape:
+    _placeholder: i32 = 0
+
+attach Mesh3DShape:
+
+    static fun cube() -> i32:
+        return MESH3D_SHAPE_CUBE
+
+    static fun plane() -> i32:
+        return MESH3D_SHAPE_PLANE
+
+@heap struct Mesh3D extends Node3D:
+    static shape: Mesh3DShape = Mesh3DShape()
+    primitive_kind: i32 = 0
+    color: Color = Color()
+    material: Material3D = Material3D()
+
+fun mesh3d_create(name: str) -> Mesh3D:
+    node: Mesh3D = Mesh3D()
+    node.id = -1
+    node.name = name
+    node.active = 1
+    node.kind = 2
+    node.parent_ptr = 0
+    node.first_child_ptr = 0
+    node.next_sibling_ptr = 0
+    node.mesh_id = -1
+    node.pos_x = 0.0
+    node.pos_y = 0.0
+    node.pos_z = 0.0
+    node.rot_x = 0.0
+    node.rot_y = 0.0
+    node.rot_z = 0.0
+    node.scale_x = 1.0
+    node.scale_y = 1.0
+    node.scale_z = 1.0
+    node.body_type = 0
+    node.collision_type = 0
+    node.collision_size_x = 1.0
+    node.collision_size_y = 1.0
+    node.collision_size_z = 1.0
+    node.collision_offset_x = 0.0
+    node.collision_offset_y = 0.0
+    node.collision_offset_z = 0.0
+    node.velocity_x = 0.0
+    node.velocity_y = 0.0
+    node.velocity_z = 0.0
+    node.mass = 1.0
+    node.texture_id = -1
+    node.primitive_kind = 0
+    node.color = Color.white()
+    node.material = Material3D.create()
+    return node
+
+attach Mesh3D:
+
+    static fun create(name: str) -> Mesh3D:
+        return mesh3d_create(name)
+
+    fun apply_material_bindings(self) -> Mesh3D:
+        self.color = self.material.color
+        self.texture_id = -1
+        if self.material.has_albedo == 1:
+            self.texture_id = self.material.albedo.texture_id
+        if self.mesh_id >= 0:
+            Engine.bind_texture(self.mesh_id, self.texture_id)
+        return self
+
+    fun rebuild_mesh(self) -> Mesh3D:
+        if self.primitive_kind == MESH3D_SHAPE_CUBE:
+            self.mesh_id = Engine.upload_colored_cube_mesh(self.material.color)
+            self.sync_transform()
+            self.apply_material_bindings()
+            return self
+        if self.primitive_kind == MESH3D_SHAPE_PLANE:
+            self.mesh_id = Engine.upload_colored_plane_mesh(self.material.color)
+            self.sync_transform()
+            self.apply_material_bindings()
+            return self
+        self.mesh_id = -1
+        return self
+
+    fun sync_transform(self) -> Mesh3D:
+        if self.mesh_id >= 0:
+            Engine.set_transform(self.mesh_id, self.pos_x, self.pos_y, self.pos_z, self.rot_x, self.rot_y, self.rot_z, self.scale_x, self.scale_y, self.scale_z)
+        return self
+
+    fun set_mesh(self, shape: i32) -> Mesh3D:
+        self.primitive_kind = shape
+        return self.rebuild_mesh()
+
+    fun set_color(self, color: Color) -> Mesh3D:
+        mat: Material3D = self.material
+        mat.set_color(color)
+        self.material = mat
+        return self.rebuild_mesh()
+
+    fun set_texture(self, texture: Texture2D) -> Mesh3D:
+        mat: Material3D = self.material
+        mat.set_texture(texture)
+        self.material = mat
+        return self.apply_material_bindings()
+
+    fun set_alpha(self, alpha: f32) -> Mesh3D:
+        mat: Material3D = self.material
+        mat.set_alpha(alpha)
+        self.material = mat
+        return self.rebuild_mesh()
+
+    fun set_material(self, material: Material3D) -> Mesh3D:
+        self.material = material
+        return self.rebuild_mesh()
+
+    fun position(self, x: f32, y: f32, z: f32) -> Mesh3D:
+        self.pos_x = x
+        self.pos_y = y
+        self.pos_z = z
+        self.sync_transform()
+        return self
+
+    fun rotation(self, x: f32, y: f32, z: f32) -> Mesh3D:
+        self.rot_x = x
+        self.rot_y = y
+        self.rot_z = z
+        self.sync_transform()
+        return self
+
+    fun scale(self, x: f32, y: f32, z: f32) -> Mesh3D:
+        self.scale_x = x
+        self.scale_y = y
+        self.scale_z = z
+        self.sync_transform()
+        return self
+
+    fun translate(self, x: f32, y: f32, z: f32) -> Mesh3D:
+        self.pos_x = self.pos_x + x
+        self.pos_y = self.pos_y + y
+        self.pos_z = self.pos_z + z
+        self.sync_transform()
+        return self
+
+    fun rotate(self, x: f32, y: f32, z: f32) -> Mesh3D:
+        self.rot_x = self.rot_x + x
+        self.rot_y = self.rot_y + y
+        self.rot_z = self.rot_z + z
+        self.sync_transform()
+        return self
+
+    fun as_static(self) -> Mesh3D:
+        self.body_type = 1
+        return self
+
+    fun as_dynamic(self) -> Mesh3D:
+        self.body_type = 0
+        return self
+
+    fun as_player(self) -> Mesh3D:
+        self.body_type = 2
+        return self
+
+    fun collision_box(self, x: f32, y: f32, z: f32) -> Mesh3D:
+        self.collision_type = 1
+        self.collision_size_x = x
+        self.collision_size_y = y
+        self.collision_size_z = z
+        return self
+
+    fun collision_offset(self, x: f32, y: f32, z: f32) -> Mesh3D:
+        self.collision_offset_x = x
+        self.collision_offset_y = y
+        self.collision_offset_z = z
+        return self
+
+    fun without_collision(self) -> Mesh3D:
+        self.collision_type = 0
+        return self
+
+    fun destroy(self):
+        node_destroy(self as i64)
+
+attach Node3D:
+
+    fun add_child(self, child: Mesh3D):
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = self as i64
+        child.next_sibling_ptr = self.first_child_ptr
+        self.first_child_ptr = child as i64
+
+attach Scene:
+
+    fun add_child(self, child: Mesh3D):
+        root: RootNode = self.root()
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = root as i64
+        child.next_sibling_ptr = root.first_child_ptr
+        root.first_child_ptr = child as i64
+        if self.active_camera_ptr == 0:
+            self.resolve_camera()

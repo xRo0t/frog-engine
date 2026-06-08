@@ -180,8 +180,14 @@ attach Renderer:
     fun upload_plane_mesh(self) -> i32:
         return self.core.upload_plane_mesh()
 
+    fun upload_colored_plane_mesh(self, color: Color) -> i32:
+        return self.core.upload_colored_plane_mesh(color)
+
     fun upload_cube_mesh(self) -> i32:
         return self.core.upload_cube_mesh()
+
+    fun upload_colored_cube_mesh(self, color: Color) -> i32:
+        return self.core.upload_colored_cube_mesh(color)
 
     fun upload_model_mesh(self, model: Model3D) -> i32:
         return self.core.upload_model_mesh(model)
@@ -294,8 +300,24 @@ attach GpuRendererCore:
         Memory.free(verts)
         return mesh_id
 
+    fun upload_colored_plane_mesh(self, color: Color) -> i32:
+        verts: i64 = gpu_make_colored_plane_vertices(color)
+        if verts == 0:
+            return -1
+        mesh_id: i32 = self.upload_mesh(verts, 6)
+        Memory.free(verts)
+        return mesh_id
+
     fun upload_cube_mesh(self) -> i32:
         verts: i64 = gpu_make_cube_vertices()
+        if verts == 0:
+            return -1
+        mesh_id: i32 = self.upload_mesh(verts, 36)
+        Memory.free(verts)
+        return mesh_id
+
+    fun upload_colored_cube_mesh(self, color: Color) -> i32:
+        verts: i64 = gpu_make_colored_cube_vertices(color)
         if verts == 0:
             return -1
         mesh_id: i32 = self.upload_mesh(verts, 36)
