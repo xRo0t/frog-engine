@@ -326,7 +326,8 @@ camera.rotation(<span class="tok-num">0.0</span> - <span class="tok-num">18.0</s
 camera.set_fov(<span class="tok-num">82.0</span>)
 scene.add_child(camera)
 
-floor_mat: <span class="tok-type">Material3D</span> = Material3D.colored(Color.rgb(<span class="tok-num">0.18</span>, <span class="tok-num">0.45</span>, <span class="tok-num">0.22</span>))
+floor_mat: <span class="tok-type">Material3D</span> = Material3D.create()
+floor_mat.set_color(Color.rgb(<span class="tok-num">0.18</span>, <span class="tok-num">0.45</span>, <span class="tok-num">0.22</span>))
 floor: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Floor"</span>)
 floor.set_mesh(Mesh3D.shape.plane())
 floor.set_material(floor_mat)
@@ -335,7 +336,8 @@ floor.as_static()
 floor.collision_box(<span class="tok-num">12.0</span>, <span class="tok-num">0.25</span>, <span class="tok-num">12.0</span>)
 scene.add_child(floor)
 
-cube_mat: <span class="tok-type">Material3D</span> = Material3D.colored(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>))
+cube_mat: <span class="tok-type">Material3D</span> = Material3D.create()
+cube_mat.set_color(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>))
 cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Cube"</span>)
 cube.set_mesh(Mesh3D.shape.cube())
 cube.set_material(cube_mat)
@@ -717,7 +719,9 @@ cube.set_material(mat)</code></pre>
 
       <pre><code>cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Cube"</span>)
 cube.set_mesh(Mesh3D.shape.cube())
-cube.set_material(Material3D.colored(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>)))
+mat: <span class="tok-type">Material3D</span> = Material3D.create()
+mat.set_color(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>))
+cube.set_material(mat)
 cube.position(<span class="tok-num">0.0</span>, <span class="tok-num">0.75</span>, <span class="tok-num">10.0</span>)
 cube.scale(<span class="tok-num">1.5</span>, <span class="tok-num">1.5</span>, <span class="tok-num">1.5</span>)
 cube.collision_box(<span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>)
@@ -1080,7 +1084,8 @@ Engine.set_model_matrix_raw(item_mesh, buf)</code></pre>
       </table>
       <pre><code><span class="tok-com"># Good: setup once</span>
 texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/crate.png"</span>, TextureSpec.pixel())
-mat: <span class="tok-type">Material3D</span> = Material3D.textured(texture)
+mat: <span class="tok-type">Material3D</span> = Material3D.create()
+mat.set_texture(texture)
 
 <span class="tok-kw">while</span> Engine.running() == <span class="tok-num">1</span>:
     dt: <span class="tok-type">f32</span> = Engine.begin_frame()
