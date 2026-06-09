@@ -125,6 +125,9 @@ attach Node:
 
 attach Node3D:
 
+    static fun create() -> Node3D:
+        return node3d_create("Node3D")
+
     static fun create(name: str) -> Node3D:
         return node3d_create(name)
 
@@ -253,6 +256,9 @@ attach Node3D:
         node_destroy_tree(self as i64)
 
 attach Camera3D:
+
+    static fun create() -> Camera3D:
+        return Camera3D.create("Camera3D")
 
     static fun create(name: str) -> Camera3D:
         camera: Camera3D = camera3d_create(name)

@@ -320,7 +320,7 @@ env.set_clear_color(Color.rgb(<span class="tok-num">0.64</span>, <span class="to
 env.set_fog(Fog.minecraft(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>), <span class="tok-num">240.0</span>))
 scene.set_environment(env)
 
-camera: <span class="tok-type">Camera3D</span> = Camera3D.create(<span class="tok-str">"Camera"</span>)
+camera: <span class="tok-type">Camera3D</span> = Camera3D.create()
 camera.position(<span class="tok-num">0.0</span>, <span class="tok-num">3.0</span>, <span class="tok-num">8.0</span>)
 camera.rotation(<span class="tok-num">0.0</span> - <span class="tok-num">18.0</span>, <span class="tok-num">180.0</span>, <span class="tok-num">0.0</span>)
 camera.set_fov(<span class="tok-num">82.0</span>)
@@ -328,7 +328,7 @@ scene.add_child(camera)
 
 floor_mat: <span class="tok-type">Material3D</span> = Material3D.create()
 floor_mat.set_color(Color.rgb(<span class="tok-num">0.18</span>, <span class="tok-num">0.45</span>, <span class="tok-num">0.22</span>))
-floor: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Floor"</span>)
+floor: <span class="tok-type">Mesh3D</span> = Mesh3D.create()
 floor.set_mesh(Mesh3D.shape.plane())
 floor.set_material(floor_mat)
 floor.scale(<span class="tok-num">12.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">12.0</span>)
@@ -338,7 +338,7 @@ scene.add_child(floor)
 
 cube_mat: <span class="tok-type">Material3D</span> = Material3D.create()
 cube_mat.set_color(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>))
-cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Cube"</span>)
+cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create()
 cube.set_mesh(Mesh3D.shape.cube())
 cube.set_material(cube_mat)
 cube.position(<span class="tok-num">0.0</span>, <span class="tok-num">0.75</span>, <span class="tok-num">0.0</span>)
@@ -363,6 +363,7 @@ Engine.scene.set(scene)
     <section id="first-object">
       <h2>First Object</h2>
       <p class="lead">For a visible object, create a <code>Mesh3D</code>, choose a mesh shape, assign a material, set transform/collision, then add it to the scene.</p>
+      <div class="note"><strong>Names are optional.</strong> Use <code>Mesh3D.create()</code> for quick objects. Use <code>Mesh3D.create("Crate")</code> when the name helps debugging, raycast interaction, logs, or editor tools.</div>
       <p>When the object uses a texture or model file, mount assets once during setup:</p>
       <pre><code>Assets.mount(<span class="tok-str">"assets"</span>)</code></pre>
       <pre><code>texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/crate.png"</span>, TextureSpec.pixel())
@@ -646,7 +647,7 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
     <section id="node3d">
       <h2>Node3D</h2>
       <p class="lead">The base 3D scene object: transform, physics flags, velocity, and tree links. Use <code>Mesh3D</code> for visible geometry.</p>
-      <div class="api-sig">Node3D.create(name: str) -&gt; Node3D</div>
+      <div class="api-sig">Node3D.create() / Node3D.create(name: str) -&gt; Node3D</div>
 
       <h4>Transform (chainable)</h4>
       <table>
@@ -715,9 +716,9 @@ cube.set_material(mat)</code></pre>
     <section id="mesh3d">
       <h2>Mesh3D</h2>
       <p class="lead">A visible 3D node. It owns the mesh upload, color, transform syncing, and still supports <code>Node3D</code> collision helpers.</p>
-      <div class="api-sig">Mesh3D.create(name: str) -&gt; Mesh3D</div>
+      <div class="api-sig">Mesh3D.create() / Mesh3D.create(name: str) -&gt; Mesh3D</div>
 
-      <pre><code>cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Cube"</span>)
+      <pre><code>cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create()
 cube.set_mesh(Mesh3D.shape.cube())
 mat: <span class="tok-type">Material3D</span> = Material3D.create()
 mat.set_color(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>))
@@ -729,7 +730,8 @@ scene.add_child(cube)</code></pre>
 
       <table>
         <tr><th>Method</th><th>Description</th></tr>
-        <tr><td><code>Mesh3D.create(name)</code></td><td>Creates a renderable node without a mesh shape yet.</td></tr>
+        <tr><td><code>Mesh3D.create()</code></td><td>Creates an unnamed renderable node using the default name <code>Mesh3D</code>.</td></tr>
+        <tr><td><code>Mesh3D.create(name)</code></td><td>Creates a renderable node with a debug/tooling name.</td></tr>
         <tr><td><code>set_mesh(Mesh3D.shape.cube())</code></td><td>Uses the built-in cube mesh.</td></tr>
         <tr><td><code>set_mesh(Mesh3D.shape.plane())</code></td><td>Uses the built-in plane mesh.</td></tr>
         <tr><td><code>set_material(material)</code></td><td>Applies a <code>Material3D</code>.</td></tr>
@@ -744,7 +746,7 @@ scene.add_child(cube)</code></pre>
     <section id="camera">
       <h2>Camera3D</h2>
       <p class="lead">A <code>Node3D</code> with projection settings. Defaults: FOV 82°, near 0.1, far 1000.</p>
-      <div class="api-sig">Camera3D.create(name: str) -&gt; Camera3D</div>
+      <div class="api-sig">Camera3D.create() / Camera3D.create(name: str) -&gt; Camera3D</div>
       <table>
         <tr><th>Method</th><th>Description</th></tr>
         <tr><td><code>position(x, y, z)</code></td><td>Set camera position.</td></tr>
@@ -753,7 +755,7 @@ scene.add_child(cube)</code></pre>
         <tr><td><code>make_current()</code></td><td>Makes this camera active when a scene has multiple cameras.</td></tr>
         <tr><td><code>destroy()</code></td><td>Frees the camera node.</td></tr>
       </table>
-      <pre><code>camera: <span class="tok-type">Camera3D</span> = Camera3D.create(<span class="tok-str">"Camera"</span>)
+      <pre><code>camera: <span class="tok-type">Camera3D</span> = Camera3D.create()
 camera.position(<span class="tok-num">0.0</span>, <span class="tok-num">2.0</span>, <span class="tok-num">6.0</span>)
 camera.set_fov(<span class="tok-num">85.0</span>)
 scene.add_child(camera)</code></pre>
@@ -813,7 +815,7 @@ scene.add_child(target)</code></pre>
 
       <h4>Raycast3D</h4>
       <p class="lead">A reusable ray node. Parent it manually to a camera, weapon, hand, or any other node; its local transform becomes part of the ray's world transform.</p>
-      <pre><code>raycast: <span class="tok-type">Raycast3D</span> = Raycast3D.create(<span class="tok-str">"InteractRay"</span>)
+      <pre><code>raycast: <span class="tok-type">Raycast3D</span> = Raycast3D.create()
 raycast.position(<span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>)
 raycast.rotation(<span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>)
 raycast.set_max_distance(<span class="tok-num">8.0</span>)
@@ -823,7 +825,8 @@ camera.add_child(raycast)
     target: <span class="tok-type">Node3D</span> = raycast.collider()</code></pre>
       <table>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
-        <tr><td><code>Raycast3D.create(name)</code></td><td>Raycast3D</td><td>Creates a reusable ray node.</td></tr>
+        <tr><td><code>Raycast3D.create()</code></td><td>Raycast3D</td><td>Creates a reusable ray node using the default name <code>Raycast3D</code>.</td></tr>
+        <tr><td><code>Raycast3D.create(name)</code></td><td>Raycast3D</td><td>Creates a reusable ray node with a debug/tooling name.</td></tr>
         <tr><td><code>position(x,y,z)</code> / <code>rotation(x,y,z)</code></td><td>Raycast3D</td><td>Sets the ray's local transform.</td></tr>
         <tr><td><code>set_enabled(enabled)</code></td><td>Raycast3D</td><td>Turns the raycast on or off.</td></tr>
         <tr><td><code>set_max_distance(distance)</code></td><td>Raycast3D</td><td>Sets the ray length.</td></tr>
@@ -997,7 +1000,7 @@ crate_c.set_material(crate_mat)</code></pre>
       <p>This is the better long-term shape because one material can be shared by many meshes. The renderer can later sort or batch objects by material without changing your game code.</p>
 
       <h3>Shortcut: simple object</h3>
-      <pre><code>debug_cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"DebugCube"</span>)
+      <pre><code>debug_cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create()
 debug_cube.set_mesh(Mesh3D.shape.cube())
 debug_cube.set_color(Color.rgb(<span class="tok-num">0.95</span>, <span class="tok-num">0.20</span>, <span class="tok-num">0.18</span>))</code></pre>
       <table>

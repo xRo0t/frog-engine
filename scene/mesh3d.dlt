@@ -64,6 +64,9 @@ fun mesh3d_create(name: str) -> Mesh3D:
 
 attach Mesh3D:
 
+    static fun create() -> Mesh3D:
+        return mesh3d_create("Mesh3D")
+
     static fun create(name: str) -> Mesh3D:
         return mesh3d_create(name)
 

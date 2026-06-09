@@ -300,6 +300,9 @@ fun raycast3d_create(name: str) -> Raycast3D:
 
 attach Raycast3D:
 
+    static fun create() -> Raycast3D:
+        return raycast3d_create("Raycast3D")
+
     static fun create(name: str) -> Raycast3D:
         return raycast3d_create(name)
 
