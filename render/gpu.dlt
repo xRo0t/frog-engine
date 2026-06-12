@@ -41,7 +41,9 @@ fun gpu_set_model_matrix_raw(ren: GpuRendererCore, mesh_id: i32, src: i64):
     if Memory.read_ptr(ren.model_matrices + mesh_id * 8) == 0:
         ren.set_model_matrix(mesh_id, mat_ptr)
 
-fun gpu_camera_view(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32) -> i64:
+fun gpu_camera_view_into(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32, m: i64):
+    if m == 0:
+        return
     pi: f32 = 3.14159265
     rad_x: f32 = pitch * pi / 180.0
     rad_y: f32 = yaw * pi / 180.0
@@ -61,9 +63,7 @@ fun gpu_camera_view(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32) ->
     tx: f32 = 0.0 - (r00 * cam_x + r10 * cam_y + r20 * cam_z)
     ty: f32 = 0.0 - (r01 * cam_x + r11 * cam_y + r21 * cam_z)
     tz: f32 = 0.0 - (r02 * cam_x + r12 * cam_y + r22 * cam_z)
-    m: i64 = Memory.malloc_zeroed(64)
-    if m == 0:
-        return 0
+    Memory.set(m, 0, 64)
     Memory.write_f32(m + 0, r00)
     Memory.write_f32(m + 4, r01)
     Memory.write_f32(m + 8, r02)
@@ -80,23 +80,35 @@ fun gpu_camera_view(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32) ->
     Memory.write_f32(m + 52, ty)
     Memory.write_f32(m + 56, tz)
     Memory.write_f32(m + 60, 1.0)
+
+fun gpu_camera_view(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32) -> i64:
+    m: i64 = Memory.malloc_zeroed(64)
+    if m == 0:
+        return 0
+    gpu_camera_view_into(cam_x, cam_y, cam_z, pitch, yaw, m)
     return m
 
-fun gpu_camera_proj(fov: f32, aspect: f32) -> i64:
+fun gpu_camera_proj_into(fov: f32, aspect: f32, m: i64):
+    if m == 0:
+        return
     near: f32 = 0.1
     far: f32 = 1000.0
     pi: f32 = 3.14159265
     half: f32 = fov * pi / 360.0
     f: f32 = @cos(half) / @sin(half)
     ri: f32 = 1.0 / (near - far)
-    m: i64 = Memory.malloc_zeroed(64)
-    if m == 0:
-        return 0
+    Memory.set(m, 0, 64)
     Memory.write_f32(m + 0, f / aspect)
     Memory.write_f32(m + 20, 0.0 - f)
     Memory.write_f32(m + 40, far * ri)
     Memory.write_f32(m + 44, 0.0 - 1.0)
     Memory.write_f32(m + 56, near * far * ri)
+
+fun gpu_camera_proj(fov: f32, aspect: f32) -> i64:
+    m: i64 = Memory.malloc_zeroed(64)
+    if m == 0:
+        return 0
+    gpu_camera_proj_into(fov, aspect, m)
     return m
 
 @heap struct Renderer:
@@ -361,22 +373,18 @@ attach GpuRendererCore:
         self.render_camera3d_frame_with_environment(render_pass, swapchain, ctx, camera, width, height, Environment.create())
 
     fun render_camera3d_frame_with_environment(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32, env: Environment):
-        view: i64 = gpu_camera_view(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y)
-        proj: i64 = gpu_camera_proj(camera.fov, (width as f32) / (height as f32))
+        view: i64 = self.scratch_camera_view
+        proj: i64 = self.scratch_camera_proj
+        gpu_camera_view_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y, view)
+        gpu_camera_proj_into(camera.fov, (width as f32) / (height as f32), proj)
         self.render_frame_with_environment(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height, env)
-        if view != 0:
-            Memory.free(view)
-        if proj != 0:
-            Memory.free(proj)
 
     fun render_camera3d_frame_scaled(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32, render_width: i32, render_height: i32):
         self.render_camera3d_frame_scaled_with_environment(render_pass, swapchain, ctx, camera, width, height, render_width, render_height, Environment.create())
 
     fun render_camera3d_frame_scaled_with_environment(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32, render_width: i32, render_height: i32, env: Environment):
-        view: i64 = gpu_camera_view(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y)
-        proj: i64 = gpu_camera_proj(camera.fov, (render_width as f32) / (render_height as f32))
+        view: i64 = self.scratch_camera_view
+        proj: i64 = self.scratch_camera_proj
+        gpu_camera_view_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y, view)
+        gpu_camera_proj_into(camera.fov, (render_width as f32) / (render_height as f32), proj)
         self.render_frame_scaled_with_environment(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height, render_width, render_height, env)
-        if view != 0:
-            Memory.free(view)
-        if proj != 0:
-            Memory.free(proj)

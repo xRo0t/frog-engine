@@ -7,6 +7,7 @@
 struct GpuBufferUpload:
     handle: i64 = 0
     memory: i64 = 0
+    capacity: i64 = 0
     ok: i32 = 0
 
 struct GpuMeshBounds:
@@ -113,9 +114,11 @@ struct GpuRendererCore:
     # Vertex buffer registry
     vb_handles:        i64 = 0
     vb_memories:       i64 = 0
+    vb_alloc_sizes:    i64 = 0
     vb_vert_counts:    i64 = 0
     ib_handles:        i64 = 0
     ib_memories:       i64 = 0
+    ib_alloc_sizes:    i64 = 0
     ib_index_counts:   i64 = 0
     model_matrices:    i64 = 0
     mesh_bound_xs:     i64 = 0
@@ -130,6 +133,7 @@ struct GpuRendererCore:
     # reading. Slot 0 mirrors instance_buffer/instance_memory for back-compat.
     instance_buffers:  i64 = 0    # VkBuffer[FROG_INSTANCE_SLOTS]
     instance_memories: i64 = 0    # VkDeviceMemory[FROG_INSTANCE_SLOTS]
+    instance_mapped_ptrs: i64 = 0 # Persistently mapped ptr[FROG_INSTANCE_SLOTS]
     instance_capacity: i32 = 0
     vb_count:          i32 = 0
     vb_capacity:       i32 = 0
@@ -141,6 +145,18 @@ struct GpuRendererCore:
     scratch_inst_vb_arr:  i64 = 0
     scratch_inst_off_arr: i64 = 0
     scratch_desc_arr:     i64 = 0
+    scratch_map_pp:       i64 = 0
+    scratch_begin_info:   i64 = 0
+    scratch_render_info:  i64 = 0
+    scratch_clear_values: i64 = 0
+    scratch_viewport:     i64 = 0
+    scratch_scissor:      i64 = 0
+    scratch_sky_att:      i64 = 0
+    scratch_sky_rect:     i64 = 0
+    scratch_vp_matrix:    i64 = 0
+    scratch_push_data:    i64 = 0
+    scratch_camera_view:  i64 = 0
+    scratch_camera_proj:  i64 = 0
     instance_culling_enabled: i32 = 0
     debug_render_stats_enabled: i32 = 0
     debug_frame_count: i32 = 0
@@ -173,8 +189,18 @@ struct GpuRendererCore:
     retire_buffers:     i64 = 0
     retire_memories:    i64 = 0
     retire_frames:      i64 = 0
+    retire_sizes:       i64 = 0
+    retire_usages:      i64 = 0
     retire_count:       i32 = 0
     retire_capacity:    i32 = 0
+    pooled_buffers:     i64 = 0
+    pooled_memories:    i64 = 0
+    pooled_sizes:       i64 = 0
+    pooled_usages:      i64 = 0
+    pooled_count:       i32 = 0
+    pooled_capacity:    i32 = 0
+    pooled_bytes:       i64 = 0
+    pooled_byte_limit:  i64 = 0
     frame_serial:       i32 = 0
 
 attach GpuRendererCore:
@@ -187,9 +213,11 @@ attach GpuRendererCore:
         self.vb_capacity = 1024
         self.vb_handles = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.vb_memories = Memory.malloc_zeroed(self.vb_capacity * 8)
+        self.vb_alloc_sizes = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.vb_vert_counts = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.ib_handles = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.ib_memories = Memory.malloc_zeroed(self.vb_capacity * 8)
+        self.ib_alloc_sizes = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.ib_index_counts = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.model_matrices = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.mesh_bound_xs = Memory.malloc_zeroed(self.vb_capacity * 4)
@@ -224,11 +252,31 @@ attach GpuRendererCore:
         self.scratch_inst_vb_arr = Memory.malloc_zeroed(8)
         self.scratch_inst_off_arr = Memory.malloc_zeroed(8)
         self.scratch_desc_arr = Memory.malloc_zeroed(8)
+        self.scratch_map_pp = Memory.malloc_zeroed(8)
+        self.scratch_begin_info = Memory.malloc_zeroed(64)
+        self.scratch_render_info = Memory.malloc_zeroed(96)
+        self.scratch_clear_values = Memory.malloc_zeroed(32)
+        self.scratch_viewport = Memory.malloc_zeroed(24)
+        self.scratch_scissor = Memory.malloc_zeroed(16)
+        self.scratch_sky_att = Memory.malloc_zeroed(24)
+        self.scratch_sky_rect = Memory.malloc_zeroed(24)
+        self.scratch_vp_matrix = Memory.malloc_zeroed(64)
+        self.scratch_push_data = Memory.malloc_zeroed(112)
+        self.scratch_camera_view = Memory.malloc_zeroed(64)
+        self.scratch_camera_proj = Memory.malloc_zeroed(64)
         Memory.write_i64(self.scratch_off_arr, 0)
         Memory.write_i64(self.scratch_inst_off_arr, 0)
         self.instance_culling_enabled = 0
         self.retire_capacity = 0
         self.retire_count = 0
+        self.pooled_capacity = 2048
+        self.pooled_count = 0
+        self.pooled_bytes = 0
+        self.pooled_byte_limit = 268435456
+        self.pooled_buffers = Memory.malloc_zeroed(self.pooled_capacity * 8)
+        self.pooled_memories = Memory.malloc_zeroed(self.pooled_capacity * 8)
+        self.pooled_sizes = Memory.malloc_zeroed(self.pooled_capacity * 8)
+        self.pooled_usages = Memory.malloc_zeroed(self.pooled_capacity * 4)
         self.frame_serial = 0
         self.initialized = 1
 
@@ -267,9 +315,11 @@ attach GpuRendererCore:
         new_cap: i32 = self.vb_capacity * 2
         new_handles: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_memories: i64 = Memory.malloc_zeroed(new_cap * 8)
+        new_alloc_sizes: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_vert_counts: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_ib_handles: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_ib_memories: i64 = Memory.malloc_zeroed(new_cap * 8)
+        new_ib_alloc_sizes: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_ib_counts: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_matrices: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_bound_xs: i64 = Memory.malloc_zeroed(new_cap * 4)
@@ -288,9 +338,11 @@ attach GpuRendererCore:
             vvi2 = vvi2 + 1
         Memory.copy(new_handles, self.vb_handles, self.vb_capacity * 8)
         Memory.copy(new_memories, self.vb_memories, self.vb_capacity * 8)
+        Memory.copy(new_alloc_sizes, self.vb_alloc_sizes, self.vb_capacity * 8)
         Memory.copy(new_vert_counts, self.vb_vert_counts, self.vb_capacity * 4)
         Memory.copy(new_ib_handles, self.ib_handles, self.vb_capacity * 8)
         Memory.copy(new_ib_memories, self.ib_memories, self.vb_capacity * 8)
+        Memory.copy(new_ib_alloc_sizes, self.ib_alloc_sizes, self.vb_capacity * 8)
         Memory.copy(new_ib_counts, self.ib_index_counts, self.vb_capacity * 4)
         Memory.copy(new_matrices, self.model_matrices, self.vb_capacity * 8)
         Memory.copy(new_bound_xs, self.mesh_bound_xs, self.vb_capacity * 4)
@@ -302,9 +354,11 @@ attach GpuRendererCore:
             Memory.copy(new_mesh_tex, self.mesh_tex_ids, self.vb_capacity * 4)
         Memory.free(self.vb_handles)
         Memory.free(self.vb_memories)
+        Memory.free(self.vb_alloc_sizes)
         Memory.free(self.vb_vert_counts)
         Memory.free(self.ib_handles)
         Memory.free(self.ib_memories)
+        Memory.free(self.ib_alloc_sizes)
         Memory.free(self.ib_index_counts)
         Memory.free(self.model_matrices)
         Memory.free(self.mesh_bound_xs)
@@ -316,9 +370,11 @@ attach GpuRendererCore:
             Memory.free(self.mesh_tex_ids)
         self.vb_handles = new_handles
         self.vb_memories = new_memories
+        self.vb_alloc_sizes = new_alloc_sizes
         self.vb_vert_counts = new_vert_counts
         self.ib_handles = new_ib_handles
         self.ib_memories = new_ib_memories
+        self.ib_alloc_sizes = new_ib_alloc_sizes
         self.ib_index_counts = new_ib_counts
         self.model_matrices = new_matrices
         self.mesh_bound_xs = new_bound_xs
@@ -329,11 +385,101 @@ attach GpuRendererCore:
         self.mesh_tex_ids = new_mesh_tex
         self.vb_capacity = new_cap
 
+    fun _take_pooled_buffer(self, data_size: i64, usage: i32) -> GpuBufferUpload:
+        if self.pooled_count <= 0:
+            return GpuBufferUpload()
+        if self.pooled_buffers == 0:
+            return GpuBufferUpload()
+        if self.pooled_memories == 0:
+            return GpuBufferUpload()
+        if self.pooled_sizes == 0:
+            return GpuBufferUpload()
+        if self.pooled_usages == 0:
+            return GpuBufferUpload()
+        best: i32 = 0 - 1
+        best_size: i64 = 0
+        i: i32 = 0
+        while i < self.pooled_count:
+            entry_usage: i32 = Memory.read_i32(self.pooled_usages + i * 4)
+            entry_size: i64 = Memory.read_i64(self.pooled_sizes + i * 8)
+            if entry_usage == usage:
+                if entry_size >= data_size:
+                    if best < 0:
+                        best = i
+                        best_size = entry_size
+                    elif entry_size < best_size:
+                        best = i
+                        best_size = entry_size
+            i = i + 1
+        if best < 0:
+            return GpuBufferUpload()
+
+        handle: i64 = Memory.read_ptr(self.pooled_buffers + best * 8)
+        memory: i64 = Memory.read_ptr(self.pooled_memories + best * 8)
+        last: i32 = self.pooled_count - 1
+        if best != last:
+            Memory.write_ptr(self.pooled_buffers + best * 8, Memory.read_ptr(self.pooled_buffers + last * 8))
+            Memory.write_ptr(self.pooled_memories + best * 8, Memory.read_ptr(self.pooled_memories + last * 8))
+            Memory.write_i64(self.pooled_sizes + best * 8, Memory.read_i64(self.pooled_sizes + last * 8))
+            Memory.write_i32(self.pooled_usages + best * 4, Memory.read_i32(self.pooled_usages + last * 4))
+        Memory.write_ptr(self.pooled_buffers + last * 8, 0)
+        Memory.write_ptr(self.pooled_memories + last * 8, 0)
+        Memory.write_i64(self.pooled_sizes + last * 8, 0)
+        Memory.write_i32(self.pooled_usages + last * 4, 0)
+        self.pooled_count = last
+        self.pooled_bytes = self.pooled_bytes - best_size
+        if self.pooled_bytes < 0:
+            self.pooled_bytes = 0
+        return GpuBufferUpload(handle=handle, memory=memory, capacity=best_size, ok=1)
+
+    fun _pool_buffer_pair(self, buffer: i64, memory: i64, size: i64, usage: i32):
+        if buffer == 0:
+            return
+        if memory == 0:
+            return
+        if size <= 0:
+            vkDestroyBuffer(self.device, buffer, 0)
+            vkFreeMemory(self.device, memory, 0)
+            return
+        if self.pooled_buffers == 0:
+            vkDestroyBuffer(self.device, buffer, 0)
+            vkFreeMemory(self.device, memory, 0)
+            return
+        if self.pooled_count >= self.pooled_capacity:
+            vkDestroyBuffer(self.device, buffer, 0)
+            vkFreeMemory(self.device, memory, 0)
+            return
+        if self.pooled_bytes + size > self.pooled_byte_limit:
+            vkDestroyBuffer(self.device, buffer, 0)
+            vkFreeMemory(self.device, memory, 0)
+            return
+        idx: i32 = self.pooled_count
+        Memory.write_ptr(self.pooled_buffers + idx * 8, buffer)
+        Memory.write_ptr(self.pooled_memories + idx * 8, memory)
+        Memory.write_i64(self.pooled_sizes + idx * 8, size)
+        Memory.write_i32(self.pooled_usages + idx * 4, usage)
+        self.pooled_count = idx + 1
+        self.pooled_bytes = self.pooled_bytes + size
+
     fun _upload_buffer(self, data: i64, data_size: i64, usage: i32) -> GpuBufferUpload:
         if data == 0:
             return GpuBufferUpload()
         if data_size <= 0:
             return GpuBufferUpload()
+
+        pooled: GpuBufferUpload = self._take_pooled_buffer(data_size, usage)
+        if pooled.ok == 1:
+            Memory.write_ptr(self.scratch_map_pp, 0)
+            pool_map_r: i32 = vkMapMemory(self.device, pooled.memory, 0, data_size, 0, self.scratch_map_pp)
+            pool_mapped: i64 = Memory.read_ptr(self.scratch_map_pp)
+            if pool_map_r == 0:
+                if pool_mapped != 0:
+                    Memory.copy(pool_mapped, data, data_size)
+                    vkUnmapMemory(self.device, pooled.memory)
+                    return pooled
+            vkDestroyBuffer(self.device, pooled.handle, 0)
+            vkFreeMemory(self.device, pooled.memory, 0)
+
         # Create buffer (VkBufferCreateInfo = 56 bytes)
         buf_ci: i64 = Memory.malloc_zeroed(56)
         if buf_ci == 0:
@@ -431,7 +577,7 @@ attach GpuRendererCore:
             Memory.copy(mapped, data, data_size)
         vkUnmapMemory(self.device, mem)
 
-        return GpuBufferUpload(handle=buf, memory=mem, ok=1)
+        return GpuBufferUpload(handle=buf, memory=mem, capacity=data_size, ok=1)
 
     fun _ensure_instance_capacity(self, needed: i32) -> i32:
         if needed <= 0:
@@ -441,6 +587,7 @@ attach GpuRendererCore:
         if self.instance_buffers == 0:
             self.instance_buffers = Memory.malloc_zeroed(2 * 8)
             self.instance_memories = Memory.malloc_zeroed(2 * 8)
+            self.instance_mapped_ptrs = Memory.malloc_zeroed(2 * 8)
 
         if self.instance_capacity >= needed:
             if self.instance_buffers != 0:
@@ -450,6 +597,10 @@ attach GpuRendererCore:
                     if Memory.read_ptr(self.instance_buffers + si * 8) == 0:
                         ok_all = 0
                     if Memory.read_ptr(self.instance_memories + si * 8) == 0:
+                        ok_all = 0
+                    if self.instance_mapped_ptrs == 0:
+                        ok_all = 0
+                    elif Memory.read_ptr(self.instance_mapped_ptrs + si * 8) == 0:
                         ok_all = 0
                     si = si + 1
                 if ok_all == 1:
@@ -474,12 +625,37 @@ attach GpuRendererCore:
                 return 0
             old_buf: i64 = Memory.read_ptr(self.instance_buffers + slot * 8)
             old_mem: i64 = Memory.read_ptr(self.instance_memories + slot * 8)
-            if old_buf != 0:
-                vkDestroyBuffer(self.device, old_buf, 0)
+            old_mapped: i64 = 0
+            if self.instance_mapped_ptrs != 0:
+                old_mapped = Memory.read_ptr(self.instance_mapped_ptrs + slot * 8)
             if old_mem != 0:
-                vkFreeMemory(self.device, old_mem, 0)
+                if old_mapped != 0:
+                    vkUnmapMemory(self.device, old_mem)
+            if old_mem != 0:
+                old_size: i64 = (self.instance_capacity as i64) * 64
+                self._retire_buffer_pair(old_buf, old_mem, old_size, 128)
+            elif old_buf != 0:
+                vkDestroyBuffer(self.device, old_buf, 0)
             Memory.write_ptr(self.instance_buffers + slot * 8, uploaded.handle)
             Memory.write_ptr(self.instance_memories + slot * 8, uploaded.memory)
+            Memory.write_ptr(self.scratch_map_pp, 0)
+            map_r: i32 = vkMapMemory(self.device, uploaded.memory, 0, size, 0, self.scratch_map_pp)
+            mapped: i64 = Memory.read_ptr(self.scratch_map_pp)
+            if map_r != 0:
+                vkDestroyBuffer(self.device, uploaded.handle, 0)
+                vkFreeMemory(self.device, uploaded.memory, 0)
+                Memory.write_ptr(self.instance_buffers + slot * 8, 0)
+                Memory.write_ptr(self.instance_memories + slot * 8, 0)
+                Memory.free(zeros)
+                return 0
+            if mapped == 0:
+                vkDestroyBuffer(self.device, uploaded.handle, 0)
+                vkFreeMemory(self.device, uploaded.memory, 0)
+                Memory.write_ptr(self.instance_buffers + slot * 8, 0)
+                Memory.write_ptr(self.instance_memories + slot * 8, 0)
+                Memory.free(zeros)
+                return 0
+            Memory.write_ptr(self.instance_mapped_ptrs + slot * 8, mapped)
             slot = slot + 1
         Memory.free(zeros)
 
@@ -497,6 +673,8 @@ attach GpuRendererCore:
         self.retire_buffers = Memory.malloc_zeroed(self.retire_capacity * 8)
         self.retire_memories = Memory.malloc_zeroed(self.retire_capacity * 8)
         self.retire_frames = Memory.malloc_zeroed(self.retire_capacity * 4)
+        self.retire_sizes = Memory.malloc_zeroed(self.retire_capacity * 8)
+        self.retire_usages = Memory.malloc_zeroed(self.retire_capacity * 4)
 
     fun _grow_retire_queue(self):
         if self.retire_capacity <= 0:
@@ -506,6 +684,8 @@ attach GpuRendererCore:
         new_buffers: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_memories: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_frames: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_sizes: i64 = Memory.malloc_zeroed(new_cap * 8)
+        new_usages: i64 = Memory.malloc_zeroed(new_cap * 4)
         if new_buffers == 0:
             return
         if new_memories == 0:
@@ -515,18 +695,35 @@ attach GpuRendererCore:
             Memory.free(new_buffers)
             Memory.free(new_memories)
             return
+        if new_sizes == 0:
+            Memory.free(new_buffers)
+            Memory.free(new_memories)
+            Memory.free(new_frames)
+            return
+        if new_usages == 0:
+            Memory.free(new_buffers)
+            Memory.free(new_memories)
+            Memory.free(new_frames)
+            Memory.free(new_sizes)
+            return
         Memory.copy(new_buffers, self.retire_buffers, self.retire_capacity * 8)
         Memory.copy(new_memories, self.retire_memories, self.retire_capacity * 8)
         Memory.copy(new_frames, self.retire_frames, self.retire_capacity * 4)
+        Memory.copy(new_sizes, self.retire_sizes, self.retire_capacity * 8)
+        Memory.copy(new_usages, self.retire_usages, self.retire_capacity * 4)
         Memory.free(self.retire_buffers)
         Memory.free(self.retire_memories)
         Memory.free(self.retire_frames)
+        Memory.free(self.retire_sizes)
+        Memory.free(self.retire_usages)
         self.retire_buffers = new_buffers
         self.retire_memories = new_memories
         self.retire_frames = new_frames
+        self.retire_sizes = new_sizes
+        self.retire_usages = new_usages
         self.retire_capacity = new_cap
 
-    fun _retire_buffer_pair(self, buffer: i64, memory: i64):
+    fun _retire_buffer_pair(self, buffer: i64, memory: i64, size: i64, usage: i32):
         if buffer == 0:
             return
         if memory == 0:
@@ -540,6 +737,8 @@ attach GpuRendererCore:
         Memory.write_ptr(self.retire_buffers + idx * 8, buffer)
         Memory.write_ptr(self.retire_memories + idx * 8, memory)
         Memory.write_i32(self.retire_frames + idx * 4, self.frame_serial)
+        Memory.write_i64(self.retire_sizes + idx * 8, size)
+        Memory.write_i32(self.retire_usages + idx * 4, usage)
         self.retire_count = idx + 1
 
     fun _release_retired_buffers(self):
@@ -552,16 +751,17 @@ attach GpuRendererCore:
             age: i32 = self.frame_serial - queued_frame
             buffer: i64 = Memory.read_ptr(self.retire_buffers + i * 8)
             memory: i64 = Memory.read_ptr(self.retire_memories + i * 8)
+            size: i64 = Memory.read_i64(self.retire_sizes + i * 8)
+            usage: i32 = Memory.read_i32(self.retire_usages + i * 4)
             if age > 8:
-                if buffer != 0:
-                    vkDestroyBuffer(self.device, buffer, 0)
-                if memory != 0:
-                    vkFreeMemory(self.device, memory, 0)
+                self._pool_buffer_pair(buffer, memory, size, usage)
             else:
                 if write_idx != i:
                     Memory.write_ptr(self.retire_buffers + write_idx * 8, buffer)
                     Memory.write_ptr(self.retire_memories + write_idx * 8, memory)
                     Memory.write_i32(self.retire_frames + write_idx * 4, queued_frame)
+                    Memory.write_i64(self.retire_sizes + write_idx * 8, size)
+                    Memory.write_i32(self.retire_usages + write_idx * 4, usage)
                 write_idx = write_idx + 1
             i = i + 1
         self.retire_count = write_idx
@@ -608,9 +808,11 @@ attach GpuRendererCore:
         idx: i32 = self.vb_count
         Memory.write_ptr(self.vb_handles + idx * 8, uploaded.handle)
         Memory.write_ptr(self.vb_memories + idx * 8, uploaded.memory)
+        Memory.write_i64(self.vb_alloc_sizes + idx * 8, uploaded.capacity)
         Memory.write_i32(self.vb_vert_counts + idx * 4, vertex_count)
         Memory.write_ptr(self.ib_handles + idx * 8, 0)
         Memory.write_ptr(self.ib_memories + idx * 8, 0)
+        Memory.write_i64(self.ib_alloc_sizes + idx * 8, 0)
         Memory.write_i32(self.ib_index_counts + idx * 4, 0)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
         self._write_mesh_bounds(idx, vertices, vertex_count)
@@ -640,9 +842,11 @@ attach GpuRendererCore:
         idx: i32 = self.vb_count
         Memory.write_ptr(self.vb_handles + idx * 8, uploaded_vb.handle)
         Memory.write_ptr(self.vb_memories + idx * 8, uploaded_vb.memory)
+        Memory.write_i64(self.vb_alloc_sizes + idx * 8, uploaded_vb.capacity)
         Memory.write_i32(self.vb_vert_counts + idx * 4, vertex_count)
         Memory.write_ptr(self.ib_handles + idx * 8, uploaded_ib.handle)
         Memory.write_ptr(self.ib_memories + idx * 8, uploaded_ib.memory)
+        Memory.write_i64(self.ib_alloc_sizes + idx * 8, uploaded_ib.capacity)
         Memory.write_i32(self.ib_index_counts + idx * 4, index_count)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
         self._write_mesh_bounds(idx, vertices, vertex_count)
@@ -695,18 +899,22 @@ attach GpuRendererCore:
         old_vb: i64 = Memory.read_ptr(self.vb_handles + mesh_id * 8)
         old_vm: i64 = Memory.read_ptr(self.vb_memories + mesh_id * 8)
         if old_vm != 0:
-            self._retire_buffer_pair(old_vb, old_vm)
+            old_vb_size: i64 = Memory.read_i64(self.vb_alloc_sizes + mesh_id * 8)
+            self._retire_buffer_pair(old_vb, old_vm, old_vb_size, 128)
 
         old_ib: i64 = Memory.read_ptr(self.ib_handles + mesh_id * 8)
         old_im: i64 = Memory.read_ptr(self.ib_memories + mesh_id * 8)
         if old_im != 0:
-            self._retire_buffer_pair(old_ib, old_im)
+            old_ib_size: i64 = Memory.read_i64(self.ib_alloc_sizes + mesh_id * 8)
+            self._retire_buffer_pair(old_ib, old_im, old_ib_size, 64)
 
         Memory.write_ptr(self.vb_handles + mesh_id * 8, uploaded_vb.handle)
         Memory.write_ptr(self.vb_memories + mesh_id * 8, uploaded_vb.memory)
+        Memory.write_i64(self.vb_alloc_sizes + mesh_id * 8, uploaded_vb.capacity)
         Memory.write_i32(self.vb_vert_counts + mesh_id * 4, mesh.vertex_count)
         Memory.write_ptr(self.ib_handles + mesh_id * 8, uploaded_ib.handle)
         Memory.write_ptr(self.ib_memories + mesh_id * 8, uploaded_ib.memory)
+        Memory.write_i64(self.ib_alloc_sizes + mesh_id * 8, uploaded_ib.capacity)
         Memory.write_i32(self.ib_index_counts + mesh_id * 4, mesh.index_count)
         self._write_mesh_bounds(mesh_id, mesh.vertices, mesh.vertex_count)
         if self.vb_visible != 0:
@@ -731,9 +939,11 @@ attach GpuRendererCore:
         src_ic: i32 = Memory.read_i32(self.ib_index_counts + src_vb_idx * 4)
         Memory.write_ptr(self.vb_handles + idx * 8, src_handle)
         Memory.write_ptr(self.vb_memories + idx * 8, 0)
+        Memory.write_i64(self.vb_alloc_sizes + idx * 8, 0)
         Memory.write_i32(self.vb_vert_counts + idx * 4, src_vc)
         Memory.write_ptr(self.ib_handles + idx * 8, src_ib_handle)
         Memory.write_ptr(self.ib_memories + idx * 8, 0)
+        Memory.write_i64(self.ib_alloc_sizes + idx * 8, 0)
         Memory.write_i32(self.ib_index_counts + idx * 4, src_ic)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
         self._copy_mesh_bounds(idx, src_vb_idx)
@@ -1078,15 +1288,14 @@ attach GpuRendererCore:
             bands = 4
         if bands > 96:
             bands = 96
-        att: i64 = Memory.malloc_zeroed(24)
-        rect: i64 = Memory.malloc_zeroed(24)
+        att: i64 = self.scratch_sky_att
+        rect: i64 = self.scratch_sky_rect
         if att == 0:
-            if rect != 0:
-                Memory.free(rect)
             return
         if rect == 0:
-            Memory.free(att)
             return
+        Memory.set(att, 0, 24)
+        Memory.set(rect, 0, 24)
         band_h: i32 = (height + bands - 1) / bands
         bands_f: f32 = bands as f32
         bi: i32 = 0
@@ -1115,9 +1324,6 @@ attach GpuRendererCore:
                 star: Color = self._sky_lerp_color(base, sky.star_color, sky.star_strength)
                 self._sky_draw_clear_rect(cmd, att, rect, sx, sy, size, size, star)
                 si = si + 1
-        Memory.free(att)
-        Memory.free(rect)
-
     fun render_frame(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32) -> void:
         self.render_frame_scaled_with_environment(rp, sc, device, gfx_queue, present_queue, cam_view, cam_proj, width, height, width, height, Environment.create())
 
@@ -1224,7 +1430,7 @@ attach GpuRendererCore:
 
     fun _record_commands(self, cmd: i64, framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32, env: Environment, use_scaled: i32, scale_color_image: i64, swap_image: i64, swap_old_layout: i32, swap_width: i32, swap_height: i32) -> void:
         # Begin command buffer
-        begin_info: i64 = Memory.malloc_zeroed(64)
+        begin_info: i64 = self.scratch_begin_info
         if begin_info == 0:
             return
         Memory.set(begin_info, 0, 64)
@@ -1233,12 +1439,11 @@ attach GpuRendererCore:
         Memory.write_i32(begin_info + 16, 0)
         Memory.write_ptr(begin_info + 24, 0)
         br: i32 = vkBeginCommandBuffer(cmd, begin_info)
-        Memory.free(begin_info)
         if br != 0:
             return
 
         # Begin render pass
-        rpi: i64 = Memory.malloc_zeroed(96)
+        rpi: i64 = self.scratch_render_info
         if rpi == 0:
             return
         Memory.set(rpi, 0, 96)
@@ -1252,8 +1457,9 @@ attach GpuRendererCore:
         Memory.write_i32(rpi + 44, height)
 
         # Two clear values: color (RGBA float) + depth (float + uint)
-        clear_vals: i64 = Memory.malloc_zeroed(32)
+        clear_vals: i64 = self.scratch_clear_values
         if clear_vals != 0:
+            Memory.set(clear_vals, 0, 32)
             Memory.write_f32(clear_vals, env.clear_color.r)
             Memory.write_f32(clear_vals + 4, env.clear_color.g)
             Memory.write_f32(clear_vals + 8, env.clear_color.b)
@@ -1270,8 +1476,9 @@ attach GpuRendererCore:
             vkCmdBindPipeline(cmd, 0, rp.vk_pipeline)
 
             # Dynamic viewport
-            vp: i64 = Memory.malloc_zeroed(24)
+            vp: i64 = self.scratch_viewport
             if vp != 0:
+                Memory.set(vp, 0, 24)
                 w_f: f32 = width
                 h_f: f32 = height
                 Memory.write_f32(vp, 0.0)
@@ -1281,17 +1488,16 @@ attach GpuRendererCore:
                 Memory.write_f32(vp + 16, 0.0)
                 Memory.write_f32(vp + 20, 1.0)
                 vkCmdSetViewport(cmd, 0, 1, vp)
-                Memory.free(vp)
 
             # Dynamic scissor
-            sc2: i64 = Memory.malloc_zeroed(16)
+            sc2: i64 = self.scratch_scissor
             if sc2 != 0:
+                Memory.set(sc2, 0, 16)
                 Memory.write_i32(sc2, 0)
                 Memory.write_i32(sc2 + 4, 0)
                 Memory.write_i32(sc2 + 8, width)
                 Memory.write_i32(sc2 + 12, height)
                 vkCmdSetScissor(cmd, 0, 1, sc2)
-                Memory.free(sc2)
 
             # Draw meshes
             if self.vb_count > 0:
@@ -1299,7 +1505,9 @@ attach GpuRendererCore:
                 vp_mat: i64 = 0
                 if cam_view != 0:
                     if cam_proj != 0:
-                        vp_mat = multiply_4x4_matrices(cam_proj, cam_view)
+                        vp_mat = self.scratch_vp_matrix
+                        if vp_mat != 0:
+                            _frog_multiply_4x4_into(cam_proj, cam_view, vp_mat)
                 pc_data: i64 = 0
 
                 instance_ready: i32 = self._ensure_instance_capacity(self.vb_count)
@@ -1317,18 +1525,14 @@ attach GpuRendererCore:
                     frame_inst_buf = Memory.read_ptr(self.instance_buffers + inst_slot * 8)
                     frame_inst_mem = Memory.read_ptr(self.instance_memories + inst_slot * 8)
                 mapped_instances: i64 = 0
-                instance_map_pp: i64 = 0
                 if instance_ready == 1:
-                    if frame_inst_mem != 0:
-                        instance_map_pp = Memory.malloc_zeroed(8)
-                        if instance_map_pp != 0:
-                            vkMapMemory(self.device, frame_inst_mem, 0, (self.instance_capacity as i64) * 64, 0, instance_map_pp)
-                            mapped_instances = Memory.read_ptr(instance_map_pp)
-                            Memory.free(instance_map_pp)
+                    if self.instance_mapped_ptrs != 0:
+                        mapped_instances = Memory.read_ptr(self.instance_mapped_ptrs + inst_slot * 8)
 
                 if vp_mat != 0:
-                    pc_data = Memory.malloc_zeroed(112)
+                    pc_data = self.scratch_push_data
                     if pc_data != 0:
+                        Memory.set(pc_data, 0, 112)
                         Memory.copy(pc_data, vp_mat, 64)
                         Memory.write_f32(pc_data + 64, env.fog.color.r)
                         Memory.write_f32(pc_data + 68, env.fog.color.g)
@@ -1475,21 +1679,10 @@ attach GpuRendererCore:
                     self.debug_indexed_draw_calls = self.debug_indexed_draw_calls + frame_indexed_draw_calls
                     self.debug_visible_instances = self.debug_visible_instances + frame_visible_instances
 
-                if mapped_instances != 0:
-                    vkUnmapMemory(self.device, frame_inst_mem)
-                if vp_mat != 0:
-                    Memory.free(vp_mat)
-                if pc_data != 0:
-                    Memory.free(pc_data)
-
         vkCmdEndRenderPass(cmd)
         if use_scaled == 1:
             self._record_render_scale_blit(cmd, scale_color_image, swap_image, swap_old_layout, width, height, swap_width, swap_height)
         vkEndCommandBuffer(cmd)
-
-        if clear_vals != 0:
-            Memory.free(clear_vals)
-        Memory.free(rpi)
 
     fun cleanup(self) -> void:
         self.destroy_render_scale_target()
@@ -1511,8 +1704,35 @@ attach GpuRendererCore:
         if self.retire_frames != 0:
             Memory.free(self.retire_frames)
             self.retire_frames = 0
+        if self.retire_sizes != 0:
+            Memory.free(self.retire_sizes)
+            self.retire_sizes = 0
+        if self.retire_usages != 0:
+            Memory.free(self.retire_usages)
+            self.retire_usages = 0
         self.retire_count = 0
         self.retire_capacity = 0
+        if self.pooled_buffers != 0:
+            pi: i32 = 0
+            while pi < self.pooled_count:
+                pb: i64 = Memory.read_ptr(self.pooled_buffers + pi * 8)
+                pm: i64 = Memory.read_ptr(self.pooled_memories + pi * 8)
+                if pb != 0:
+                    vkDestroyBuffer(self.device, pb, 0)
+                if pm != 0:
+                    vkFreeMemory(self.device, pm, 0)
+                pi = pi + 1
+            Memory.free(self.pooled_buffers)
+        if self.pooled_memories != 0:
+            Memory.free(self.pooled_memories)
+        if self.pooled_sizes != 0:
+            Memory.free(self.pooled_sizes)
+        if self.pooled_usages != 0:
+            Memory.free(self.pooled_usages)
+        self.pooled_count = 0
+        self.pooled_capacity = 0
+        self.pooled_bytes = 0
+        self.pooled_byte_limit = 0
         # Only destroy VkBuffers/Memory that are owned (memory != 0)
         # Shared instances have memory = 0
         if self.vb_handles != 0:
@@ -1539,12 +1759,16 @@ attach GpuRendererCore:
             Memory.free(self.vb_handles)
         if self.vb_memories != 0:
             Memory.free(self.vb_memories)
+        if self.vb_alloc_sizes != 0:
+            Memory.free(self.vb_alloc_sizes)
         if self.vb_vert_counts != 0:
             Memory.free(self.vb_vert_counts)
         if self.ib_handles != 0:
             Memory.free(self.ib_handles)
         if self.ib_memories != 0:
             Memory.free(self.ib_memories)
+        if self.ib_alloc_sizes != 0:
+            Memory.free(self.ib_alloc_sizes)
         if self.ib_index_counts != 0:
             Memory.free(self.ib_index_counts)
         if self.model_matrices != 0:
@@ -1564,15 +1788,22 @@ attach GpuRendererCore:
             isl: i32 = 0
             while isl < 2:
                 ib_buf: i64 = Memory.read_ptr(self.instance_buffers + isl * 8)
+                ib_mem: i64 = Memory.read_ptr(self.instance_memories + isl * 8)
+                if ib_mem != 0:
+                    if self.instance_mapped_ptrs != 0:
+                        ib_mapped: i64 = Memory.read_ptr(self.instance_mapped_ptrs + isl * 8)
+                        if ib_mapped != 0:
+                            vkUnmapMemory(self.device, ib_mem)
                 if ib_buf != 0:
                     vkDestroyBuffer(self.device, ib_buf, 0)
-                ib_mem: i64 = Memory.read_ptr(self.instance_memories + isl * 8)
                 if ib_mem != 0:
                     vkFreeMemory(self.device, ib_mem, 0)
                 isl = isl + 1
             Memory.free(self.instance_buffers)
             if self.instance_memories != 0:
                 Memory.free(self.instance_memories)
+            if self.instance_mapped_ptrs != 0:
+                Memory.free(self.instance_mapped_ptrs)
             self.instance_buffer = 0
             self.instance_memory = 0
         else:
@@ -1590,6 +1821,30 @@ attach GpuRendererCore:
             Memory.free(self.scratch_inst_off_arr)
         if self.scratch_desc_arr != 0:
             Memory.free(self.scratch_desc_arr)
+        if self.scratch_map_pp != 0:
+            Memory.free(self.scratch_map_pp)
+        if self.scratch_begin_info != 0:
+            Memory.free(self.scratch_begin_info)
+        if self.scratch_render_info != 0:
+            Memory.free(self.scratch_render_info)
+        if self.scratch_clear_values != 0:
+            Memory.free(self.scratch_clear_values)
+        if self.scratch_viewport != 0:
+            Memory.free(self.scratch_viewport)
+        if self.scratch_scissor != 0:
+            Memory.free(self.scratch_scissor)
+        if self.scratch_sky_att != 0:
+            Memory.free(self.scratch_sky_att)
+        if self.scratch_sky_rect != 0:
+            Memory.free(self.scratch_sky_rect)
+        if self.scratch_vp_matrix != 0:
+            Memory.free(self.scratch_vp_matrix)
+        if self.scratch_push_data != 0:
+            Memory.free(self.scratch_push_data)
+        if self.scratch_camera_view != 0:
+            Memory.free(self.scratch_camera_view)
+        if self.scratch_camera_proj != 0:
+            Memory.free(self.scratch_camera_proj)
         # Destroy textures (image view + sampler + image + memory).
         # Descriptor sets are freed with the pool in RenderPass.cleanup.
         if self.tex_views != 0:
