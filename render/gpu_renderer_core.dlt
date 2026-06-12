@@ -996,6 +996,114 @@ attach GpuRendererCore:
         gpu_tex_barrier(cmd, src_image, 6, 2, 2048, 256, 4096, 1024)
         gpu_tex_barrier(cmd, dst_image, 7, 1000001002, 4096, 0, 4096, 8192)
 
+    fun _sky_lerp_color(self, a: Color, b: Color, t_in: f32) -> Color:
+        t: f32 = t_in
+        if t < 0.0:
+            t = 0.0
+        if t > 1.0:
+            t = 1.0
+        inv: f32 = 1.0 - t
+        return Color.rgba(a.r * inv + b.r * t, a.g * inv + b.g * t, a.b * inv + b.b * t, 1.0)
+
+    fun _sky_band_color(self, sky: Sky, y01: f32) -> Color:
+        if y01 < 0.58:
+            t: f32 = y01 / 0.58
+            return self._sky_lerp_color(sky.zenith_color, sky.horizon_color, t)
+        t2: f32 = (y01 - 0.58) / 0.42
+        return self._sky_lerp_color(sky.horizon_color, sky.lower_color, t2)
+
+    fun _sky_draw_clear_rect(self, cmd: i64, att: i64, rect: i64, x: i32, y: i32, w: i32, h: i32, color: Color):
+        if w <= 0:
+            return
+        if h <= 0:
+            return
+        if att == 0:
+            return
+        if rect == 0:
+            return
+        Memory.write_i32(att, 1)
+        Memory.write_i32(att + 4, 0)
+        Memory.write_f32(att + 8, color.r)
+        Memory.write_f32(att + 12, color.g)
+        Memory.write_f32(att + 16, color.b)
+        Memory.write_f32(att + 20, color.a)
+        Memory.write_i32(rect, x)
+        Memory.write_i32(rect + 4, y)
+        Memory.write_i32(rect + 8, w)
+        Memory.write_i32(rect + 12, h)
+        Memory.write_i32(rect + 16, 0)
+        Memory.write_i32(rect + 20, 1)
+        vkCmdClearAttachments(cmd, 1, att, 1, rect)
+
+    fun _sky_star_x(self, index: i32, width: i32) -> i32:
+        seed: i32 = index * 1103515245 + 12345
+        if seed < 0:
+            seed = 0 - seed
+        if width <= 0:
+            return 0
+        return seed % width
+
+    fun _sky_star_y(self, index: i32, height: i32) -> i32:
+        upper: i32 = (height * 58) / 100
+        if upper < 1:
+            upper = 1
+        seed: i32 = index * 214013 + 2531011
+        if seed < 0:
+            seed = 0 - seed
+        return seed % upper
+
+    fun _record_sky(self, cmd: i64, width: i32, height: i32, sky: Sky):
+        if sky.enabled() == 0:
+            return
+        if width <= 0:
+            return
+        if height <= 0:
+            return
+        bands: i32 = sky.band_count
+        if bands < 4:
+            bands = 4
+        if bands > 96:
+            bands = 96
+        att: i64 = Memory.malloc_zeroed(24)
+        rect: i64 = Memory.malloc_zeroed(24)
+        if att == 0:
+            if rect != 0:
+                Memory.free(rect)
+            return
+        if rect == 0:
+            Memory.free(att)
+            return
+        band_h: i32 = (height + bands - 1) / bands
+        bands_f: f32 = bands as f32
+        bi: i32 = 0
+        while bi < bands:
+            y: i32 = bi * band_h
+            h: i32 = band_h
+            if y + h > height:
+                h = height - y
+            center: f32 = (bi as f32 + 0.5) / bands_f
+            color: Color = self._sky_band_color(sky, center)
+            self._sky_draw_clear_rect(cmd, att, rect, 0, y, width, h, color)
+            bi = bi + 1
+
+        if sky.star_strength > 0.0:
+            max_stars: i32 = sky.star_count
+            if max_stars > 180:
+                max_stars = 180
+            si: i32 = 0
+            while si < max_stars:
+                sx: i32 = self._sky_star_x(si + 1, width)
+                sy: i32 = self._sky_star_y(si + 7, height)
+                size: i32 = 1
+                if (si % 13) == 0:
+                    size = 2
+                base: Color = self._sky_band_color(sky, (sy as f32) / (height as f32))
+                star: Color = self._sky_lerp_color(base, sky.star_color, sky.star_strength)
+                self._sky_draw_clear_rect(cmd, att, rect, sx, sy, size, size, star)
+                si = si + 1
+        Memory.free(att)
+        Memory.free(rect)
+
     fun render_frame(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32) -> void:
         self.render_frame_scaled_with_environment(rp, sc, device, gfx_queue, present_queue, cam_view, cam_proj, width, height, width, height, Environment.create())
 
@@ -1142,6 +1250,7 @@ attach GpuRendererCore:
             Memory.write_ptr(rpi + 56, clear_vals)
 
         vkCmdBeginRenderPass(cmd, rpi, 0)
+        self._record_sky(cmd, width, height, env.sky)
 
         if rp.vk_pipeline != 0:
             vkCmdBindPipeline(cmd, 0, rp.vk_pipeline)

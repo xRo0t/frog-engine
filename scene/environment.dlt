@@ -8,6 +8,9 @@ const FOG_MODE_LINEAR: i32 = 1
 const FOG_MODE_EXPONENTIAL: i32 = 2
 const FOG_MODE_EXPONENTIAL_SQUARED: i32 = 3
 
+const SKY_MODE_NONE: i32 = 0
+const SKY_MODE_GRADIENT: i32 = 1
+
 struct Fog:
     mode: i32 = FOG_MODE_NONE
     color: Color = Color()
@@ -15,9 +18,20 @@ struct Fog:
     end_distance: f32 = 0.0
     density: f32 = 0.0
 
+struct Sky:
+    mode: i32 = SKY_MODE_NONE
+    zenith_color: Color = Color()
+    horizon_color: Color = Color()
+    lower_color: Color = Color()
+    star_color: Color = Color()
+    star_strength: f32 = 0.0
+    star_count: i32 = 0
+    band_count: i32 = 0
+
 struct Environment:
     clear_color: Color = Color()
     fog: Fog = Fog()
+    sky: Sky = Sky()
 
 attach Fog:
 
@@ -37,7 +51,7 @@ attach Fog:
             fog.end_distance = fog.start_distance + 1.0
         return fog
 
-    static fun minecraft(color: Color, view_distance: f32) -> Fog:
+    static fun view_distance(color: Color, view_distance: f32) -> Fog:
         distance: f32 = view_distance
         if distance < 16.0:
             distance = 16.0
@@ -65,12 +79,90 @@ attach Fog:
             return 0
         return 1
 
+attach Sky:
+
+    static fun create() -> Sky:
+        return Sky.gradient(Color.rgb(0.47, 0.63, 0.91), Color.rgb(0.72, 0.82, 0.96), Color.rgb(0.80, 0.88, 1.0))
+
+    static fun none() -> Sky:
+        sky: Sky = Sky()
+        sky.mode = SKY_MODE_NONE
+        sky.zenith_color = Color.rgb(0.15, 0.15, 0.20)
+        sky.horizon_color = sky.zenith_color
+        sky.lower_color = sky.zenith_color
+        sky.star_color = Color.white()
+        sky.star_strength = 0.0
+        sky.star_count = 0
+        sky.band_count = 0
+        return sky
+
+    static fun gradient(zenith: Color, horizon: Color, lower: Color) -> Sky:
+        sky: Sky = Sky.none()
+        sky.mode = SKY_MODE_GRADIENT
+        sky.zenith_color = zenith
+        sky.horizon_color = horizon
+        sky.lower_color = lower
+        sky.star_color = Color.rgb(0.86, 0.89, 0.95)
+        sky.star_strength = 0.0
+        sky.star_count = 0
+        sky.band_count = 24
+        return sky
+
+    fun enabled(self) -> i32:
+        if self.mode == SKY_MODE_NONE:
+            return 0
+        return 1
+
+    fun set_zenith(self, color: Color) -> Sky:
+        self.mode = SKY_MODE_GRADIENT
+        self.zenith_color = color
+        return self
+
+    fun set_horizon(self, color: Color) -> Sky:
+        self.mode = SKY_MODE_GRADIENT
+        self.horizon_color = color
+        return self
+
+    fun set_lower(self, color: Color) -> Sky:
+        self.mode = SKY_MODE_GRADIENT
+        self.lower_color = color
+        return self
+
+    fun set_stars(self, strength: f32, count: i32) -> Sky:
+        self.star_strength = strength
+        if self.star_strength < 0.0:
+            self.star_strength = 0.0
+        if self.star_strength > 1.0:
+            self.star_strength = 1.0
+        self.star_count = count
+        if self.star_count < 0:
+            self.star_count = 0
+        return self
+
+    fun set_star_color(self, color: Color) -> Sky:
+        self.star_color = color
+        return self
+
+    fun set_bands(self, count: i32) -> Sky:
+        self.band_count = count
+        if self.band_count < 4:
+            self.band_count = 4
+        if self.band_count > 96:
+            self.band_count = 96
+        return self
+
+    fun fog_color(self) -> Color:
+        if self.mode == SKY_MODE_NONE:
+            return self.zenith_color
+        return self.horizon_color
+
 attach Environment:
 
     static fun create() -> Environment:
         env: Environment = Environment()
         env.clear_color = Color.rgb(0.15, 0.15, 0.20)
         env.fog = Fog.none()
+        env.sky = Sky.none()
         return env
 
     fun set_clear_color(self, color: Color) -> Environment:
@@ -79,6 +171,16 @@ attach Environment:
 
     fun set_fog(self, fog: Fog) -> Environment:
         self.fog = fog
+        return self
+
+    fun set_sky(self, sky: Sky) -> Environment:
+        self.sky = sky
+        if sky.enabled() == 1:
+            self.clear_color = sky.zenith_color
+        return self
+
+    fun clear_sky(self) -> Environment:
+        self.sky = Sky.none()
         return self
 
     fun clear_fog(self) -> Environment:

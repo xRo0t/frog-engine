@@ -316,8 +316,12 @@ Engine.debug.render_stats(<span class="tok-num">1</span>)
 scene: <span class="tok-type">Scene</span> = Scene.create()
 
 env: <span class="tok-type">Environment</span> = Environment.create()
-env.set_clear_color(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>))
-env.set_fog(Fog.minecraft(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>), <span class="tok-num">240.0</span>))
+sky: <span class="tok-type">Sky</span> = Sky.create()
+sky.set_zenith(Color.rgb(<span class="tok-num">0.47</span>, <span class="tok-num">0.63</span>, <span class="tok-num">0.91</span>))
+sky.set_horizon(Color.rgb(<span class="tok-num">0.72</span>, <span class="tok-num">0.82</span>, <span class="tok-num">0.96</span>))
+sky.set_lower(Color.rgb(<span class="tok-num">0.80</span>, <span class="tok-num">0.88</span>, <span class="tok-num">1.0</span>))
+env.set_sky(sky)
+env.set_fog(Fog.view_distance(sky.fog_color(), <span class="tok-num">240.0</span>))
 scene.set_environment(env)
 
 camera: <span class="tok-type">Camera3D</span> = Camera3D.create()
@@ -859,32 +863,55 @@ camera.add_child(raycast)
     </section>
     <section id="environment">
       <h2>Environment</h2>
-      <p class="lead">Per-scene render settings. Use it for background clear color now, and fog/sky/lighting controls as the renderer grows.</p>
+      <p class="lead">Per-scene render settings. Use it for sky color, distance fog, and future lighting controls.</p>
 
       <h4>Environment</h4>
       <table>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
         <tr><td><code>Environment.create()</code></td><td>Environment</td><td>Creates the default scene environment.</td></tr>
         <tr><td><code>set_clear_color(color)</code></td><td>Environment</td><td>Sets the Vulkan clear color for this scene.</td></tr>
+        <tr><td><code>set_sky(sky)</code></td><td>Environment</td><td>Sets the rendered gradient sky for this scene.</td></tr>
+        <tr><td><code>clear_sky()</code></td><td>Environment</td><td>Disables the rendered sky and falls back to the clear color.</td></tr>
         <tr><td><code>set_fog(fog)</code></td><td>Environment</td><td>Stores fog settings for this scene.</td></tr>
         <tr><td><code>clear_fog()</code></td><td>Environment</td><td>Disables fog on this environment.</td></tr>
+      </table>
+
+      <h4>Sky</h4>
+      <table>
+        <tr><th>Constructor</th><th>Description</th></tr>
+        <tr><td><code>Sky.create()</code></td><td>Creates an editable default gradient sky.</td></tr>
+        <tr><td><code>Sky.none()</code></td><td>No rendered sky; only the clear color is used.</td></tr>
+        <tr><td><code>Sky.gradient(zenith, horizon, lower)</code></td><td>Custom top-to-horizon-to-lower gradient sky.</td></tr>
+        <tr><td><code>set_zenith(color)</code></td><td>Sets the top sky color.</td></tr>
+        <tr><td><code>set_horizon(color)</code></td><td>Sets the middle horizon color.</td></tr>
+        <tr><td><code>set_lower(color)</code></td><td>Sets the lower sky color.</td></tr>
+        <tr><td><code>set_stars(strength, count)</code></td><td>Configures subtle sky stars.</td></tr>
+        <tr><td><code>set_star_color(color)</code></td><td>Sets the star tint.</td></tr>
+        <tr><td><code>set_bands(count)</code></td><td>Controls gradient band smoothness.</td></tr>
       </table>
 
       <h4>Fog</h4>
       <table>
         <tr><th>Constructor</th><th>Description</th></tr>
         <tr><td><code>Fog.none()</code></td><td>No fog.</td></tr>
-        <tr><td><code>Fog.minecraft(color, view_distance)</code></td><td>Minecraft-style linear fog near the far edge of the view distance.</td></tr>
+        <tr><td><code>Fog.view_distance(color, view_distance)</code></td><td>Linear fog near the far edge of a view distance.</td></tr>
         <tr><td><code>Fog.linear(color, start, end)</code></td><td>Linear distance fog.</td></tr>
         <tr><td><code>Fog.exponential(color, density)</code></td><td>Exponential distance fog.</td></tr>
         <tr><td><code>Fog.exponential_squared(color, density)</code></td><td>Stronger exponential fog.</td></tr>
       </table>
 
       <pre><code>env: <span class="tok-type">Environment</span> = Environment.create()
-env.set_clear_color(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>))
-env.set_fog(Fog.minecraft(Color.rgb(<span class="tok-num">0.64</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.88</span>), <span class="tok-num">480.0</span>))
+sky: <span class="tok-type">Sky</span> = Sky.create()
+sky.set_zenith(Color.rgb(<span class="tok-num">0.30</span>, <span class="tok-num">0.37</span>, <span class="tok-num">0.55</span>))
+sky.set_horizon(Color.rgb(<span class="tok-num">0.62</span>, <span class="tok-num">0.42</span>, <span class="tok-num">0.47</span>))
+sky.set_lower(Color.rgb(<span class="tok-num">0.86</span>, <span class="tok-num">0.39</span>, <span class="tok-num">0.23</span>))
+sky.set_star_color(Color.rgb(<span class="tok-num">0.83</span>, <span class="tok-num">0.86</span>, <span class="tok-num">0.94</span>))
+sky.set_stars(<span class="tok-num">0.55</span>, <span class="tok-num">90</span>)
+sky.set_bands(<span class="tok-num">32</span>)
+env.set_sky(sky)
+env.set_fog(Fog.view_distance(sky.fog_color(), <span class="tok-num">480.0</span>))
 scene.set_environment(env)</code></pre>
-      <div class="note">Clear color is applied by the current Vulkan renderer. Fog is part of the scene environment API and is ready for shader-side rendering.</div>
+      <div class="note">The current Vulkan renderer draws the sky before world meshes, then applies fog to world geometry.</div>
     </section>
     <section id="vec3">
       <h2>Vec3</h2>
