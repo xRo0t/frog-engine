@@ -4,11 +4,7 @@
 # Adapted from qubic/core/window.dlt
 ##############################
 
-extern lib "kernel32":
-    fun GetModuleHandleA(lpModuleName: i64) -> i64
-
-extern lib "dolet-vulkan-1":
-    fun vkCreateWin32SurfaceKHR(instance: i64, pCreateInfo: i64, pAllocator: i64, pSurface: i64) -> i32
+import sys.linux.vulkan_surface
 
 struct VulkanContext:
     vk_instance:        i64 = 0
@@ -114,7 +110,7 @@ attach VulkanContext:
     fun init_with_gpu_preference(self, window_handle: i64, gpu_preference: i32) -> i32:
         # Step 1: Required Vulkan extensions (replaces glfwGetRequiredInstanceExtensions)
         ext1: str = "VK_KHR_surface"
-        ext2: str = "VK_KHR_win32_surface"
+        ext2: str = "VK_KHR_xlib_surface"
         ext_count: i32 = 2
         extensions: i64 = Memory.malloc_zeroed(16)
         if extensions == 0:
@@ -163,7 +159,7 @@ attach VulkanContext:
             return 0
         print("  VkInstance created")
 
-        # Step 4: Create surface via native Win32. Device suitability depends
+        # Step 4: Create surface via native Xlib. Device suitability depends
         # on present support, so the surface must exist before GPU selection.
         surface_ptr: i64 = Memory.malloc_zeroed(8)
         if surface_ptr == 0:
@@ -172,16 +168,21 @@ attach VulkanContext:
         if surf_ci == 0:
             Memory.free(surface_ptr)
             return 0
-        hinstance: i64 = GetModuleHandleA(0)
-        Memory.write_i32(surf_ci, 1000009000)
+        display: i64 = Window.hinstance()
+        if display == 0:
+            print("  X11 display is not available")
+            Memory.free(surf_ci)
+            Memory.free(surface_ptr)
+            return 0
+        Memory.write_i32(surf_ci, VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR)
         Memory.write_ptr(surf_ci + 8, 0)
         Memory.write_i32(surf_ci + 16, 0)
-        Memory.write_ptr(surf_ci + 24, hinstance)
+        Memory.write_ptr(surf_ci + 24, display)
         Memory.write_ptr(surf_ci + 32, window_handle)
-        surf_result: i32 = vkCreateWin32SurfaceKHR(self.vk_instance, surf_ci, 0, surface_ptr)
+        surf_result: i32 = vkCreateXlibSurfaceKHR(self.vk_instance, surf_ci, 0, surface_ptr)
         Memory.free(surf_ci)
         if surf_result != 0:
-            print("  vkCreateWin32SurfaceKHR failed")
+            print("  vkCreateXlibSurfaceKHR failed")
             Memory.free(surface_ptr)
             return 0
         print("  Surface created")

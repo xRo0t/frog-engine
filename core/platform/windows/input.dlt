@@ -3,8 +3,7 @@
 # Minimal keyboard polling for interactive demos.
 ##############################
 
-extern lib "user32":
-    fun GetAsyncKeyState(vKey: i32) -> i16
+import sys.windows.win32.user32
 
 KEY_A: i32 = 65
 KEY_D: i32 = 68

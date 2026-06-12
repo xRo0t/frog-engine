@@ -1,0 +1,23 @@
+##############################
+# Frog - Windows Time Backend
+##############################
+
+fun frog_time_frequency() -> i64:
+    freq_buf: i64 = Memory.malloc_zeroed(8)
+    if freq_buf == 0:
+        return 1000000000
+    QueryPerformanceFrequency(freq_buf)
+    freq: i64 = Memory.read_i64(freq_buf)
+    Memory.free(freq_buf)
+    if freq <= 0:
+        return 1000000000
+    return freq
+
+fun frog_time_now_ticks() -> i64:
+    time_buf: i64 = Memory.malloc_zeroed(8)
+    if time_buf == 0:
+        return TimeOps.time_now_ns()
+    QueryPerformanceCounter(time_buf)
+    ticks: i64 = Memory.read_i64(time_buf)
+    Memory.free(time_buf)
+    return ticks

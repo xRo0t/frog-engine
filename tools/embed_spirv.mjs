@@ -1,0 +1,88 @@
+import fs from "node:fs";
+import path from "node:path";
+
+const CHUNK_WORDS = 120;
+const GENERATED_MARKER = "# BEGIN GENERATED TEXTURED SHADERS";
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
+
+function readWords(filePath) {
+  const data = fs.readFileSync(filePath);
+  if (data.length === 0 || data.length % 4 !== 0) {
+    fail(`Invalid SPIR-V file: ${filePath}`);
+  }
+
+  const words = [];
+  for (let offset = 0; offset < data.length; offset += 4) {
+    words.push(data.readInt32LE(offset));
+  }
+  return { words, byteLength: data.length };
+}
+
+function emitShader(prefix, getterName, compiled) {
+  const chunks = [];
+  for (let start = 0; start < compiled.words.length; start += CHUNK_WORDS) {
+    const index = chunks.length;
+    const lines = [`fun _frog_init_${prefix}_shader_p${index}(buf: i64) -> void:`];
+    const end = Math.min(start + CHUNK_WORDS, compiled.words.length);
+    for (let wordIndex = start; wordIndex < end; wordIndex += 1) {
+      lines.push(`    Memory.write_i32(buf + ${wordIndex * 4}, ${compiled.words[wordIndex]})`);
+    }
+    chunks.push(lines.join("\n"));
+  }
+
+  const init = [`fun _frog_init_${prefix}_shader(buf: i64) -> void:`];
+  for (let index = 0; index < chunks.length; index += 1) {
+    init.push(`    _frog_init_${prefix}_shader_p${index}(buf)`);
+  }
+
+  const getter = [
+    `fun ${getterName}() -> EmbeddedShader:`,
+    "    shader: EmbeddedShader = EmbeddedShader()",
+    `    buf: i64 = Memory.malloc_zeroed(${compiled.byteLength})`,
+    "    if buf == 0:",
+    "        return shader",
+    `    _frog_init_${prefix}_shader(buf)`,
+    "    shader.data = buf",
+    `    shader.size = ${compiled.byteLength}`,
+    "    return shader",
+  ];
+
+  return [...chunks, init.join("\n"), getter.join("\n")].join("\n\n");
+}
+
+const [vertexPath, fragmentPath, outputPathArg] = process.argv.slice(2);
+if (!vertexPath || !fragmentPath) {
+  fail("Usage: node tools/embed_spirv.mjs <vertex.spv> <fragment.spv> [gpu_shaders.dlt]");
+}
+
+const outputPath = outputPathArg ?? path.join("render", "gpu_shaders.dlt");
+const current = fs.readFileSync(outputPath, "utf8");
+let markerIndex = current.indexOf(GENERATED_MARKER);
+if (markerIndex < 0) {
+  markerIndex = current.indexOf("# Textured vertex shader");
+}
+if (markerIndex < 0) {
+  fail(`Could not find generated shader section in ${outputPath}`);
+}
+
+const vertex = readWords(vertexPath);
+const fragment = readWords(fragmentPath);
+const generated = [
+  GENERATED_MARKER,
+  "# Generated from render/shaders/textured.vert and textured.frag.",
+  "# Run glslangValidator, then tools/embed_spirv.mjs to regenerate.",
+  "",
+  emitShader("tex_vert", "get_textured_vert_shader", vertex),
+  "",
+  emitShader("tex_frag", "get_textured_frag_shader", fragment),
+  "",
+  "# END GENERATED TEXTURED SHADERS",
+  "",
+].join("\n");
+
+fs.writeFileSync(outputPath, current.slice(0, markerIndex) + generated, "utf8");
+console.log(`Embedded ${vertex.byteLength}-byte vertex and ${fragment.byteLength}-byte fragment shaders.`);

@@ -1005,12 +1005,26 @@ attach GpuRendererCore:
         inv: f32 = 1.0 - t
         return Color.rgba(a.r * inv + b.r * t, a.g * inv + b.g * t, a.b * inv + b.b * t, 1.0)
 
-    fun _sky_band_color(self, sky: Sky, y01: f32) -> Color:
-        if y01 < 0.58:
-            t: f32 = y01 / 0.58
-            return self._sky_lerp_color(sky.zenith_color, sky.horizon_color, t)
-        t2: f32 = (y01 - 0.58) / 0.42
-        return self._sky_lerp_color(sky.horizon_color, sky.lower_color, t2)
+    fun _sky_sample_world_y(self, y01: f32, cam_view: i64) -> f32:
+        screen_y: f32 = 1.0 - y01 * 2.0
+        if cam_view == 0:
+            return screen_y
+
+        up_y: f32 = Memory.read_f32(cam_view + 20)
+        up_z: f32 = Memory.read_f32(cam_view + 24)
+        world_y: f32 = screen_y * up_y - up_z
+        if world_y < 0.0 - 1.0:
+            world_y = 0.0 - 1.0
+        if world_y > 1.0:
+            world_y = 1.0
+        return world_y
+
+    fun _sky_band_color(self, sky: Sky, y01: f32, cam_view: i64) -> Color:
+        world_y: f32 = self._sky_sample_world_y(y01, cam_view)
+        if world_y >= 0.0:
+            return self._sky_lerp_color(sky.horizon_color, sky.zenith_color, world_y)
+        t: f32 = 0.0 - world_y
+        return self._sky_lerp_color(sky.horizon_color, sky.lower_color, t)
 
     fun _sky_draw_clear_rect(self, cmd: i64, att: i64, rect: i64, x: i32, y: i32, w: i32, h: i32, color: Color):
         if w <= 0:
@@ -1052,7 +1066,7 @@ attach GpuRendererCore:
             seed = 0 - seed
         return seed % upper
 
-    fun _record_sky(self, cmd: i64, width: i32, height: i32, sky: Sky):
+    fun _record_sky(self, cmd: i64, width: i32, height: i32, sky: Sky, cam_view: i64):
         if sky.enabled() == 0:
             return
         if width <= 0:
@@ -1082,7 +1096,7 @@ attach GpuRendererCore:
             if y + h > height:
                 h = height - y
             center: f32 = (bi as f32 + 0.5) / bands_f
-            color: Color = self._sky_band_color(sky, center)
+            color: Color = self._sky_band_color(sky, center, cam_view)
             self._sky_draw_clear_rect(cmd, att, rect, 0, y, width, h, color)
             bi = bi + 1
 
@@ -1097,7 +1111,7 @@ attach GpuRendererCore:
                 size: i32 = 1
                 if (si % 13) == 0:
                     size = 2
-                base: Color = self._sky_band_color(sky, (sy as f32) / (height as f32))
+                base: Color = self._sky_band_color(sky, (sy as f32) / (height as f32), cam_view)
                 star: Color = self._sky_lerp_color(base, sky.star_color, sky.star_strength)
                 self._sky_draw_clear_rect(cmd, att, rect, sx, sy, size, size, star)
                 si = si + 1
@@ -1250,7 +1264,7 @@ attach GpuRendererCore:
             Memory.write_ptr(rpi + 56, clear_vals)
 
         vkCmdBeginRenderPass(cmd, rpi, 0)
-        self._record_sky(cmd, width, height, env.sky)
+        self._record_sky(cmd, width, height, env.sky, cam_view)
 
         if rp.vk_pipeline != 0:
             vkCmdBindPipeline(cmd, 0, rp.vk_pipeline)
@@ -1313,7 +1327,7 @@ attach GpuRendererCore:
                             Memory.free(instance_map_pp)
 
                 if vp_mat != 0:
-                    pc_data = Memory.malloc_zeroed(96)
+                    pc_data = Memory.malloc_zeroed(112)
                     if pc_data != 0:
                         Memory.copy(pc_data, vp_mat, 64)
                         Memory.write_f32(pc_data + 64, env.fog.color.r)
@@ -1324,7 +1338,15 @@ attach GpuRendererCore:
                         Memory.write_f32(pc_data + 84, env.fog.start_distance)
                         Memory.write_f32(pc_data + 88, env.fog.end_distance)
                         Memory.write_f32(pc_data + 92, env.fog.density)
-                        vkCmdPushConstants(cmd, rp.vk_pipeline_layout, 17, 0, 96, pc_data)
+                        Memory.write_f32(pc_data + 96, env.fog.shape as f32)
+                        if cam_proj != 0:
+                            Memory.write_f32(pc_data + 100, Memory.read_f32(cam_proj))
+                            Memory.write_f32(pc_data + 104, Memory.read_f32(cam_proj + 20))
+                        else:
+                            Memory.write_f32(pc_data + 100, 1.0)
+                            Memory.write_f32(pc_data + 104, 1.0)
+                        Memory.write_f32(pc_data + 108, 0.0)
+                        vkCmdPushConstants(cmd, rp.vk_pipeline_layout, 17, 0, 112, pc_data)
 
                 last_bound: i64 = 0
                 last_index_bound: i64 = 0

@@ -8,6 +8,7 @@
 *.o
 *.mlir
 *.ll
+*.spv
 
 # Local scratch / generated
 _*/

@@ -8,11 +8,18 @@ const FOG_MODE_LINEAR: i32 = 1
 const FOG_MODE_EXPONENTIAL: i32 = 2
 const FOG_MODE_EXPONENTIAL_SQUARED: i32 = 3
 
+const FOG_SHAPE_DEPTH: i32 = 0
+const FOG_SHAPE_SPHERICAL: i32 = 1
+
 const SKY_MODE_NONE: i32 = 0
 const SKY_MODE_GRADIENT: i32 = 1
 
+struct FogShape:
+    value: i32 = FOG_SHAPE_SPHERICAL
+
 struct Fog:
     mode: i32 = FOG_MODE_NONE
+    shape: i32 = FOG_SHAPE_SPHERICAL
     color: Color = Color()
     start_distance: f32 = 0.0
     end_distance: f32 = 0.0
@@ -33,10 +40,18 @@ struct Environment:
     fog: Fog = Fog()
     sky: Sky = Sky()
 
+attach FogShape:
+
+    static fun spherical() -> FogShape:
+        return FogShape(value=FOG_SHAPE_SPHERICAL)
+
+    static fun depth() -> FogShape:
+        return FogShape(value=FOG_SHAPE_DEPTH)
+
 attach Fog:
 
     static fun none() -> Fog:
-        return Fog(mode=FOG_MODE_NONE, color=Color.rgb(0.15, 0.15, 0.20), start_distance=0.0, end_distance=0.0, density=0.0)
+        return Fog(mode=FOG_MODE_NONE, shape=FOG_SHAPE_SPHERICAL, color=Color.rgb(0.15, 0.15, 0.20), start_distance=0.0, end_distance=0.0, density=0.0)
 
     static fun linear(color: Color, start_distance: f32, end_distance: f32) -> Fog:
         fog: Fog = Fog.none()
@@ -73,6 +88,12 @@ attach Fog:
         fog: Fog = Fog.exponential(color, density)
         fog.mode = FOG_MODE_EXPONENTIAL_SQUARED
         return fog
+
+    fun set_shape(self, shape: FogShape) -> Fog:
+        self.shape = shape.value
+        if self.shape != FOG_SHAPE_DEPTH:
+            self.shape = FOG_SHAPE_SPHERICAL
+        return self
 
     fun enabled(self) -> i32:
         if self.mode == FOG_MODE_NONE:

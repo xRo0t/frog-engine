@@ -1,0 +1,338 @@
+##############################
+# Frog Engine — VulkanContext
+# VkInstance, physical device, logical device, queues
+# Adapted from qubic/core/window.dlt
+##############################
+
+import sys.windows.win32.vulkan_surface
+
+struct VulkanContext:
+    vk_instance:        i64 = 0
+    vk_physical_device: i64 = 0
+    vk_device:          i64 = 0
+    vk_graphics_queue:  i64 = 0
+    vk_present_queue:   i64 = 0
+    vk_surface:         i64 = 0
+    graphics_family:    i32 = -1
+    present_family:     i32 = -1
+    initialized:        i32 = 0
+
+attach VulkanContext:
+
+    fun init(self, window_handle: i64) -> i32:
+        return self.init_with_gpu_preference(window_handle, 0)
+
+    fun _find_queue_families(self, device: i64, surface: i64, graphics_out: i64, present_out: i64) -> i32:
+        Memory.write_i32(graphics_out, -1)
+        Memory.write_i32(present_out, -1)
+
+        qf_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if qf_count_ptr == 0:
+            return 0
+        vkGetPhysicalDeviceQueueFamilyProperties(device, qf_count_ptr, 0)
+        qf_count: i32 = Memory.read_i32(qf_count_ptr)
+        if qf_count == 0:
+            Memory.free(qf_count_ptr)
+            return 0
+
+        qf_props: i64 = Memory.malloc_zeroed(qf_count * 24)
+        if qf_props == 0:
+            Memory.free(qf_count_ptr)
+            return 0
+        vkGetPhysicalDeviceQueueFamilyProperties(device, qf_count_ptr, qf_props)
+        Memory.free(qf_count_ptr)
+
+        present_ptr: i64 = Memory.malloc_zeroed(4)
+        if present_ptr == 0:
+            Memory.free(qf_props)
+            return 0
+
+        qi: i32 = 0
+        while qi < qf_count:
+            flags: i32 = Memory.read_i32(qf_props + qi * 24)
+            if Memory.read_i32(graphics_out) < 0:
+                if (flags / 1) - (flags / 2) * 2 == 1:
+                    Memory.write_i32(graphics_out, qi)
+
+            if Memory.read_i32(present_out) < 0:
+                vkGetPhysicalDeviceSurfaceSupportKHR(device, qi, surface, present_ptr)
+                support: i32 = Memory.read_i32(present_ptr)
+                if support == 1:
+                    Memory.write_i32(present_out, qi)
+            qi = qi + 1
+
+        Memory.free(present_ptr)
+        Memory.free(qf_props)
+
+        if Memory.read_i32(graphics_out) < 0:
+            return 0
+        if Memory.read_i32(present_out) < 0:
+            return 0
+        return 1
+
+    fun _choose_physical_device(self, devices: i64, dev_count: i32, surface: i64, preference: i32, graphics_out: i64, present_out: i64) -> i64:
+        temp_graphics: i64 = Memory.malloc_zeroed(4)
+        temp_present: i64 = Memory.malloc_zeroed(4)
+        if temp_graphics == 0:
+            return 0
+        if temp_present == 0:
+            Memory.free(temp_graphics)
+            return 0
+
+        if preference >= 1000:
+            wanted_index: i32 = preference - 1000
+            if wanted_index >= 0:
+                if wanted_index < dev_count:
+                    indexed_device: i64 = Memory.read_ptr(devices + wanted_index * 8)
+                    if self._find_queue_families(indexed_device, surface, temp_graphics, temp_present) == 1:
+                        Memory.write_i32(graphics_out, Memory.read_i32(temp_graphics))
+                        Memory.write_i32(present_out, Memory.read_i32(temp_present))
+                        Memory.free(temp_graphics)
+                        Memory.free(temp_present)
+                        return indexed_device
+                    print("  Requested GPU index is not suitable; falling back to auto")
+
+        i: i32 = 0
+        while i < dev_count:
+            candidate: i64 = Memory.read_ptr(devices + i * 8)
+            if self._find_queue_families(candidate, surface, temp_graphics, temp_present) == 1:
+                Memory.write_i32(graphics_out, Memory.read_i32(temp_graphics))
+                Memory.write_i32(present_out, Memory.read_i32(temp_present))
+                Memory.free(temp_graphics)
+                Memory.free(temp_present)
+                return candidate
+            i = i + 1
+
+        Memory.free(temp_graphics)
+        Memory.free(temp_present)
+        return 0
+
+    fun init_with_gpu_preference(self, window_handle: i64, gpu_preference: i32) -> i32:
+        # Step 1: Required Vulkan extensions (replaces glfwGetRequiredInstanceExtensions)
+        ext1: str = "VK_KHR_surface"
+        ext2: str = "VK_KHR_win32_surface"
+        ext_count: i32 = 2
+        extensions: i64 = Memory.malloc_zeroed(16)
+        if extensions == 0:
+            return 0
+        Memory.write_ptr(extensions, ext1 as i64)
+        Memory.write_ptr(extensions + 8, ext2 as i64)
+
+        # Step 2: VkApplicationInfo (48 bytes)
+        app_info: i64 = Memory.malloc_zeroed(48)
+        if app_info == 0:
+            return 0
+        Memory.write_i32(app_info, 0)
+        Memory.write_ptr(app_info + 8, 0)
+        Memory.write_ptr(app_info + 16, 0)
+        Memory.write_i32(app_info + 24, 1)
+        Memory.write_ptr(app_info + 32, 0)
+        Memory.write_i32(app_info + 40, 4194304)
+        Memory.write_i32(app_info + 44, 4194304)
+
+        # Step 3: VkInstanceCreateInfo (64 bytes)
+        create_info: i64 = Memory.malloc_zeroed(64)
+        if create_info == 0:
+            Memory.free(app_info)
+            return 0
+        Memory.write_i32(create_info, 1)
+        Memory.write_ptr(create_info + 8, 0)
+        Memory.write_i32(create_info + 16, 0)
+        Memory.write_ptr(create_info + 24, app_info)
+        Memory.write_i32(create_info + 32, 0)
+        Memory.write_ptr(create_info + 40, 0)
+        Memory.write_i32(create_info + 48, ext_count)
+        Memory.write_ptr(create_info + 56, extensions)
+
+        instance_ptr: i64 = Memory.malloc_zeroed(8)
+        if instance_ptr == 0:
+            Memory.free(app_info)
+            Memory.free(create_info)
+            return 0
+        result: i32 = vkCreateInstance(create_info, 0, instance_ptr)
+        self.vk_instance = Memory.read_ptr(instance_ptr)
+        Memory.free(instance_ptr)
+        Memory.free(app_info)
+        Memory.free(create_info)
+        if result != 0:
+            print("  vkCreateInstance failed")
+            return 0
+        print("  VkInstance created")
+
+        # Step 4: Create surface via native Win32. Device suitability depends
+        # on present support, so the surface must exist before GPU selection.
+        surface_ptr: i64 = Memory.malloc_zeroed(8)
+        if surface_ptr == 0:
+            return 0
+        surf_ci: i64 = Memory.malloc_zeroed(40)
+        if surf_ci == 0:
+            Memory.free(surface_ptr)
+            return 0
+        hinstance: i64 = GetModuleHandleA(0)
+        Memory.write_i32(surf_ci, 1000009000)
+        Memory.write_ptr(surf_ci + 8, 0)
+        Memory.write_i32(surf_ci + 16, 0)
+        Memory.write_ptr(surf_ci + 24, hinstance)
+        Memory.write_ptr(surf_ci + 32, window_handle)
+        surf_result: i32 = vkCreateWin32SurfaceKHR(self.vk_instance, surf_ci, 0, surface_ptr)
+        Memory.free(surf_ci)
+        if surf_result != 0:
+            print("  vkCreateWin32SurfaceKHR failed")
+            Memory.free(surface_ptr)
+            return 0
+        print("  Surface created")
+        self.vk_surface = Memory.read_ptr(surface_ptr)
+        Memory.free(surface_ptr)
+
+        # Step 5: Pick physical device and queue families.
+        dev_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if dev_count_ptr == 0:
+            return 0
+        Memory.write_i32(dev_count_ptr, 0)
+        vkEnumeratePhysicalDevices(self.vk_instance, dev_count_ptr, 0)
+        dev_count: i32 = Memory.read_i32(dev_count_ptr)
+        if dev_count == 0:
+            print("  No physical devices found")
+            Memory.free(dev_count_ptr)
+            return 0
+        devices: i64 = Memory.malloc_zeroed(dev_count * 8)
+        if devices == 0:
+            Memory.free(dev_count_ptr)
+            return 0
+        vkEnumeratePhysicalDevices(self.vk_instance, dev_count_ptr, devices)
+        Memory.free(dev_count_ptr)
+
+        graphics_ptr: i64 = Memory.malloc_zeroed(4)
+        present_ptr: i64 = Memory.malloc_zeroed(4)
+        if graphics_ptr == 0:
+            Memory.free(devices)
+            return 0
+        if present_ptr == 0:
+            Memory.free(graphics_ptr)
+            Memory.free(devices)
+            return 0
+        self.vk_physical_device = self._choose_physical_device(devices, dev_count, self.vk_surface, gpu_preference, graphics_ptr, present_ptr)
+        self.graphics_family = Memory.read_i32(graphics_ptr)
+        self.present_family = Memory.read_i32(present_ptr)
+        Memory.free(graphics_ptr)
+        Memory.free(present_ptr)
+        Memory.free(devices)
+
+        if self.vk_physical_device == 0:
+            print("  No suitable physical device found")
+            return 0
+
+        if self.graphics_family < 0:
+            print("  No graphics queue family found")
+            return 0
+        if self.present_family < 0:
+            print("  No present queue family found")
+            return 0
+
+        print("  Physical device selected")
+
+        # Step 6: Create logical device
+        priority_ptr: i64 = Memory.malloc_zeroed(4)
+        if priority_ptr == 0:
+            return 0
+        Memory.write_f32(priority_ptr, 1.0)
+
+        # VkDeviceQueueCreateInfo — one or two depending on queue families
+        # Each VkDeviceQueueCreateInfo is 40 bytes
+        queue_count: i32 = 1
+        if self.graphics_family != self.present_family:
+            queue_count = 2
+
+        queue_ci: i64 = Memory.malloc_zeroed(40 * queue_count)
+        if queue_ci == 0:
+            Memory.free(priority_ptr)
+            return 0
+        # Graphics queue create info
+        Memory.write_i32(queue_ci, 2)
+        Memory.write_ptr(queue_ci + 8, 0)
+        Memory.write_i32(queue_ci + 16, 0)
+        Memory.write_i32(queue_ci + 20, self.graphics_family)
+        Memory.write_i32(queue_ci + 24, 1)
+        Memory.write_ptr(queue_ci + 32, priority_ptr)
+
+        # Present queue create info (only if different family)
+        if self.graphics_family != self.present_family:
+            Memory.write_i32(queue_ci + 40, 2)
+            Memory.write_ptr(queue_ci + 48, 0)
+            Memory.write_i32(queue_ci + 56, 0)
+            Memory.write_i32(queue_ci + 60, self.present_family)
+            Memory.write_i32(queue_ci + 64, 1)
+            Memory.write_ptr(queue_ci + 72, priority_ptr)
+
+        swap_ext: i64 = Memory.malloc_zeroed(32)
+        if swap_ext == 0:
+            Memory.free(priority_ptr)
+            Memory.free(queue_ci)
+            return 0
+        swap_ext_name: str = "VK_KHR_swapchain"
+        Memory.write_ptr(swap_ext, swap_ext_name)
+
+        # VkDeviceCreateInfo (72 bytes)
+        dev_ci: i64 = Memory.malloc_zeroed(72)
+        if dev_ci == 0:
+            Memory.free(priority_ptr)
+            Memory.free(queue_ci)
+            Memory.free(swap_ext)
+            return 0
+        Memory.write_i32(dev_ci, 3)
+        Memory.write_ptr(dev_ci + 8, 0)
+        Memory.write_i32(dev_ci + 16, 0)
+        Memory.write_i32(dev_ci + 20, queue_count)
+        Memory.write_ptr(dev_ci + 24, queue_ci)
+        Memory.write_i32(dev_ci + 32, 0)
+        Memory.write_ptr(dev_ci + 40, 0)
+        Memory.write_i32(dev_ci + 48, 1)
+        Memory.write_ptr(dev_ci + 56, swap_ext)
+        Memory.write_ptr(dev_ci + 64, 0)
+
+        dev_ptr: i64 = Memory.malloc_zeroed(8)
+        if dev_ptr == 0:
+            Memory.free(priority_ptr)
+            Memory.free(queue_ci)
+            Memory.free(swap_ext)
+            Memory.free(dev_ci)
+            return 0
+        dev_result: i32 = vkCreateDevice(self.vk_physical_device, dev_ci, 0, dev_ptr)
+        self.vk_device = Memory.read_ptr(dev_ptr)
+        Memory.free(dev_ptr)
+        Memory.free(priority_ptr)
+        Memory.free(queue_ci)
+        Memory.free(swap_ext)
+        Memory.free(dev_ci)
+        if dev_result != 0:
+            print("  vkCreateDevice failed")
+            return 0
+        print("  Logical device created")
+
+        # Step 9: Get queues
+        gq_ptr: i64 = Memory.malloc_zeroed(8)
+        pq_ptr: i64 = Memory.malloc_zeroed(8)
+        if gq_ptr != 0:
+            vkGetDeviceQueue(self.vk_device, self.graphics_family, 0, gq_ptr)
+            self.vk_graphics_queue = Memory.read_ptr(gq_ptr)
+            Memory.free(gq_ptr)
+        if pq_ptr != 0:
+            vkGetDeviceQueue(self.vk_device, self.present_family, 0, pq_ptr)
+            self.vk_present_queue = Memory.read_ptr(pq_ptr)
+            Memory.free(pq_ptr)
+
+        self.initialized = 1
+        return 1
+
+    fun cleanup(self) -> void:
+        if self.vk_device != 0:
+            vkDeviceWaitIdle(self.vk_device)
+            vkDestroyDevice(self.vk_device, 0)
+            self.vk_device = 0
+        if self.vk_surface != 0:
+            vkDestroySurfaceKHR(self.vk_instance, self.vk_surface, 0)
+            self.vk_surface = 0
+        if self.vk_instance != 0:
+            vkDestroyInstance(self.vk_instance, 0)
+            self.vk_instance = 0
+        self.initialized = 0

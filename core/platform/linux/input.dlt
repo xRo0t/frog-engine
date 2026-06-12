@@ -1,0 +1,168 @@
+##############################
+# Frog - Linux Input
+##############################
+
+import sys.linux.x11
+
+KEY_A: i32 = 65
+KEY_D: i32 = 68
+KEY_E: i32 = 69
+KEY_F: i32 = 70
+KEY_G: i32 = 71
+KEY_M: i32 = 77
+KEY_Q: i32 = 81
+KEY_S: i32 = 83
+KEY_W: i32 = 87
+
+KEY_LEFT: i32 = 37
+KEY_UP: i32 = 38
+KEY_RIGHT: i32 = 39
+KEY_DOWN: i32 = 40
+
+KEY_ESCAPE: i32 = 27
+KEY_SPACE: i32 = 32
+KEY_SHIFT: i32 = 16
+KEY_CTRL: i32 = 17
+
+MOUSE_LEFT: i32 = 1
+MOUSE_RIGHT: i32 = 2
+
+struct Input:
+    _placeholder: i32 = 0
+
+fun _frog_key_to_keysym(key: i32) -> i64:
+    if key == KEY_A:
+        return XK_A
+    if key == KEY_D:
+        return XK_D
+    if key == KEY_E:
+        return XK_E
+    if key == KEY_F:
+        return XK_F
+    if key == KEY_G:
+        return XK_G
+    if key == KEY_M:
+        return XK_M
+    if key == KEY_Q:
+        return XK_Q
+    if key == KEY_S:
+        return XK_S
+    if key == KEY_W:
+        return XK_W
+    if key == KEY_LEFT:
+        return XK_LEFT
+    if key == KEY_UP:
+        return XK_UP
+    if key == KEY_RIGHT:
+        return XK_RIGHT
+    if key == KEY_DOWN:
+        return XK_DOWN
+    if key == KEY_ESCAPE:
+        return XK_ESCAPE
+    if key == KEY_SPACE:
+        return XK_SPACE
+    if key == KEY_SHIFT:
+        return XK_SHIFT_L
+    if key == KEY_CTRL:
+        return XK_CONTROL_L
+    return 0
+
+fun _frog_mouse_button_down(button: i32) -> i32:
+    display: i64 = Window.hinstance()
+    hwnd: i64 = Window.handle()
+    if display == 0 or hwnd == 0:
+        return 0
+
+    root_ret: i64 = Memory.malloc_zeroed(8)
+    child_ret: i64 = Memory.malloc_zeroed(8)
+    root_x: i64 = Memory.malloc_zeroed(4)
+    root_y: i64 = Memory.malloc_zeroed(4)
+    win_x: i64 = Memory.malloc_zeroed(4)
+    win_y: i64 = Memory.malloc_zeroed(4)
+    mask_ptr: i64 = Memory.malloc_zeroed(4)
+    if root_ret == 0 or child_ret == 0 or root_x == 0 or root_y == 0 or win_x == 0 or win_y == 0 or mask_ptr == 0:
+        return 0
+
+    XQueryPointer(display, hwnd, root_ret, child_ret, root_x, root_y, win_x, win_y, mask_ptr)
+    mask: i32 = Memory.read_i32(mask_ptr)
+    result: i32 = 0
+    if button == MOUSE_LEFT:
+        if (mask & X11_BUTTON1_MASK) != 0:
+            result = 1
+    if button == MOUSE_RIGHT:
+        if (mask & X11_BUTTON3_MASK) != 0:
+            result = 1
+
+    Memory.free(root_ret)
+    Memory.free(child_ret)
+    Memory.free(root_x)
+    Memory.free(root_y)
+    Memory.free(win_x)
+    Memory.free(win_y)
+    Memory.free(mask_ptr)
+    return result
+
+fun _frog_key_down_x11(key: i32) -> i32:
+    if key == MOUSE_LEFT or key == MOUSE_RIGHT:
+        return _frog_mouse_button_down(key)
+
+    display: i64 = Window.hinstance()
+    if display == 0:
+        return 0
+    keysym: i64 = _frog_key_to_keysym(key)
+    if keysym == 0:
+        return 0
+    keycode: i32 = XKeysymToKeycode(display, keysym)
+    if keycode <= 0:
+        return 0
+
+    keys: i64 = Memory.malloc_zeroed(32)
+    if keys == 0:
+        return 0
+    XQueryKeymap(display, keys)
+    byte_index: i32 = keycode / 8
+    bit_index: i32 = keycode - byte_index * 8
+    raw_byte: i32 = Memory.read_i8(keys + byte_index) as i32
+    if raw_byte < 0:
+        raw_byte = raw_byte + 256
+    mask: i32 = 1 << bit_index
+    result: i32 = 0
+    if (raw_byte & mask) != 0:
+        result = 1
+    Memory.free(keys)
+    return result
+
+attach Input:
+
+    static fun key_down(key: i32) -> i32:
+        return _frog_key_down_x11(key)
+
+    static fun mouse_x(hwnd: i64) -> i32:
+        return window_client_mouse_x(hwnd)
+
+    static fun mouse_y(hwnd: i64) -> i32:
+        return window_client_mouse_y(hwnd)
+
+    static fun center_mouse(hwnd: i64, width: i32, height: i32):
+        if hwnd == 0:
+            return
+        window_center_mouse(hwnd)
+
+    static fun capture_mouse(hwnd: i64, width: i32, height: i32):
+        if hwnd == 0:
+            return
+        set_cursor_locked(1, hwnd)
+        set_cursor_visible(0)
+        window_clear_mouse_delta()
+        Input.center_mouse(hwnd, width, height)
+
+    static fun release_mouse():
+        set_cursor_locked(0, 0)
+        set_cursor_visible(1)
+        window_clear_mouse_delta()
+
+    static fun mouse_delta_x() -> f32:
+        return window_consume_mouse_delta_x() as f32
+
+    static fun mouse_delta_y() -> f32:
+        return window_consume_mouse_delta_y() as f32

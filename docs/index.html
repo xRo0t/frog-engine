@@ -870,7 +870,7 @@ camera.add_child(raycast)
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
         <tr><td><code>Environment.create()</code></td><td>Environment</td><td>Creates the default scene environment.</td></tr>
         <tr><td><code>set_clear_color(color)</code></td><td>Environment</td><td>Sets the Vulkan clear color for this scene.</td></tr>
-        <tr><td><code>set_sky(sky)</code></td><td>Environment</td><td>Sets the rendered gradient sky for this scene.</td></tr>
+        <tr><td><code>set_sky(sky)</code></td><td>Environment</td><td>Sets the camera-aware gradient sky for this scene.</td></tr>
         <tr><td><code>clear_sky()</code></td><td>Environment</td><td>Disables the rendered sky and falls back to the clear color.</td></tr>
         <tr><td><code>set_fog(fog)</code></td><td>Environment</td><td>Stores fog settings for this scene.</td></tr>
         <tr><td><code>clear_fog()</code></td><td>Environment</td><td>Disables fog on this environment.</td></tr>
@@ -881,7 +881,7 @@ camera.add_child(raycast)
         <tr><th>Constructor</th><th>Description</th></tr>
         <tr><td><code>Sky.create()</code></td><td>Creates an editable default gradient sky.</td></tr>
         <tr><td><code>Sky.none()</code></td><td>No rendered sky; only the clear color is used.</td></tr>
-        <tr><td><code>Sky.gradient(zenith, horizon, lower)</code></td><td>Custom top-to-horizon-to-lower gradient sky.</td></tr>
+        <tr><td><code>Sky.gradient(zenith, horizon, lower)</code></td><td>Custom zenith-to-horizon-to-lower gradient sky.</td></tr>
         <tr><td><code>set_zenith(color)</code></td><td>Sets the top sky color.</td></tr>
         <tr><td><code>set_horizon(color)</code></td><td>Sets the middle horizon color.</td></tr>
         <tr><td><code>set_lower(color)</code></td><td>Sets the lower sky color.</td></tr>
@@ -894,10 +894,12 @@ camera.add_child(raycast)
       <table>
         <tr><th>Constructor</th><th>Description</th></tr>
         <tr><td><code>Fog.none()</code></td><td>No fog.</td></tr>
-        <tr><td><code>Fog.view_distance(color, view_distance)</code></td><td>Linear fog near the far edge of a view distance.</td></tr>
-        <tr><td><code>Fog.linear(color, start, end)</code></td><td>Linear distance fog.</td></tr>
+        <tr><td><code>Fog.view_distance(color, view_distance)</code></td><td>Spherical linear fog near the far edge of a view distance.</td></tr>
+        <tr><td><code>Fog.linear(color, start, end)</code></td><td>Linear fog using spherical distance by default.</td></tr>
         <tr><td><code>Fog.exponential(color, density)</code></td><td>Exponential distance fog.</td></tr>
         <tr><td><code>Fog.exponential_squared(color, density)</code></td><td>Stronger exponential fog.</td></tr>
+        <tr><td><code>set_shape(FogShape.spherical())</code></td><td>Uses true camera-to-fragment distance; stable while rotating.</td></tr>
+        <tr><td><code>set_shape(FogShape.depth())</code></td><td>Uses forward view depth for stylized or cheaper fog.</td></tr>
       </table>
 
       <pre><code>env: <span class="tok-type">Environment</span> = Environment.create()
@@ -907,11 +909,15 @@ sky.set_horizon(Color.rgb(<span class="tok-num">0.62</span>, <span class="tok-nu
 sky.set_lower(Color.rgb(<span class="tok-num">0.86</span>, <span class="tok-num">0.39</span>, <span class="tok-num">0.23</span>))
 sky.set_star_color(Color.rgb(<span class="tok-num">0.83</span>, <span class="tok-num">0.86</span>, <span class="tok-num">0.94</span>))
 sky.set_stars(<span class="tok-num">0.55</span>, <span class="tok-num">90</span>)
-sky.set_bands(<span class="tok-num">32</span>)
+sky.set_bands(<span class="tok-num">64</span>)
 env.set_sky(sky)
 env.set_fog(Fog.view_distance(sky.fog_color(), <span class="tok-num">480.0</span>))
 scene.set_environment(env)</code></pre>
-      <div class="note">The current Vulkan renderer draws the sky before world meshes, then applies fog to world geometry.</div>
+      <pre><code><span class="tok-com"># Optional: explicitly choose the distance shape.</span>
+fog: <span class="tok-type">Fog</span> = Fog.linear(sky.fog_color(), <span class="tok-num">350.0</span>, <span class="tok-num">480.0</span>)
+fog.set_shape(FogShape.depth())
+env.set_fog(fog)</code></pre>
+      <div class="note">The current Vulkan renderer draws the sky before world meshes using the active camera orientation, then applies fog to world geometry.</div>
     </section>
     <section id="vec3">
       <h2>Vec3</h2>

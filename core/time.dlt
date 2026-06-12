@@ -10,19 +10,10 @@ g_frog_timer_initialized: i32 = 0
 fun init_engine_timer():
     if g_frog_timer_initialized == 1:
         return
-    freq_buf: i64 = Memory.malloc_zeroed(8)
-    time_buf: i64 = Memory.malloc_zeroed(8)
-    if freq_buf == 0:
-        return
-    if time_buf == 0:
-        Memory.free(freq_buf)
-        return
-    QueryPerformanceFrequency(freq_buf)
-    g_frog_timer_freq = Memory.read_i64(freq_buf)
-    QueryPerformanceCounter(time_buf)
-    g_frog_timer_start = Memory.read_i64(time_buf)
-    Memory.free(freq_buf)
-    Memory.free(time_buf)
+    g_frog_timer_freq = frog_time_frequency()
+    if g_frog_timer_freq <= 0:
+        g_frog_timer_freq = 1000000000
+    g_frog_timer_start = frog_time_now_ticks()
     g_frog_timer_initialized = 1
 
 fun engine_time_seconds() -> f64:
@@ -30,12 +21,7 @@ fun engine_time_seconds() -> f64:
         init_engine_timer()
     if g_frog_timer_freq == 0:
         return 0.0
-    time_buf: i64 = Memory.malloc_zeroed(8)
-    if time_buf == 0:
-        return 0.0
-    QueryPerformanceCounter(time_buf)
-    now: i64 = Memory.read_i64(time_buf)
-    Memory.free(time_buf)
+    now: i64 = frog_time_now_ticks()
     elapsed: i64 = now - g_frog_timer_start
     return (elapsed as f64) / (g_frog_timer_freq as f64)
 
