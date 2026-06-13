@@ -39,6 +39,7 @@ Current local shape:
 - `Engine` owns the public static lifecycle and hides the Vulkan runtime backend.
 - `Engine.window`, `Engine.properties`, and `Engine.scene` group public setup APIs.
 - `Engine.properties.set_vsync(1/0)` controls synced vs uncapped swapchain presentation.
+- `Engine.properties.set_present_mode(PresentMode.mailbox())` can explicitly request Vulkan presentation mode.
 - `Assets` groups public resource loading APIs for models, textures, audio, and shaders.
 - `ObjectBench` measures update throughput before rendering.
 

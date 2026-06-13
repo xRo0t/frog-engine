@@ -25,6 +25,9 @@ attach Swapchain:
         return self.init(instance, phys_dev, device, surface, width, height, gfx_family, present_family, 1)
 
     fun init(self, instance: i64, phys_dev: i64, device: i64, surface: i64, width: i32, height: i32, gfx_family: i32, present_family: i32, vsync: i32) -> i32:
+        return self.init(instance, phys_dev, device, surface, width, height, gfx_family, present_family, vsync, -1)
+
+    fun init(self, instance: i64, phys_dev: i64, device: i64, surface: i64, width: i32, height: i32, gfx_family: i32, present_family: i32, vsync: i32, requested_mode: i32) -> i32:
         self.vk_surface = surface
         self.width = width
         self.height = height
@@ -88,6 +91,7 @@ attach Swapchain:
         chosen_mode: i32 = 2
         has_immediate: i32 = 0
         has_mailbox: i32 = 0
+        has_fifo_relaxed: i32 = 0
         pi: i32 = 0
         while pi < pm_count:
             pm: i32 = Memory.read_i32(pmodes + pi * 4)
@@ -95,14 +99,30 @@ attach Swapchain:
                 has_immediate = 1
             if pm == 1:
                 has_mailbox = 1
+            if pm == 3:
+                has_fifo_relaxed = 1
             pi = pi + 1
         Memory.free(pmodes)
-        if vsync == 0:
+        if requested_mode == 0:
             if has_immediate == 1:
                 chosen_mode = 0
-            else:
-                if has_mailbox == 1:
-                    chosen_mode = 1
+            elif has_mailbox == 1:
+                chosen_mode = 1
+        elif requested_mode == 1:
+            if has_mailbox == 1:
+                chosen_mode = 1
+        elif requested_mode == 2:
+            chosen_mode = 2
+        elif requested_mode == 3:
+            if has_fifo_relaxed == 1:
+                chosen_mode = 3
+        else:
+            if vsync == 0:
+                if has_immediate == 1:
+                    chosen_mode = 0
+                else:
+                    if has_mailbox == 1:
+                        chosen_mode = 1
         self.present_mode = chosen_mode
 
         # Create swapchain

@@ -13,6 +13,7 @@
     height: i32 = 0
     ready_flag: i32 = 0
     vsync_enabled: i32 = 1
+    present_mode_preference: i32 = -1
 
 attach EngineRuntime:
 
@@ -23,10 +24,13 @@ attach EngineRuntime:
         return EngineRuntime.create_with_gpu_preference(title, width, height, vsync, 0)
 
     static fun create_with_gpu_preference(title: str, width: i32, height: i32, vsync: i32, gpu_preference: i32) -> EngineRuntime:
+        return EngineRuntime.create_with_options(title, width, height, vsync, gpu_preference, -1)
+
+    static fun create_with_options(title: str, width: i32, height: i32, vsync: i32, gpu_preference: i32, present_mode: i32) -> EngineRuntime:
         sync: i32 = 1
         if vsync == 0:
             sync = 0
-        runtime: EngineRuntime = EngineRuntime(width=width, height=height, ready_flag=0, vsync_enabled=sync)
+        runtime: EngineRuntime = EngineRuntime(width=width, height=height, ready_flag=0, vsync_enabled=sync, present_mode_preference=present_mode)
         runtime.app = App.create(title, width, height)
 
         ctx: VulkanContext = VulkanContext()
@@ -37,7 +41,7 @@ attach EngineRuntime:
         runtime.ctx = ctx
 
         swapchain: Swapchain = Swapchain()
-        if swapchain.init(ctx.vk_instance, ctx.vk_physical_device, ctx.vk_device, ctx.vk_surface, width, height, ctx.graphics_family, ctx.present_family, sync) == 0:
+        if swapchain.init(ctx.vk_instance, ctx.vk_physical_device, ctx.vk_device, ctx.vk_surface, width, height, ctx.graphics_family, ctx.present_family, sync, present_mode) == 0:
             print("GPU swapchain init failed")
             ctx.cleanup()
             runtime.app.shutdown()
@@ -77,6 +81,9 @@ attach EngineRuntime:
 
     fun frame_count(self) -> i32:
         return self.app.frame_count()
+
+    fun present_mode(self) -> i32:
+        return self.swapchain.present_mode
 
     fun capture_mouse(self):
         self.app.capture_mouse()
@@ -193,7 +200,7 @@ attach EngineRuntime:
         self.swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
 
         swapchain: Swapchain = Swapchain()
-        if swapchain.init(self.ctx.vk_instance, self.ctx.vk_physical_device, self.ctx.vk_device, self.ctx.vk_surface, new_width, new_height, self.ctx.graphics_family, self.ctx.present_family, self.vsync_enabled) == 0:
+        if swapchain.init(self.ctx.vk_instance, self.ctx.vk_physical_device, self.ctx.vk_device, self.ctx.vk_surface, new_width, new_height, self.ctx.graphics_family, self.ctx.present_family, self.vsync_enabled, self.present_mode_preference) == 0:
             print("GPU swapchain resize failed")
             self.ready_flag = 0
             return 0

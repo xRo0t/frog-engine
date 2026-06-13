@@ -305,7 +305,7 @@
 
 <span class="tok-com"># 1. Configure before Engine.start()</span>
 Engine.window.create(<span class="tok-str">"My Game"</span>, <span class="tok-num">1280</span>, <span class="tok-num">720</span>)
-Engine.properties.set_vsync(<span class="tok-num">0</span>)
+Engine.properties.set_present_mode(PresentMode.mailbox())
 Engine.properties.set_target_fps(<span class="tok-num">0</span>)
 Engine.properties.set_render_scale(<span class="tok-num">1.0</span>)
 Engine.properties.set_gpu_preference(GpuPreference.auto())
@@ -512,8 +512,10 @@ Engine.window.set_mode(WindowMode.windowed())</code></pre>
       <h4>Engine.properties</h4>
       <table>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
-        <tr><td><code>set_vsync(enabled)</code></td><td>—</td><td>1 = synced presentation, 0 = uncapped frame rate.</td></tr>
+        <tr><td><code>set_vsync(enabled)</code></td><td>-</td><td>Legacy presentation toggle. Use this only when you are not explicitly selecting a <code>PresentMode</code>.</td></tr>
         <tr><td><code>vsync()</code></td><td>i32</td><td>Current vsync state.</td></tr>
+        <tr><td><code>set_present_mode(mode)</code></td><td>-</td><td>Explicit Vulkan present mode selection. Prefer this over <code>set_vsync(...)</code> when comparing latency and smoothness modes.</td></tr>
+        <tr><td><code>present_mode()</code></td><td>PresentMode</td><td>The requested present mode token. Unsupported modes fall back safely when the swapchain is created.</td></tr>
         <tr><td><code>set_target_fps(fps)</code></td><td>—</td><td>Caps the main loop when <code>fps &gt; 0</code>. Use 0 for uncapped benchmarking.</td></tr>
         <tr><td><code>target_fps()</code></td><td>i32</td><td>Current FPS cap; 0 means uncapped.</td></tr>
         <tr><td><code>set_render_scale(scale)</code></td><td>—</td><td>Renders the scene to an internal scaled target, then blits to the window. Clamped to 0.25..2.0; 1.0 is native size.</td></tr>
@@ -522,6 +524,18 @@ Engine.window.set_mode(WindowMode.windowed())</code></pre>
         <tr><td><code>gpu_preference()</code></td><td>i32</td><td>Current GPU preference token.</td></tr>
         <tr><td><code>set_frustum_culling(enabled)</code></td><td>—</td><td>Toggles camera-frustum culling for renderable scene instances.</td></tr>
         <tr><td><code>frustum_culling()</code></td><td>i32</td><td>Current frustum-culling state.</td></tr>
+      </table>
+
+      <div class="note"><strong>Choose one path.</strong> Use either <code>Engine.properties.set_present_mode(...)</code> or <code>Engine.properties.set_vsync(...)</code> for presentation setup. <code>set_present_mode(PresentMode.mailbox())</code> already switches the internal vsync preference off; do not call <code>set_vsync(0)</code> after it.</div>
+
+      <h4>PresentMode</h4>
+      <table>
+        <tr><th>Mode</th><th>Use when</th><th>Tradeoff</th></tr>
+        <tr><td><code>PresentMode.auto()</code></td><td>You want the engine default behavior.</td><td>Uses the legacy vsync preference to choose a supported mode.</td></tr>
+        <tr><td><code>PresentMode.mailbox()</code></td><td>You want smoother presentation with reduced tearing.</td><td>Can feel more latent than immediate mode, and drivers may pace it near display refresh.</td></tr>
+        <tr><td><code>PresentMode.immediate()</code></td><td>You want the lowest presentation latency for input testing.</td><td>Can tear and may look less smooth.</td></tr>
+        <tr><td><code>PresentMode.fifo()</code></td><td>You want guaranteed Vulkan vsync behavior.</td><td>Smooth, but usually the most latency-prone mode.</td></tr>
+        <tr><td><code>PresentMode.fifo_relaxed()</code></td><td>You want FIFO behavior that can relax when late, if supported.</td><td>Falls back to FIFO when unsupported.</td></tr>
       </table>
 
       <h4>Engine.debug</h4>

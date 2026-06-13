@@ -12,6 +12,9 @@ struct Properties:
 struct GpuPreference:
     _placeholder: i32 = 0
 
+struct PresentMode:
+    kind: i32 = -1
+
 struct Debug:
     _placeholder: i32 = 0
 
@@ -36,6 +39,7 @@ static g_engine_scene: Scene = Scene()
 static g_engine_has_scene: i32 = 0
 static g_engine_runtime: EngineRuntime = EngineRuntime()
 static g_engine_vsync_enabled: i32 = 1
+static g_engine_present_mode_preference: i32 = -1
 static g_engine_target_fps: i32 = 0
 static g_engine_render_scale: f32 = 1.0
 static g_engine_gpu_preference: i32 = 0
@@ -57,6 +61,7 @@ attach DisplayWindow:
         g_engine_has_scene = 0
         g_engine_runtime = EngineRuntime()
         g_engine_vsync_enabled = 1
+        g_engine_present_mode_preference = -1
         g_engine_target_fps = 0
         g_engine_render_scale = 1.0
         g_engine_gpu_preference = 0
@@ -93,6 +98,7 @@ attach DisplayWindow:
 attach Properties:
 
     static fun set_vsync(enabled: i32):
+        g_engine_present_mode_preference = -1
         if enabled == 0:
             g_engine_vsync_enabled = 0
         else:
@@ -100,6 +106,16 @@ attach Properties:
 
     static fun vsync() -> i32:
         return g_engine_vsync_enabled
+
+    static fun set_present_mode(mode: PresentMode):
+        g_engine_present_mode_preference = mode.kind
+        if mode.kind == 0 or mode.kind == 1:
+            g_engine_vsync_enabled = 0
+        elif mode.kind == 2 or mode.kind == 3:
+            g_engine_vsync_enabled = 1
+
+    static fun present_mode() -> PresentMode:
+        return PresentMode(kind=g_engine_present_mode_preference)
 
     static fun set_target_fps(fps: i32):
         if fps <= 0:
@@ -151,6 +167,23 @@ attach GpuPreference:
         if index < 0:
             return 0
         return 1000 + index
+
+attach PresentMode:
+
+    static fun auto() -> PresentMode:
+        return PresentMode(kind=-1)
+
+    static fun immediate() -> PresentMode:
+        return PresentMode(kind=0)
+
+    static fun mailbox() -> PresentMode:
+        return PresentMode(kind=1)
+
+    static fun fifo() -> PresentMode:
+        return PresentMode(kind=2)
+
+    static fun fifo_relaxed() -> PresentMode:
+        return PresentMode(kind=3)
 
 attach Debug:
 
@@ -237,7 +270,7 @@ attach Engine:
     static fun start() -> i32:
         if g_engine_runtime.ready() == 1:
             return 1
-        g_engine_runtime = EngineRuntime.create_with_gpu_preference(g_engine_title, g_engine_width, g_engine_height, g_engine_vsync_enabled, g_engine_gpu_preference)
+        g_engine_runtime = EngineRuntime.create_with_options(g_engine_title, g_engine_width, g_engine_height, g_engine_vsync_enabled, g_engine_gpu_preference, g_engine_present_mode_preference)
         if g_engine_runtime.ready() == 1:
             g_engine_runtime.set_render_stats(g_engine_render_stats_enabled)
             g_engine_runtime.set_instance_culling(g_engine_frustum_culling_enabled)
