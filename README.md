@@ -40,6 +40,8 @@ Current local shape:
 - `Engine.window`, `Engine.properties`, and `Engine.scene` group public setup APIs.
 - `Engine.properties.set_vsync(1/0)` controls synced vs uncapped swapchain presentation.
 - `Engine.properties.set_present_mode(PresentMode.mailbox())` can explicitly request Vulkan presentation mode.
+- `Engine.properties.active_present_mode()` reports the Vulkan mode actually selected by the swapchain after startup.
+- `Engine.debug.frame_pacing(1)` prints frame-time min/avg/max, spikes, present mode, target FPS, and render scale.
 - `Assets` groups public resource loading APIs for models, textures, audio, and shaders.
 - `ObjectBench` measures update throughput before rendering.
 

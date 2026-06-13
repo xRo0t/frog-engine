@@ -44,6 +44,13 @@ static g_engine_target_fps: i32 = 0
 static g_engine_render_scale: f32 = 1.0
 static g_engine_gpu_preference: i32 = 0
 static g_engine_render_stats_enabled: i32 = 0
+static g_engine_frame_pacing_enabled: i32 = 0
+static g_engine_frame_pacing_interval: i32 = 120
+static g_engine_frame_pacing_samples: i32 = 0
+static g_engine_frame_pacing_spikes: i32 = 0
+static g_engine_frame_pacing_sum_ms: f32 = 0.0
+static g_engine_frame_pacing_min_ms: f32 = 999999.0
+static g_engine_frame_pacing_max_ms: f32 = 0.0
 static g_engine_frustum_culling_enabled: i32 = 0
 static g_engine_current_camera_ptr: i64 = 0
 static g_engine_has_window_mode: i32 = 0
@@ -66,6 +73,9 @@ attach DisplayWindow:
         g_engine_render_scale = 1.0
         g_engine_gpu_preference = 0
         g_engine_render_stats_enabled = 0
+        g_engine_frame_pacing_enabled = 0
+        g_engine_frame_pacing_interval = 120
+        Debug.reset_frame_pacing()
         g_engine_frustum_culling_enabled = 0
         g_engine_current_camera_ptr = 0
         g_engine_has_window_mode = 0
@@ -116,6 +126,11 @@ attach Properties:
 
     static fun present_mode() -> PresentMode:
         return PresentMode(kind=g_engine_present_mode_preference)
+
+    static fun active_present_mode() -> PresentMode:
+        if g_engine_runtime.ready() == 0:
+            return PresentMode.auto()
+        return PresentMode(kind=g_engine_runtime.present_mode())
 
     static fun set_target_fps(fps: i32):
         if fps <= 0:
@@ -185,6 +200,17 @@ attach PresentMode:
     static fun fifo_relaxed() -> PresentMode:
         return PresentMode(kind=3)
 
+    static fun name(mode: PresentMode) -> str:
+        if mode.kind == 0:
+            return "immediate"
+        if mode.kind == 1:
+            return "mailbox"
+        if mode.kind == 2:
+            return "fifo"
+        if mode.kind == 3:
+            return "fifo_relaxed"
+        return "auto"
+
 attach Debug:
 
     static fun render_stats(enabled: i32):
@@ -197,6 +223,71 @@ attach Debug:
 
     static fun render_stats_enabled() -> i32:
         return g_engine_render_stats_enabled
+
+    static fun frame_pacing(enabled: i32):
+        if enabled == 0:
+            g_engine_frame_pacing_enabled = 0
+        else:
+            g_engine_frame_pacing_enabled = 1
+        Debug.reset_frame_pacing()
+
+    static fun frame_pacing_enabled() -> i32:
+        return g_engine_frame_pacing_enabled
+
+    static fun set_frame_pacing_interval(frames: i32):
+        if frames <= 0:
+            g_engine_frame_pacing_interval = 120
+        else:
+            g_engine_frame_pacing_interval = frames
+        Debug.reset_frame_pacing()
+
+    static fun frame_pacing_interval() -> i32:
+        return g_engine_frame_pacing_interval
+
+    static fun reset_frame_pacing():
+        g_engine_frame_pacing_samples = 0
+        g_engine_frame_pacing_spikes = 0
+        g_engine_frame_pacing_sum_ms = 0.0
+        g_engine_frame_pacing_min_ms = 999999.0
+        g_engine_frame_pacing_max_ms = 0.0
+
+    static fun sample_frame_pacing(dt: f32):
+        if g_engine_frame_pacing_enabled == 0:
+            return
+
+        dt_ms: f32 = dt * 1000.0
+        if g_engine_frame_pacing_samples == 0:
+            g_engine_frame_pacing_min_ms = dt_ms
+            g_engine_frame_pacing_max_ms = dt_ms
+        else:
+            if dt_ms < g_engine_frame_pacing_min_ms:
+                g_engine_frame_pacing_min_ms = dt_ms
+            if dt_ms > g_engine_frame_pacing_max_ms:
+                g_engine_frame_pacing_max_ms = dt_ms
+
+        g_engine_frame_pacing_sum_ms = g_engine_frame_pacing_sum_ms + dt_ms
+        g_engine_frame_pacing_samples = g_engine_frame_pacing_samples + 1
+
+        spike_ms: f32 = 33.333
+        if g_engine_target_fps > 0:
+            target_ms: f32 = 1000.0 / (g_engine_target_fps as f32)
+            spike_ms = target_ms * 1.5
+        if dt_ms > spike_ms:
+            g_engine_frame_pacing_spikes = g_engine_frame_pacing_spikes + 1
+
+        if g_engine_frame_pacing_samples >= g_engine_frame_pacing_interval:
+            frames: i32 = g_engine_frame_pacing_samples
+            avg_ms: f32 = g_engine_frame_pacing_sum_ms / (frames as f32)
+            min_ms: f32 = g_engine_frame_pacing_min_ms
+            max_ms: f32 = g_engine_frame_pacing_max_ms
+            spikes: i32 = g_engine_frame_pacing_spikes
+            target_fps: i32 = g_engine_target_fps
+            scale: f32 = g_engine_render_scale
+            active_mode: PresentMode = Engine.properties.active_present_mode()
+            active_mode_name: str = PresentMode.name(active_mode)
+            print(@"[frog.pacing] frames={frames} avg_ms={avg_ms} min_ms={min_ms} max_ms={max_ms}")
+            print(@"[frog.pacing] spikes={spikes} target_fps={target_fps} render_scale={scale} present={active_mode_name}")
+            Debug.reset_frame_pacing()
 
 attach EngineMouse:
 
@@ -283,7 +374,9 @@ attach Engine:
         return g_engine_runtime.running()
 
     static fun begin_frame() -> f32:
-        return g_engine_runtime.begin_frame_limited(g_engine_target_fps)
+        dt: f32 = g_engine_runtime.begin_frame_limited(g_engine_target_fps)
+        Debug.sample_frame_pacing(dt)
+        return dt
 
     static fun frame_count() -> i32:
         if g_engine_runtime.ready() == 0:

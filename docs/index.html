@@ -516,6 +516,7 @@ Engine.window.set_mode(WindowMode.windowed())</code></pre>
         <tr><td><code>vsync()</code></td><td>i32</td><td>Current vsync state.</td></tr>
         <tr><td><code>set_present_mode(mode)</code></td><td>-</td><td>Explicit Vulkan present mode selection. Prefer this over <code>set_vsync(...)</code> when comparing latency and smoothness modes.</td></tr>
         <tr><td><code>present_mode()</code></td><td>PresentMode</td><td>The requested present mode token. Unsupported modes fall back safely when the swapchain is created.</td></tr>
+        <tr><td><code>active_present_mode()</code></td><td>PresentMode</td><td>The Vulkan mode actually selected by the active swapchain after <code>Engine.start()</code>. Returns <code>PresentMode.auto()</code> before startup.</td></tr>
         <tr><td><code>set_target_fps(fps)</code></td><td>—</td><td>Caps the main loop when <code>fps &gt; 0</code>. Use 0 for uncapped benchmarking.</td></tr>
         <tr><td><code>target_fps()</code></td><td>i32</td><td>Current FPS cap; 0 means uncapped.</td></tr>
         <tr><td><code>set_render_scale(scale)</code></td><td>—</td><td>Renders the scene to an internal scaled target, then blits to the window. Clamped to 0.25..2.0; 1.0 is native size.</td></tr>
@@ -536,14 +537,32 @@ Engine.window.set_mode(WindowMode.windowed())</code></pre>
         <tr><td><code>PresentMode.immediate()</code></td><td>You want the lowest presentation latency for input testing.</td><td>Can tear and may look less smooth.</td></tr>
         <tr><td><code>PresentMode.fifo()</code></td><td>You want guaranteed Vulkan vsync behavior.</td><td>Smooth, but usually the most latency-prone mode.</td></tr>
         <tr><td><code>PresentMode.fifo_relaxed()</code></td><td>You want FIFO behavior that can relax when late, if supported.</td><td>Falls back to FIFO when unsupported.</td></tr>
+        <tr><td><code>PresentMode.name(mode)</code></td><td>You want readable debug output.</td><td>Returns <code>auto</code>, <code>immediate</code>, <code>mailbox</code>, <code>fifo</code>, or <code>fifo_relaxed</code>.</td></tr>
       </table>
+
+      <p>To verify fallback behavior, read the requested mode before startup and the active mode after startup:</p>
+
+      <pre><code>requested: PresentMode = Engine.properties.present_mode()
+if Engine.start() == 0:
+    return
+active: PresentMode = Engine.properties.active_present_mode()
+requested_name: str = PresentMode.name(requested)
+active_name: str = PresentMode.name(active)
+print(@"present requested={requested_name}, active={active_name}")</code></pre>
 
       <h4>Engine.debug</h4>
       <table>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
         <tr><td><code>render_stats(enabled)</code></td><td>—</td><td>Toggles on-screen render statistics.</td></tr>
         <tr><td><code>render_stats_enabled()</code></td><td>i32</td><td>Current stats state.</td></tr>
+        <tr><td><code>frame_pacing(enabled)</code></td><td>-</td><td>Prints periodic frame pacing diagnostics from <code>Engine.begin_frame()</code>: avg/min/max frame time, spike count, target FPS, render scale, and active present mode.</td></tr>
+        <tr><td><code>frame_pacing_enabled()</code></td><td>i32</td><td>Current frame pacing diagnostics state.</td></tr>
+        <tr><td><code>set_frame_pacing_interval(frames)</code></td><td>-</td><td>Changes how many frames are sampled per console report. Defaults to 120.</td></tr>
+        <tr><td><code>frame_pacing_interval()</code></td><td>i32</td><td>Current frame pacing report interval.</td></tr>
       </table>
+
+      <pre><code>Engine.debug.frame_pacing(1)
+Engine.debug.set_frame_pacing_interval(120)</code></pre>
 
       <h4>Engine.scene</h4>
       <table>
