@@ -6,6 +6,7 @@
 struct Scene:
     root_ptr: i64 = 0
     active_camera_ptr: i64 = 0
+    directional_light_ptr: i64 = 0
     env: Environment = Environment()
     env_initialized: i32 = 0
     capacity: i32 = 0
@@ -63,7 +64,7 @@ attach Scene:
 
     static fun create() -> Scene:
         root: RootNode = root_node_create("Root", 0)
-        return Scene(root_ptr=root as i64, active_camera_ptr=0, env=Environment.create(), env_initialized=1)
+        return Scene(root_ptr=root as i64, active_camera_ptr=0, directional_light_ptr=0, env=Environment.create(), env_initialized=1)
 
     static fun create(capacity: i32) -> Scene:
         scene: Scene = Scene(capacity=capacity, count_ptr=0, env=Environment.create(), env_initialized=1)
@@ -144,6 +145,7 @@ attach Scene:
             node_destroy_tree(self.root_ptr)
         self.root_ptr = 0
         self.active_camera_ptr = 0
+        self.directional_light_ptr = 0
         self.cleanup()
 
     fun is_valid(self) -> i32:

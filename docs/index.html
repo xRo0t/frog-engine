@@ -220,6 +220,7 @@
       <a href="#nodes">Nodes</a>
       <a href="#node3d">Node3D</a>
       <a href="#material3d">Material3D</a>
+      <a href="#lights">Lights</a>
       <a href="#mesh3d">Mesh3D</a>
       <a href="#camera">Camera3D</a>
       <a href="#scene">Scene &amp; GameObject</a>
@@ -274,7 +275,7 @@
         <tr><td>Application</td><td><code>Engine.window.create(...)</code>, <code>Engine.start()</code>, loop</td><td>Boot and drive the native game executable.</td></tr>
         <tr><td>World</td><td><code>Scene.create()</code>, <code>scene.set_environment(env)</code></td><td>Own the active world, camera, and node tree.</td></tr>
         <tr><td>Objects</td><td><code>Node3D</code>, <code>Mesh3D</code>, <code>Camera3D</code>, <code>Raycast3D</code></td><td>Represent things that exist in the scene.</td></tr>
-        <tr><td>Resources</td><td><code>Material3D</code>, <code>Texture2D</code>, <code>Model3D</code>, <code>Shader</code></td><td>Reusable data shared by one or many objects.</td></tr>
+        <tr><td>Resources</td><td><code>Material3D</code>, <code>Texture2D</code>, <code>Model3D</code>, <code>Shader3D</code></td><td>Reusable data shared by one or many objects.</td></tr>
         <tr><td>Low level</td><td><code>Engine.upload_model_mesh</code>, <code>Engine.register_instance</code></td><td>Optional path for high-count rendering and special systems.</td></tr>
       </table>
       <div class="note"><strong>Default path.</strong> New games should start with <code>Scene</code> + <code>Mesh3D</code> + <code>Material3D</code>. Drop to raw mesh ids only when you are building a performance system such as instancing, terrain chunks, particles, or a viewmodel.</div>
@@ -594,7 +595,7 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
         <tr><td><code>Assets.textures.load(path)</code></td><td>Texture2D</td><td>Loads + GPU-uploads a PNG (smooth spec). Returns a ready texture.</td></tr>
         <tr><td><code>Assets.textures.load(path, spec)</code></td><td>Texture2D</td><td>Same, with a <code>TextureSpec</code> controlling appearance.</td></tr>
         <tr><td><code>Assets.audio.load(path)</code></td><td>AudioClip</td><td>Loads an audio clip descriptor.</td></tr>
-        <tr><td><code>Assets.shaders.load(path)</code></td><td>Shader</td><td>Loads a shader descriptor.</td></tr>
+        <tr><td><code>Assets.shaders.load(path)</code></td><td>Shader3D</td><td>Loads a shader descriptor. Runtime compilation and pipeline binding are reserved for the advanced shader pipeline.</td></tr>
       </table>
 
       <h3>Asset Types</h3>
@@ -604,7 +605,7 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
         <tr><td><code>Model3D</code></td><td><code>path</code>, <code>resolved_path</code>, <code>format</code>, <code>mesh_id</code>, <code>mesh_count</code>, <code>found</code>, <code>parsed</code>, <code>ready</code>, <code>error</code></td></tr>
         <tr><td><code>Texture2D</code></td><td><code>path</code>, <code>resolved_path</code>, <code>width</code>, <code>height</code>, <code>texture_id</code>, <code>found</code>, <code>ready</code>, <code>error</code></td></tr>
         <tr><td><code>AudioClip</code></td><td><code>path</code>, <code>resolved_path</code>, <code>found</code>, <code>ready</code>, <code>error</code></td></tr>
-        <tr><td><code>Shader</code></td><td><code>path</code>, <code>resolved_path</code>, <code>found</code>, <code>ready</code>, <code>error</code></td></tr>
+        <tr><td><code>Shader3D</code></td><td><code>path</code>, <code>resolved_path</code>, <code>found</code>, <code>ready</code>, <code>error</code></td></tr>
       </table>
     </section>
 
@@ -723,7 +724,7 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
 
     <section id="material3d">
       <h2>Material3D</h2>
-      <p class="lead">A reusable surface descriptor for <code>Mesh3D</code>. Color and albedo texture are applied by the current renderer; roughness, metallic, normal maps, and shader slots are stored on the material so the API is ready for the richer pipeline.</p>
+      <p class="lead">A reusable surface descriptor for <code>Mesh3D</code>. Color, albedo, emissive, and unlit state are applied by the current GPU lighting pipeline. Roughness, metallic, normal maps, and custom shader slots remain available for the advanced PBR pipeline.</p>
       <pre><code>mat: <span class="tok-type">Material3D</span> = Material3D.create()
 mat.set_color(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>))
 mat.set_texture(Assets.textures.load(<span class="tok-str">"textures/crate.png"</span>, TextureSpec.pixel()))
@@ -738,15 +739,56 @@ cube.set_material(mat)</code></pre>
         <tr><td><code>Material3D.colored(color)</code></td><td>Creates a material with a color in one call.</td></tr>
         <tr><td><code>Material3D.textured(texture)</code></td><td>Creates a white material with an albedo texture.</td></tr>
         <tr><td><code>set_color(color)</code></td><td>Changes the material color.</td></tr>
+        <tr><td><code>set_albedo(color)</code></td><td>Alias for color albedo, useful when writing PBR-style material code.</td></tr>
         <tr><td><code>set_alpha(alpha)</code></td><td>Sets color alpha and stores the material alpha.</td></tr>
         <tr><td><code>set_texture(texture)</code> / <code>set_albedo(texture)</code></td><td>Sets the albedo texture applied to the mesh.</td></tr>
         <tr><td><code>clear_texture()</code></td><td>Returns the material to the white fallback texture.</td></tr>
         <tr><td><code>set_normal_map(texture)</code></td><td>Stores a normal map for the future lighting pipeline.</td></tr>
         <tr><td><code>set_roughness_map(texture)</code> / <code>set_metallic_map(texture)</code></td><td>Stores PBR data maps.</td></tr>
-        <tr><td><code>set_roughness(value)</code> / <code>set_metallic(value)</code></td><td>Stores scalar PBR surface values clamped to 0..1.</td></tr>
+        <tr><td><code>set_roughness(value)</code> / <code>set_metallic(value)</code></td><td>Stores scalar PBR surface values, clamped to 0..1.</td></tr>
         <tr><td><code>set_surface(metallic, roughness)</code></td><td>Sets both scalar PBR values together.</td></tr>
+        <tr><td><code>set_emissive(color)</code> / <code>set_emissive(color, strength)</code></td><td>Sets the material glow color and optional strength.</td></tr>
+        <tr><td><code>set_emissive_strength(value)</code></td><td>Sets emissive strength, clamped at zero.</td></tr>
         <tr><td><code>set_shader(shader)</code></td><td>Stores a custom shader descriptor for the future shader pipeline.</td></tr>
-        <tr><td><code>set_unlit(enabled)</code> / <code>set_double_sided(enabled)</code></td><td>Stores render flags for later pipeline support.</td></tr>
+        <tr><td><code>set_unlit(enabled)</code></td><td>Bypasses directional diffuse/specular lighting while keeping texture and emissive output.</td></tr>
+        <tr><td><code>set_double_sided(enabled)</code></td><td>Stores the flag for later pipeline-state support.</td></tr>
+      </table>
+    </section>
+
+    <section id="lights">
+      <h2>Lights</h2>
+      <p class="lead">Scene graph sunlight. Direction, color, intensity, and ambient contribution are applied by the current Vulkan shader without adding draw calls. Shadow settings describe the next depth-map pipeline.</p>
+      <pre><code>sun: <span class="tok-type">DirectionalLight3D</span> = DirectionalLight3D.create(<span class="tok-str">"Sun"</span>)
+sun.set_direction(<span class="tok-num">-0.4</span>, <span class="tok-num">-1.0</span>, <span class="tok-num">-0.2</span>)
+sun.set_color(Color.rgb(<span class="tok-num">1.0</span>, <span class="tok-num">0.92</span>, <span class="tok-num">0.78</span>))
+sun.set_intensity(<span class="tok-num">1.0</span>)
+sun.set_ambient(<span class="tok-num">0.35</span>)
+sun.set_shadows(ShadowSettings.high())
+scene.add_child(sun)</code></pre>
+
+      <h4>DirectionalLight3D</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>DirectionalLight3D.create()</code> / <code>create(name)</code></td><td>Creates a scene light node.</td></tr>
+        <tr><td><code>set_direction(x,y,z)</code></td><td>Stores a normalized world light direction.</td></tr>
+        <tr><td><code>direction()</code></td><td>Returns the stored direction as <code>Vec3</code>.</td></tr>
+        <tr><td><code>set_color(color)</code></td><td>Sets sunlight color.</td></tr>
+        <tr><td><code>set_intensity(value)</code></td><td>Sets non-negative light intensity.</td></tr>
+        <tr><td><code>set_ambient(value)</code></td><td>Sets the minimum scene-light contribution, clamped to 0..1.</td></tr>
+        <tr><td><code>set_shadows(settings)</code></td><td>Stores shadow settings for the light.</td></tr>
+        <tr><td><code>disable_shadows()</code></td><td>Disables shadow casting for this light.</td></tr>
+      </table>
+
+      <h4>ShadowSettings</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>ShadowSettings.off()</code></td><td>No shadows.</td></tr>
+        <tr><td><code>low()</code> / <code>medium()</code> / <code>high()</code> / <code>ultra()</code></td><td>Preset quality levels for map size, cascades, distance, bias, and softness.</td></tr>
+        <tr><td><code>set_map_size(size)</code></td><td>Sets the desired shadow map resolution.</td></tr>
+        <tr><td><code>set_cascades(count)</code></td><td>Clamps cascade count to 1..4.</td></tr>
+        <tr><td><code>set_distance(value)</code></td><td>Sets shadow draw distance.</td></tr>
+        <tr><td><code>set_bias(value)</code> / <code>set_normal_bias(value)</code></td><td>Stores acne-fighting depth bias values.</td></tr>
+        <tr><td><code>set_softness(value)</code></td><td>Stores softness 0..1.</td></tr>
       </table>
     </section>
 
@@ -1075,7 +1117,7 @@ debug_cube.set_color(Color.rgb(<span class="tok-num">0.95</span>, <span class="t
         <tr><td><code>Mesh3D.set_color</code></td><td>One debug cube, simple primitive, quick test.</td><td>Fine during setup; avoid changing it every frame.</td></tr>
         <tr><td><code>Mesh3D.set_texture</code></td><td>One mesh with one texture.</td><td>Load the texture once; do not call <code>Assets.textures.load</code> inside the loop.</td></tr>
       </table>
-      <div class="note warn"><strong>Current renderer.</strong> Color and albedo texture are applied now. Roughness, metallic, normal maps, custom shaders, unlit, and double-sided flags are stored on <code>Material3D</code> for the future lighting/material pipeline.</div>
+      <div class="note warn"><strong>Current renderer.</strong> Directional diffuse light, color, albedo, emissive, and unlit materials are active. Roughness/metallic specular lighting, normal maps, custom shaders, double-sided state, and shadow maps remain staged for the advanced PBR pipeline.</div>
     </section>
 
     <section id="textures">

@@ -252,6 +252,9 @@ attach Renderer:
     fun bind_texture(self, mesh_id: i32, tex_id: i32):
         self.core.bind_texture(mesh_id, tex_id)
 
+    fun bind_material(self, mesh_id: i32, material: Material3D):
+        self.core.bind_material(mesh_id, material)
+
     fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         self.core.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
 
@@ -266,6 +269,9 @@ attach Renderer:
 
     fun set_instance_culling(self, enabled: i32):
         self.core.set_instance_culling(enabled)
+
+    fun set_directional_light(self, light_ptr: i64):
+        self.core.set_directional_light(light_ptr)
 
     fun render_camera3d_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32):
         self.core.render_camera3d_frame(render_pass, swapchain, ctx, camera, width, height)

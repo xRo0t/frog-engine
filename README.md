@@ -43,6 +43,10 @@ Current local shape:
 - `Engine.properties.active_present_mode()` reports the Vulkan mode actually selected by the swapchain after startup.
 - `Engine.debug.frame_pacing(1)` prints frame-time min/avg/max, spikes, present mode, target FPS, and render scale.
 - `Assets` groups public resource loading APIs for models, textures, audio, and shaders.
+- `DirectionalLight3D` drives GPU diffuse/specular sunlight with color, intensity, direction, and ambient control.
+- `ShadowSettings` defines shadow-map quality for the upcoming depth pipeline.
+- `Material3D` applies albedo, emissive, and unlit state per instance while preserving batching; roughness and metallic are staged for the PBR pass.
+- `Shader3D` is the public shader descriptor name for advanced material pipelines.
 - `ObjectBench` measures update throughput before rendering.
 
 Vulkan rendering is available through the `Engine` facade while lower-level

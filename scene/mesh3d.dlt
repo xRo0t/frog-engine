@@ -77,6 +77,7 @@ attach Mesh3D:
             self.texture_id = self.material.albedo.texture_id
         if self.mesh_id >= 0:
             Engine.bind_texture(self.mesh_id, self.texture_id)
+            Engine.bind_material(self.mesh_id, self.material)
         return self
 
     fun rebuild_mesh(self) -> Mesh3D:

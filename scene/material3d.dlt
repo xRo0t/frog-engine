@@ -10,6 +10,7 @@ struct Material3D:
     roughness_map: Texture2D = Texture2D()
     metallic_map: Texture2D = Texture2D()
     shader: Shader = Shader()
+    emissive: Color = Color()
     has_albedo: i32 = 0
     has_normal_map: i32 = 0
     has_roughness_map: i32 = 0
@@ -17,6 +18,7 @@ struct Material3D:
     has_shader: i32 = 0
     metallic: f32 = 0.0
     roughness: f32 = 1.0
+    emissive_strength: f32 = 0.0
     alpha: f32 = 1.0
     unlit: i32 = 0
     double_sided: i32 = 0
@@ -29,6 +31,8 @@ attach Material3D:
         mat.alpha = 1.0
         mat.metallic = 0.0
         mat.roughness = 1.0
+        mat.emissive = Color.black()
+        mat.emissive_strength = 0.0
         return mat
 
     static fun colored(color: Color) -> Material3D:
@@ -51,6 +55,9 @@ attach Material3D:
 
     fun set_texture(self, texture: Texture2D) -> Material3D:
         return self.set_albedo(texture)
+
+    fun set_albedo(self, color: Color) -> Material3D:
+        return self.set_color(color)
 
     fun set_albedo(self, texture: Texture2D) -> Material3D:
         self.albedo = texture
@@ -103,6 +110,21 @@ attach Material3D:
     fun set_surface(self, metallic: f32, roughness: f32) -> Material3D:
         self.metallic = clamp(metallic, 0.0, 1.0)
         self.roughness = clamp(roughness, 0.0, 1.0)
+        return self
+
+    fun set_emissive(self, color: Color) -> Material3D:
+        self.emissive = color
+        return self
+
+    fun set_emissive(self, color: Color, strength: f32) -> Material3D:
+        self.emissive = color
+        return self.set_emissive_strength(strength)
+
+    fun set_emissive_strength(self, value: f32) -> Material3D:
+        if value < 0.0:
+            self.emissive_strength = 0.0
+            return self
+        self.emissive_strength = value
         return self
 
     fun set_unlit(self, enabled: i32) -> Material3D:

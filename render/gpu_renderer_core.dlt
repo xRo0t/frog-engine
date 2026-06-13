@@ -21,6 +21,22 @@ fun _frog_abs_f32(v: f32) -> f32:
         return 0.0 - v
     return v
 
+fun _frog_pack_light(color: Color, ambient: f32) -> f32:
+    r: i32 = (clamp(color.r, 0.0, 1.0) * 63.0 + 0.5) as i32
+    g: i32 = (clamp(color.g, 0.0, 1.0) * 63.0 + 0.5) as i32
+    b: i32 = (clamp(color.b, 0.0, 1.0) * 63.0 + 0.5) as i32
+    a: i32 = (clamp(ambient, 0.0, 1.0) * 63.0 + 0.5) as i32
+    return (r + g * 64 + b * 4096 + a * 262144) as f32
+
+fun _frog_pack_material(material: Material3D) -> f32:
+    r: i32 = (clamp(material.emissive.r, 0.0, 1.0) * 31.0 + 0.5) as i32
+    g: i32 = (clamp(material.emissive.g, 0.0, 1.0) * 31.0 + 0.5) as i32
+    b: i32 = (clamp(material.emissive.b, 0.0, 1.0) * 31.0 + 0.5) as i32
+    unlit: i32 = 0
+    if material.unlit != 0:
+        unlit = 1
+    return (r + g * 32 + b * 1024 + unlit * 32768) as f32
+
 fun _frog_mesh_bounds(vertices: i64, vertex_count: i32) -> GpuMeshBounds:
     if vertices == 0:
         return GpuMeshBounds()
@@ -172,6 +188,7 @@ struct GpuRendererCore:
     tex_count:      i32 = 0
     tex_capacity:   i32 = 0
     mesh_tex_ids:   i64 = 0    # mesh_id -> texture_id (-1 = white fallback)
+    mesh_material_params: i64 = 0 # mesh_id -> metallic, roughness, emissive strength, packed emissive/unlit
     white_desc_set: i64 = 0    # descriptor set for the 1x1 white fallback
     white_tex_id:   i32 = -1
     # Offscreen render-scale target. When render_scale != 1, the scene is
@@ -202,6 +219,7 @@ struct GpuRendererCore:
     pooled_bytes:       i64 = 0
     pooled_byte_limit:  i64 = 0
     frame_serial:       i32 = 0
+    directional_light_ptr: i64 = 0
 
 attach GpuRendererCore:
 
@@ -240,9 +258,11 @@ attach GpuRendererCore:
         self.tex_count = 0
         # mesh_id -> texture_id, default -1 (white fallback)
         self.mesh_tex_ids = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.mesh_material_params = Memory.malloc_zeroed(self.vb_capacity * 16)
         mti: i32 = 0
         while mti < self.vb_capacity:
             Memory.write_i32(self.mesh_tex_ids + mti * 4, 0 - 1)
+            Memory.write_f32(self.mesh_material_params + mti * 16 + 4, 1.0)
             mti = mti + 1
         self.white_desc_set = 0
         self.white_tex_id = 0 - 1
@@ -261,7 +281,7 @@ attach GpuRendererCore:
         self.scratch_sky_att = Memory.malloc_zeroed(24)
         self.scratch_sky_rect = Memory.malloc_zeroed(24)
         self.scratch_vp_matrix = Memory.malloc_zeroed(64)
-        self.scratch_push_data = Memory.malloc_zeroed(112)
+        self.scratch_push_data = Memory.malloc_zeroed(128)
         self.scratch_camera_view = Memory.malloc_zeroed(64)
         self.scratch_camera_proj = Memory.malloc_zeroed(64)
         Memory.write_i64(self.scratch_off_arr, 0)
@@ -285,6 +305,9 @@ attach GpuRendererCore:
             self.instance_culling_enabled = 0
         else:
             self.instance_culling_enabled = 1
+
+    fun set_directional_light(self, light_ptr: i64):
+        self.directional_light_ptr = light_ptr
 
     fun set_render_stats(self, enabled: i32):
         if enabled == 0:
@@ -327,9 +350,11 @@ attach GpuRendererCore:
         new_bound_zs: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_bound_rs: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_mesh_tex: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_mesh_materials: i64 = Memory.malloc_zeroed(new_cap * 16)
         mti2: i32 = 0
         while mti2 < new_cap:
             Memory.write_i32(new_mesh_tex + mti2 * 4, 0 - 1)
+            Memory.write_f32(new_mesh_materials + mti2 * 16 + 4, 1.0)
             mti2 = mti2 + 1
         new_visible: i64 = Memory.malloc_zeroed(new_cap * 4)
         vvi2: i32 = 0
@@ -352,6 +377,8 @@ attach GpuRendererCore:
         Memory.copy(new_visible, self.vb_visible, self.vb_capacity * 4)
         if self.mesh_tex_ids != 0:
             Memory.copy(new_mesh_tex, self.mesh_tex_ids, self.vb_capacity * 4)
+        if self.mesh_material_params != 0:
+            Memory.copy(new_mesh_materials, self.mesh_material_params, self.vb_capacity * 16)
         Memory.free(self.vb_handles)
         Memory.free(self.vb_memories)
         Memory.free(self.vb_alloc_sizes)
@@ -368,6 +395,8 @@ attach GpuRendererCore:
         Memory.free(self.vb_visible)
         if self.mesh_tex_ids != 0:
             Memory.free(self.mesh_tex_ids)
+        if self.mesh_material_params != 0:
+            Memory.free(self.mesh_material_params)
         self.vb_handles = new_handles
         self.vb_memories = new_memories
         self.vb_alloc_sizes = new_alloc_sizes
@@ -383,6 +412,7 @@ attach GpuRendererCore:
         self.mesh_bound_rs = new_bound_rs
         self.vb_visible = new_visible
         self.mesh_tex_ids = new_mesh_tex
+        self.mesh_material_params = new_mesh_materials
         self.vb_capacity = new_cap
 
     fun _take_pooled_buffer(self, data_size: i64, usage: i32) -> GpuBufferUpload:
@@ -612,7 +642,7 @@ attach GpuRendererCore:
         while new_cap < needed:
             new_cap = new_cap * 2
 
-        size: i64 = (new_cap as i64) * 64
+        size: i64 = (new_cap as i64) * 80
         zeros: i64 = Memory.malloc_zeroed(size)
         if zeros == 0:
             return 0
@@ -632,7 +662,7 @@ attach GpuRendererCore:
                 if old_mapped != 0:
                     vkUnmapMemory(self.device, old_mem)
             if old_mem != 0:
-                old_size: i64 = (self.instance_capacity as i64) * 64
+                old_size: i64 = (self.instance_capacity as i64) * 80
                 self._retire_buffer_pair(old_buf, old_mem, old_size, 128)
             elif old_buf != 0:
                 vkDestroyBuffer(self.device, old_buf, 0)
@@ -946,6 +976,8 @@ attach GpuRendererCore:
         Memory.write_i64(self.ib_alloc_sizes + idx * 8, 0)
         Memory.write_i32(self.ib_index_counts + idx * 4, src_ic)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
+        if self.mesh_material_params != 0:
+            Memory.copy(self.mesh_material_params + idx * 16, self.mesh_material_params + src_vb_idx * 16, 16)
         self._copy_mesh_bounds(idx, src_vb_idx)
         self.vb_count = idx + 1
         return idx
@@ -1036,6 +1068,19 @@ attach GpuRendererCore:
         if self.mesh_tex_ids == 0:
             return
         Memory.write_i32(self.mesh_tex_ids + mesh_id * 4, tex_id)
+
+    fun bind_material(self, mesh_id: i32, material: Material3D):
+        if mesh_id < 0:
+            return
+        if mesh_id >= self.vb_count:
+            return
+        if self.mesh_material_params == 0:
+            return
+        off: i64 = (mesh_id as i64) * 16
+        Memory.write_f32(self.mesh_material_params + off, material.metallic)
+        Memory.write_f32(self.mesh_material_params + off + 4, material.roughness)
+        Memory.write_f32(self.mesh_material_params + off + 8, material.emissive_strength)
+        Memory.write_f32(self.mesh_material_params + off + 12, _frog_pack_material(material))
 
     fun mesh_descriptor_set(self, mesh_id: i32) -> i64:
         if self.mesh_tex_ids == 0:
@@ -1532,7 +1577,7 @@ attach GpuRendererCore:
                 if vp_mat != 0:
                     pc_data = self.scratch_push_data
                     if pc_data != 0:
-                        Memory.set(pc_data, 0, 112)
+                        Memory.set(pc_data, 0, 128)
                         Memory.copy(pc_data, vp_mat, 64)
                         Memory.write_f32(pc_data + 64, env.fog.color.r)
                         Memory.write_f32(pc_data + 68, env.fog.color.g)
@@ -1550,7 +1595,20 @@ attach GpuRendererCore:
                             Memory.write_f32(pc_data + 100, 1.0)
                             Memory.write_f32(pc_data + 104, 1.0)
                         Memory.write_f32(pc_data + 108, 0.0)
-                        vkCmdPushConstants(cmd, rp.vk_pipeline_layout, 17, 0, 112, pc_data)
+
+                        if self.directional_light_ptr != 0:
+                            light: DirectionalLight3D = self.directional_light_ptr as DirectionalLight3D
+                            if light.active == 1:
+                                dx: f32 = light.dir_x
+                                dy: f32 = light.dir_y
+                                dz: f32 = light.dir_z
+                                Memory.write_f32(pc_data + 108, _frog_pack_light(light.color, light.ambient))
+                                Memory.write_f32(pc_data + 112, dx)
+                                Memory.write_f32(pc_data + 116, dy)
+                                Memory.write_f32(pc_data + 120, dz)
+                                Memory.write_f32(pc_data + 124, light.intensity)
+
+                        vkCmdPushConstants(cmd, rp.vk_pipeline_layout, 17, 0, 128, pc_data)
 
                 last_bound: i64 = 0
                 last_index_bound: i64 = 0
@@ -1628,11 +1686,15 @@ attach GpuRendererCore:
                                                 bound_r = 8.0
                                         visible = _frog_instance_visible(vp_mat, g_model, bound_x, bound_y, bound_z, bound_r)
                                 if visible == 1:
-                                    instance_dst: i64 = mapped_instances + ((instance_write as i64) * 64)
-                                    if vp_mat != 0:
-                                        _frog_multiply_4x4_into(vp_mat, g_model, instance_dst)
+                                    instance_dst: i64 = mapped_instances + ((instance_write as i64) * 80)
+                                    Memory.copy(instance_dst, g_model, 64)
+                                    if self.mesh_material_params != 0:
+                                        Memory.copy(instance_dst + 64, self.mesh_material_params + gi * 16, 16)
                                     else:
-                                        Memory.copy(instance_dst, g_model, 64)
+                                        Memory.write_f32(instance_dst + 64, 0.0)
+                                        Memory.write_f32(instance_dst + 68, 1.0)
+                                        Memory.write_f32(instance_dst + 72, 0.0)
+                                        Memory.write_f32(instance_dst + 76, 0.0)
                                     instance_write = instance_write + 1
                                     group_count = group_count + 1
                                 gi = gi + 1
@@ -1644,7 +1706,7 @@ attach GpuRendererCore:
                                 last_bound = vb_handle
 
                             Memory.write_ptr(self.scratch_inst_vb_arr, frame_inst_buf)
-                            Memory.write_i64(self.scratch_inst_off_arr, (group_start as i64) * 64)
+                            Memory.write_i64(self.scratch_inst_off_arr, (group_start as i64) * 80)
                             vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
 
                             # Bind the texture descriptor set for this group
@@ -1874,6 +1936,8 @@ attach GpuRendererCore:
             Memory.free(self.tex_desc_sets)
         if self.mesh_tex_ids != 0:
             Memory.free(self.mesh_tex_ids)
+        if self.mesh_material_params != 0:
+            Memory.free(self.mesh_material_params)
         self.tex_count = 0
         self.vb_count = 0
         self.instance_capacity = 0

@@ -162,6 +162,9 @@ attach EngineRuntime:
     fun bind_texture(self, mesh_id: i32, tex_id: i32):
         self.renderer.bind_texture(mesh_id, tex_id)
 
+    fun bind_material(self, mesh_id: i32, material: Material3D):
+        self.renderer.bind_material(mesh_id, material)
+
     fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         self.renderer.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
 
@@ -176,6 +179,9 @@ attach EngineRuntime:
 
     fun set_instance_culling(self, enabled: i32):
         self.renderer.set_instance_culling(enabled)
+
+    fun set_directional_light(self, light_ptr: i64):
+        self.renderer.set_directional_light(light_ptr)
 
     fun set_window_mode(self, mode: WindowMode) -> i32:
         if self.ready_flag == 0:

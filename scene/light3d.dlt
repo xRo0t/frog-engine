@@ -1,0 +1,202 @@
+##############################
+# Frog - 3D Lights
+# Public lighting descriptors for the scene graph.
+##############################
+
+struct ShadowSettings:
+    enabled: i32 = 0
+    map_size: i32 = 1024
+    cascades: i32 = 1
+    distance: f32 = 120.0
+    bias: f32 = 0.0015
+    normal_bias: f32 = 0.02
+    softness: f32 = 0.5
+
+@heap struct DirectionalLight3D extends Node3D:
+    color: Color = Color()
+    intensity: f32 = 1.0
+    ambient: f32 = 0.35
+    dir_x: f32 = 0.0
+    dir_y: f32 = -1.0
+    dir_z: f32 = 0.0
+    shadow: ShadowSettings = ShadowSettings()
+
+attach ShadowSettings:
+
+    static fun off() -> ShadowSettings:
+        return ShadowSettings(enabled=0, map_size=0, cascades=0, distance=0.0, bias=0.0, normal_bias=0.0, softness=0.0)
+
+    static fun low() -> ShadowSettings:
+        return ShadowSettings(enabled=1, map_size=1024, cascades=1, distance=80.0, bias=0.0025, normal_bias=0.03, softness=0.25)
+
+    static fun medium() -> ShadowSettings:
+        return ShadowSettings(enabled=1, map_size=2048, cascades=2, distance=140.0, bias=0.0020, normal_bias=0.025, softness=0.50)
+
+    static fun high() -> ShadowSettings:
+        return ShadowSettings(enabled=1, map_size=4096, cascades=3, distance=220.0, bias=0.0015, normal_bias=0.020, softness=0.75)
+
+    static fun ultra() -> ShadowSettings:
+        return ShadowSettings(enabled=1, map_size=8192, cascades=4, distance=320.0, bias=0.0010, normal_bias=0.015, softness=1.00)
+
+    fun set_map_size(self, size: i32) -> ShadowSettings:
+        if size <= 0:
+            self.map_size = 0
+            self.enabled = 0
+            return self
+        self.map_size = size
+        self.enabled = 1
+        return self
+
+    fun set_cascades(self, count: i32) -> ShadowSettings:
+        if count < 1:
+            self.cascades = 1
+            return self
+        if count > 4:
+            self.cascades = 4
+            return self
+        self.cascades = count
+        return self
+
+    fun set_distance(self, value: f32) -> ShadowSettings:
+        if value < 1.0:
+            self.distance = 1.0
+            return self
+        self.distance = value
+        return self
+
+    fun set_bias(self, value: f32) -> ShadowSettings:
+        if value < 0.0:
+            self.bias = 0.0
+            return self
+        self.bias = value
+        return self
+
+    fun set_normal_bias(self, value: f32) -> ShadowSettings:
+        if value < 0.0:
+            self.normal_bias = 0.0
+            return self
+        self.normal_bias = value
+        return self
+
+    fun set_softness(self, value: f32) -> ShadowSettings:
+        self.softness = clamp(value, 0.0, 1.0)
+        return self
+
+fun directional_light3d_create(name: str) -> DirectionalLight3D:
+    node: DirectionalLight3D = DirectionalLight3D()
+    node.id = -1
+    node.name = name
+    node.active = 1
+    node.kind = 4
+    node.parent_ptr = 0
+    node.first_child_ptr = 0
+    node.next_sibling_ptr = 0
+    node.mesh_id = -1
+    node.pos_x = 0.0
+    node.pos_y = 0.0
+    node.pos_z = 0.0
+    node.rot_x = 0.0
+    node.rot_y = 0.0
+    node.rot_z = 0.0
+    node.scale_x = 1.0
+    node.scale_y = 1.0
+    node.scale_z = 1.0
+    node.body_type = 0
+    node.collision_type = 0
+    node.collision_size_x = 1.0
+    node.collision_size_y = 1.0
+    node.collision_size_z = 1.0
+    node.collision_offset_x = 0.0
+    node.collision_offset_y = 0.0
+    node.collision_offset_z = 0.0
+    node.velocity_x = 0.0
+    node.velocity_y = 0.0
+    node.velocity_z = 0.0
+    node.mass = 1.0
+    node.texture_id = -1
+    node.color = Color.rgb(1.0, 0.95, 0.84)
+    node.intensity = 1.0
+    node.ambient = 0.35
+    node.dir_x = 0.0
+    node.dir_y = -1.0
+    node.dir_z = 0.0
+    node.shadow = ShadowSettings.off()
+    return node
+
+attach DirectionalLight3D:
+
+    static fun create() -> DirectionalLight3D:
+        return directional_light3d_create("DirectionalLight3D")
+
+    static fun create(name: str) -> DirectionalLight3D:
+        return directional_light3d_create(name)
+
+    fun set_direction(self, x: f32, y: f32, z: f32) -> DirectionalLight3D:
+        v: Vec3 = Vec3.make(x, y, z).normalize()
+        self.dir_x = v.x
+        self.dir_y = v.y
+        self.dir_z = v.z
+        return self
+
+    fun direction(self) -> Vec3:
+        return Vec3.make(self.dir_x, self.dir_y, self.dir_z)
+
+    fun set_color(self, color: Color) -> DirectionalLight3D:
+        self.color = color
+        return self
+
+    fun set_intensity(self, value: f32) -> DirectionalLight3D:
+        if value < 0.0:
+            self.intensity = 0.0
+            return self
+        self.intensity = value
+        return self
+
+    fun set_ambient(self, value: f32) -> DirectionalLight3D:
+        self.ambient = clamp(value, 0.0, 1.0)
+        return self
+
+    fun set_shadows(self, settings: ShadowSettings) -> DirectionalLight3D:
+        self.shadow = settings
+        return self
+
+    fun disable_shadows(self) -> DirectionalLight3D:
+        self.shadow = ShadowSettings.off()
+        return self
+
+    fun shadows(self) -> ShadowSettings:
+        return self.shadow
+
+    fun destroy(self):
+        node_destroy(self as i64)
+
+attach Node3D:
+
+    fun add_child(self, child: DirectionalLight3D):
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = self as i64
+        child.next_sibling_ptr = self.first_child_ptr
+        self.first_child_ptr = child as i64
+
+attach Scene:
+
+    fun add_child(self, child: DirectionalLight3D):
+        root: RootNode = self.root()
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = root as i64
+        child.next_sibling_ptr = root.first_child_ptr
+        root.first_child_ptr = child as i64
+        self.set_directional_light(child)
+
+    fun set_directional_light(self, light: DirectionalLight3D):
+        self.directional_light_ptr = light as i64
+
+    fun directional_light(self) -> DirectionalLight3D:
+        return self.directional_light_ptr as DirectionalLight3D
+
+    fun has_directional_light(self) -> i32:
+        if self.directional_light_ptr == 0:
+            return 0
+        return 1

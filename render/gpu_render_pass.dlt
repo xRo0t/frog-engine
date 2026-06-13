@@ -196,14 +196,14 @@ attach RenderPass:
         if dp_r != 0:
             return 0
 
-        # 3. Create pipeline layout: descriptor set 0 + push constants
-        # (64 bytes view-projection + 32 bytes fog + 16 bytes fog shape/projection).
+        # 3. Create pipeline layout: descriptor set 0 + push constants.
+        # 64 bytes VP + 32 fog + 16 fog/projection/light color + 16 light.
         pc_range: i64 = Memory.malloc_zeroed(12)
         if pc_range == 0:
             return 0
         Memory.write_i32(pc_range, 17)
         Memory.write_i32(pc_range + 4, 0)
-        Memory.write_i32(pc_range + 8, 112)
+        Memory.write_i32(pc_range + 8, 128)
 
         dsl_arr: i64 = Memory.malloc_zeroed(8)
         Memory.write_ptr(dsl_arr, self.desc_set_layout)
@@ -458,7 +458,7 @@ attach RenderPass:
 
         # Vertex input:
         # binding 0: pos(3f) + color(3f) + uv(2f), per vertex, stride 32
-        # binding 1: MVP matrix as four vec4 columns, per instance, stride 64
+        # binding 1: model matrix + material vec4, per instance, stride 80
         bind: i64 = Memory.malloc_zeroed(24)
         if bind == 0:
             Memory.free(stages)
@@ -467,10 +467,10 @@ attach RenderPass:
         Memory.write_i32(bind + 4, 32)
         Memory.write_i32(bind + 8, 0)
         Memory.write_i32(bind + 12, 1)
-        Memory.write_i32(bind + 16, 64)
+        Memory.write_i32(bind + 16, 80)
         Memory.write_i32(bind + 20, 1)
 
-        attrs: i64 = Memory.malloc_zeroed(112)
+        attrs: i64 = Memory.malloc_zeroed(128)
         if attrs == 0:
             Memory.free(stages)
             Memory.free(bind)
@@ -507,6 +507,11 @@ attach RenderPass:
         Memory.write_i32(attrs + 100, 0)
         Memory.write_i32(attrs + 104, 103)
         Memory.write_i32(attrs + 108, 24)
+        # Material params (loc=7, binding=1, R32G32B32A32=109, offset=64)
+        Memory.write_i32(attrs + 112, 7)
+        Memory.write_i32(attrs + 116, 1)
+        Memory.write_i32(attrs + 120, 109)
+        Memory.write_i32(attrs + 124, 64)
 
         vi_ci: i64 = Memory.malloc_zeroed(48)
         if vi_ci == 0:
@@ -519,7 +524,7 @@ attach RenderPass:
         Memory.write_i32(vi_ci + 16, 0)
         Memory.write_i32(vi_ci + 20, 2)
         Memory.write_ptr(vi_ci + 24, bind)
-        Memory.write_i32(vi_ci + 32, 7)
+        Memory.write_i32(vi_ci + 32, 8)
         Memory.write_ptr(vi_ci + 40, attrs)
 
         # Input assembly (32 bytes)

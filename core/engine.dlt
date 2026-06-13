@@ -422,6 +422,9 @@ attach Engine:
     static fun bind_texture(mesh_id: i32, texture_id: i32):
         g_engine_runtime.bind_texture(mesh_id, texture_id)
 
+    static fun bind_material(mesh_id: i32, material: Material3D):
+        g_engine_runtime.bind_material(mesh_id, material)
+
     static fun set_transform(mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         g_engine_runtime.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
 
@@ -439,6 +442,7 @@ attach Engine:
         camera: Camera3D = g_engine_scene.camera()
         if (camera as i64) == 0:
             return
+        g_engine_runtime.set_directional_light(g_engine_scene.directional_light_ptr)
         env: Environment = g_engine_scene.environment()
         g_engine_runtime.render_camera_scaled_with_environment(camera, g_engine_render_scale, env)
 

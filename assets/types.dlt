@@ -58,3 +58,5 @@ struct Shader:
     found: i32 = 0
     ready: i32 = 0
     error: str = ""
+
+type Shader3D = Shader

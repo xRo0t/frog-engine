@@ -34,6 +34,7 @@ load frog/scene/node
 load frog/scene/game_object
 load frog/scene/material3d
 load frog/scene/mesh3d
+load frog/scene/light3d
 load frog/scene/physics
 
 # Phase 3.5: Early software rendering
@@ -68,11 +69,11 @@ export KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN
 export KEY_ESCAPE, KEY_SPACE, KEY_SHIFT, KEY_CTRL
 export MOUSE_LEFT, MOUSE_RIGHT
 export Assets, AssetModels, AssetTextures, AssetAudio, AssetShaders
-export Model3D, Texture2D, AudioClip, Shader
+export Model3D, Texture2D, AudioClip, Shader, Shader3D
 export GpuTexture, TextureSpec, GpuMeshData
 export Environment, Fog, Sky
-export Node, Node3D, Mesh3D, Mesh3DShape, Material3D, Camera3D, RootNode
-export node3d_create, camera3d_create, root_node_create
+export Node, Node3D, Mesh3D, Mesh3DShape, Material3D, Camera3D, DirectionalLight3D, ShadowSettings, RootNode
+export node3d_create, camera3d_create, directional_light3d_create, root_node_create
 export Scene, GameObject, ObjectBench
 export Ray3D, RaycastHit, Raycast3D, Physics
 export SoftwareRenderer

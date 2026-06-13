@@ -84,7 +84,7 @@ attach AssetAudio:
 
 attach AssetShaders:
 
-    static fun load(path: str) -> Shader:
+    static fun load(path: str) -> Shader3D:
         resolved: str = Assets.resolve(path)
         if Str.equals(resolved, ""):
             return Shader(path=path, resolved_path="", found=0, ready=0, error="asset root is not mounted; call Assets.mount before loading assets")
