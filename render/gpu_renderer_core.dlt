@@ -923,6 +923,30 @@ attach GpuRendererCore:
         shadow_far: f32 = distance * 2.5
         projection: Mat4 = Mat4.orthographic(0.0 - half_extent, half_extent, 0.0 - half_extent, half_extent, shadow_near, shadow_far)
         light_vp: Mat4 = projection.mul(view)
+
+        # Stabilize the directional projection on the shadow-map texel grid.
+        # Without this, sub-texel camera movement shifts the entire map and
+        # produces crawling stripes on large flat receivers.
+        shadow_map_size: i32 = light.shadow.map_size
+        if shadow_map_size < 1:
+            shadow_map_size = 1
+        half_map: f32 = (shadow_map_size as f32) * 0.5
+        origin_texel_x: f32 = light_vp.m12 * half_map
+        origin_texel_y: f32 = light_vp.m13 * half_map
+        rounded_texel_x: i32 = 0
+        rounded_texel_y: i32 = 0
+        if origin_texel_x >= 0.0:
+            rounded_texel_x = (origin_texel_x + 0.5) as i32
+        else:
+            rounded_texel_x = (origin_texel_x - 0.5) as i32
+        if origin_texel_y >= 0.0:
+            rounded_texel_y = (origin_texel_y + 0.5) as i32
+        else:
+            rounded_texel_y = (origin_texel_y - 0.5) as i32
+        projection.m12 = projection.m12 + (((rounded_texel_x as f32) - origin_texel_x) / half_map)
+        projection.m13 = projection.m13 + (((rounded_texel_y as f32) - origin_texel_y) / half_map)
+        light_vp = projection.mul(view)
+
         light_vp.write_to_ptr(out)
         Memory.write_f32(out + 64, 1.0)
         # Public bias values use world units. The comparison shader works in
@@ -1669,7 +1693,17 @@ attach GpuRendererCore:
         short_side: i32 = width
         if height < short_side:
             short_side = height
-        radius: i32 = ((short_side as f32) * sky.sun_size) as i32
+        # sun_size is an angular sky size, not a fixed screen-space sprite.
+        # Match the camera projection and increase the projected size toward
+        # screen edges, just like world geometry under perspective projection.
+        projection_scale: f32 = Memory.read_f32(cam_proj + 20)
+        if projection_scale < 0.0:
+            projection_scale = 0.0 - projection_scale
+        projection_scale = projection_scale / 0.96569
+        edge_scale: f32 = 1.0 / clip_w
+        if edge_scale > 2.5:
+            edge_scale = 2.5
+        radius: i32 = ((short_side as f32) * sky.sun_size * projection_scale * edge_scale) as i32
         if radius < 2:
             radius = 2
         outer_radius: i32 = (radius as f32 * (2.2 + sky.sun_glow * 2.0)) as i32

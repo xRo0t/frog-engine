@@ -50,6 +50,21 @@ float receivesShadow() {
     return mod(floor(packed / 65536.0), 2.0);
 }
 
+vec2 receiverPlaneDepthGradient(vec2 uv, float depth) {
+    vec2 uvDx = dFdx(uv);
+    vec2 uvDy = dFdy(uv);
+    vec2 depthDerivatives = vec2(dFdx(depth), dFdy(depth));
+    float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
+    if (abs(determinant) < 0.0000001) {
+        return vec2(0.0);
+    }
+
+    return vec2(
+        (uvDy.y * depthDerivatives.x - uvDx.y * depthDerivatives.y) / determinant,
+        (-uvDy.x * depthDerivatives.x + uvDx.x * depthDerivatives.y) / determinant
+    );
+}
+
 float sampleShadow(vec3 normal, vec3 lightDirection) {
     if (fragmentShadowParams.x < 0.5 || receivesShadow() < 0.5) {
         return 1.0;
@@ -67,23 +82,73 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
         return 1.0;
     }
 
-    float slope = 1.0 - max(dot(normal, -lightDirection), 0.0);
-    float compareDepth = projected.z - fragmentShadowParams.y - fragmentShadowParams.z * slope;
-    float softness = clamp(fragmentShadowParams.w, 0.0, 1.0);
-    if (softness <= 0.01) {
-        return texture(shadowSampler, vec3(uv, compareDepth));
+    float normalLight = max(dot(normal, -lightDirection), 0.0);
+    if (normalLight <= 0.0001) {
+        return 1.0;
     }
 
+    float sine = sqrt(max(1.0 - normalLight * normalLight, 0.0));
+    float slope = min(sine / max(normalLight, 0.08), 6.0);
     vec2 texel = 1.0 / vec2(textureSize(shadowSampler, 0));
-    float radius = 0.75 + softness * 1.75;
-    float visibility = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            vec2 offset = vec2(x, y) * texel * radius;
-            visibility += texture(shadowSampler, vec3(uv + offset, compareDepth));
-        }
+    vec2 receiverGradient = receiverPlaneDepthGradient(uv, projected.z);
+    float receiverFootprint = abs(receiverGradient.x) * texel.x
+        + abs(receiverGradient.y) * texel.y;
+    float receiverBiasLimit = fragmentShadowParams.y * 2.0
+        + fragmentShadowParams.z * 4.0;
+    float receiverBias = min(receiverFootprint * 0.75, receiverBiasLimit);
+    float depthBias = fragmentShadowParams.y
+        + fragmentShadowParams.z * slope
+        + receiverBias;
+
+    float softness = clamp(fragmentShadowParams.w, 0.0, 1.0);
+    if (softness <= 0.01) {
+        float visibility = texture(
+            shadowSampler,
+            vec3(uv, projected.z - depthBias)
+        );
+        float grazingWeight = smoothstep(0.025, 0.16, normalLight);
+        return mix(1.0, visibility, grazingWeight);
     }
-    return visibility / 9.0;
+
+    const vec2 poissonDisk[12] = vec2[](
+        vec2(-0.326212, -0.405810),
+        vec2(-0.840144, -0.073580),
+        vec2(-0.695914,  0.457137),
+        vec2(-0.203345,  0.620716),
+        vec2( 0.962340, -0.194983),
+        vec2( 0.473434, -0.480026),
+        vec2( 0.519456,  0.767022),
+        vec2( 0.185461, -0.893124),
+        vec2( 0.507431,  0.064425),
+        vec2( 0.896420,  0.412458),
+        vec2(-0.321940, -0.932615),
+        vec2(-0.791559, -0.597710)
+    );
+
+    int sampleCount = 4;
+    if (softness > 0.34) {
+        sampleCount = 8;
+    }
+    if (softness > 0.67) {
+        sampleCount = 12;
+    }
+
+    float radius = 0.70 + softness * 1.80;
+    float visibility = 0.0;
+    for (int index = 0; index < sampleCount; ++index) {
+        vec2 offset = poissonDisk[index] * texel * radius;
+        float sampleDepth = projected.z
+            + dot(receiverGradient, offset)
+            - depthBias;
+        visibility += texture(shadowSampler, vec3(uv + offset, sampleDepth));
+    }
+    visibility /= float(sampleCount);
+
+    // Directional shadow maps lose useful precision when a receiver is
+    // almost parallel to the light. Fade only that unreliable contribution;
+    // direct lighting is already close to zero at the same angle.
+    float grazingWeight = smoothstep(0.025, 0.16, normalLight);
+    return mix(1.0, visibility, grazingWeight);
 }
 
 void main() {
