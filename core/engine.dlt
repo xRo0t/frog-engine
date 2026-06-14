@@ -375,6 +375,8 @@ attach Engine:
 
     static fun begin_frame() -> f32:
         dt: f32 = g_engine_runtime.begin_frame_limited(g_engine_target_fps)
+        if g_engine_has_scene == 1:
+            g_engine_scene.update_day_cycle(dt)
         Debug.sample_frame_pacing(dt)
         return dt
 

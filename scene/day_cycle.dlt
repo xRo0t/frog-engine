@@ -1,0 +1,195 @@
+##############################
+# Frog - Optional Day Cycle
+# Explicit scene-owned animation for a sun, sky, stars, and fog.
+##############################
+
+@heap struct DayCycle:
+    elapsed: f32 = 0.0
+    duration: f32 = 120.0
+    sun_ptr: i64 = 0
+    sun_path_depth: f32 = 0.32
+    running: i32 = 1
+    update_sky: i32 = 1
+    update_light: i32 = 1
+    update_fog: i32 = 1
+
+fun day_cycle_color_lerp(a: Color, b: Color, t: f32) -> Color:
+    amount: f32 = clamp(t, 0.0, 1.0)
+    return Color.rgb(
+        lerp(a.r, b.r, amount),
+        lerp(a.g, b.g, amount),
+        lerp(a.b, b.b, amount)
+    )
+
+fun day_cycle_abs(value: f32) -> f32:
+    if value < 0.0:
+        return 0.0 - value
+    return value
+
+attach DayCycle:
+
+    static fun create() -> DayCycle:
+        return DayCycle()
+
+    static fun create(sun: DirectionalLight3D) -> DayCycle:
+        cycle: DayCycle = DayCycle()
+        cycle.sun_ptr = sun as i64
+        return cycle
+
+    fun set_sun(self, sun: DirectionalLight3D) -> DayCycle:
+        self.sun_ptr = sun as i64
+        return self
+
+    fun set_duration(self, seconds: f32) -> DayCycle:
+        if seconds < 0.1:
+            self.duration = 0.1
+        else:
+            self.duration = seconds
+        return self
+
+    fun set_time(self, normalized_time: f32) -> DayCycle:
+        phase: f32 = normalized_time
+        while phase < 0.0:
+            phase = phase + 1.0
+        while phase >= 1.0:
+            phase = phase - 1.0
+        self.elapsed = phase * self.duration
+        return self
+
+    fun time(self) -> f32:
+        if self.duration <= 0.0:
+            return 0.0
+        return self.elapsed / self.duration
+
+    fun set_sun_path_depth(self, depth: f32) -> DayCycle:
+        self.sun_path_depth = clamp(depth, 0.0 - 1.0, 1.0)
+        return self
+
+    fun control_sky(self, enabled: i32) -> DayCycle:
+        if enabled == 0:
+            self.update_sky = 0
+        else:
+            self.update_sky = 1
+        return self
+
+    fun control_light(self, enabled: i32) -> DayCycle:
+        if enabled == 0:
+            self.update_light = 0
+        else:
+            self.update_light = 1
+        return self
+
+    fun control_fog(self, enabled: i32) -> DayCycle:
+        if enabled == 0:
+            self.update_fog = 0
+        else:
+            self.update_fog = 1
+        return self
+
+    fun play(self):
+        self.running = 1
+
+    fun pause(self):
+        self.running = 0
+
+    fun update_environment(self, env: Environment, dt: f32) -> Environment:
+        if self.sun_ptr == 0:
+            return env
+        if self.duration <= 0.0:
+            return env
+
+        if self.running == 1:
+            self.elapsed = self.elapsed + dt
+            while self.elapsed >= self.duration:
+                self.elapsed = self.elapsed - self.duration
+            while self.elapsed < 0.0:
+                self.elapsed = self.elapsed + self.duration
+
+        phase: f32 = self.elapsed / self.duration
+        angle: f32 = phase * 6.28318530 - 1.57079632
+        sun_x: f32 = @cos(angle)
+        sun_y: f32 = @sin(angle)
+
+        sun: DirectionalLight3D = self.sun_ptr as DirectionalLight3D
+        sun.set_direction(0.0 - sun_x, 0.0 - sun_y, 0.0 - self.sun_path_depth)
+
+        daylight: f32 = clamp((sun_y + 0.12) / 0.32, 0.0, 1.0)
+        high_sun: f32 = clamp(sun_y * 1.45, 0.0, 1.0)
+        horizon_proximity: f32 = clamp(1.0 - day_cycle_abs(sun_y) * 4.5, 0.0, 1.0)
+        twilight: f32 = horizon_proximity * clamp((sun_y + 0.16) / 0.16, 0.0, 1.0)
+
+        warm_sun: Color = Color.rgb(1.0, 0.55, 0.34)
+        noon_sun: Color = Color.rgb(1.0, 0.94, 0.82)
+        sun_color: Color = day_cycle_color_lerp(warm_sun, noon_sun, high_sun)
+
+        if self.update_light == 1:
+            sun.set_color(sun_color)
+            sun.set_intensity(lerp(0.0, 1.05, daylight))
+            sun.set_ambient(lerp(0.04, 0.42, daylight))
+
+        if self.update_sky == 1:
+            sky: Sky = env.sky
+            sky.set_sun(sun)
+
+            night_zenith: Color = Color.rgb(0.015, 0.025, 0.080)
+            day_zenith: Color = Color.rgb(0.42, 0.57, 0.82)
+            night_horizon: Color = Color.rgb(0.045, 0.060, 0.120)
+            day_horizon: Color = Color.rgb(0.70, 0.79, 0.92)
+            night_lower: Color = Color.rgb(0.025, 0.035, 0.070)
+            day_lower: Color = Color.rgb(0.78, 0.84, 0.94)
+            sunset_horizon: Color = Color.rgb(0.96, 0.34, 0.16)
+            sunset_lower: Color = Color.rgb(0.72, 0.18, 0.10)
+
+            zenith: Color = day_cycle_color_lerp(night_zenith, day_zenith, daylight)
+            horizon: Color = day_cycle_color_lerp(night_horizon, day_horizon, daylight)
+            lower: Color = day_cycle_color_lerp(night_lower, day_lower, daylight)
+            horizon = day_cycle_color_lerp(horizon, sunset_horizon, twilight * 0.82)
+            lower = day_cycle_color_lerp(lower, sunset_lower, twilight * 0.60)
+
+            sky.set_zenith(zenith)
+            sky.set_horizon(horizon)
+            sky.set_lower(lower)
+            sky.set_sun_color(sun_color)
+            sky.set_stars(1.0 - daylight, 110)
+            env.set_sky(sky)
+
+        if self.update_fog == 1:
+            fog: Fog = env.fog
+            fog.color = env.sky.fog_color()
+            env.set_fog(fog)
+
+        return env
+
+    fun destroy(self):
+        Memory.free(self as i64)
+
+attach Scene:
+
+    fun set_day_cycle(self, cycle: DayCycle):
+        new_ptr: i64 = cycle as i64
+        if self.day_cycle_ptr != 0:
+            if self.day_cycle_ptr != new_ptr:
+                old_cycle: DayCycle = self.day_cycle_ptr as DayCycle
+                old_cycle.destroy()
+        self.day_cycle_ptr = new_ptr
+
+    fun has_day_cycle(self) -> i32:
+        if self.day_cycle_ptr == 0:
+            return 0
+        return 1
+
+    fun day_cycle(self) -> DayCycle:
+        return self.day_cycle_ptr as DayCycle
+
+    fun clear_day_cycle(self):
+        if self.day_cycle_ptr != 0:
+            cycle: DayCycle = self.day_cycle_ptr as DayCycle
+            cycle.destroy()
+            self.day_cycle_ptr = 0
+
+    fun update_day_cycle(self, dt: f32):
+        if self.day_cycle_ptr == 0:
+            return
+        cycle: DayCycle = self.day_cycle_ptr as DayCycle
+        self.env = cycle.update_environment(self.environment(), dt)
+        self.env_initialized = 1

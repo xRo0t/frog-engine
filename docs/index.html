@@ -226,6 +226,7 @@
       <a href="#scene">Scene &amp; GameObject</a>
       <a href="#physics">Physics</a>
       <a href="#environment">Environment</a>
+      <a href="#day-cycle">DayCycle</a>
       <a class="section">Math</a>
       <a href="#vec3">Vec3</a>
       <a href="#mat4">Mat4</a>
@@ -862,6 +863,10 @@ scene.add_child(camera)</code></pre>
         <tr><td><code>set_camera(camera)</code></td><td>—</td><td>Sets the active camera.</td></tr>
         <tr><td><code>set_environment(env)</code></td><td>—</td><td>Sets the scene render environment.</td></tr>
         <tr><td><code>environment()</code></td><td>Environment</td><td>Returns the scene render environment.</td></tr>
+        <tr><td><code>set_day_cycle(cycle)</code></td><td>—</td><td>Attaches an optional scene-owned cycle updated by <code>Engine.begin_frame()</code>.</td></tr>
+        <tr><td><code>day_cycle()</code></td><td>DayCycle</td><td>Returns the attached cycle.</td></tr>
+        <tr><td><code>has_day_cycle()</code></td><td>i32</td><td>Returns 1 when a cycle is attached.</td></tr>
+        <tr><td><code>clear_day_cycle()</code></td><td>—</td><td>Removes and destroys the attached cycle.</td></tr>
         <tr><td><code>camera()</code></td><td>Camera3D</td><td>Returns the active camera.</td></tr>
         <tr><td><code>spawn(name)</code></td><td>GameObject</td><td>Allocates a packed object (capacity scenes only).</td></tr>
         <tr><td><code>object_at(id)</code></td><td>GameObject</td><td>Returns the object at an index.</td></tr>
@@ -973,7 +978,7 @@ camera.add_child(raycast)
         <tr><td><code>set_sun(light)</code></td><td>Links the visible sky sun to a <code>DirectionalLight3D</code>. Its position follows the opposite of the light direction.</td></tr>
         <tr><td><code>clear_sun()</code></td><td>Disables the visible sun without changing scene lighting.</td></tr>
         <tr><td><code>set_sun_color(color)</code></td><td>Sets the sun disc and glow tint.</td></tr>
-        <tr><td><code>set_sun_size(value)</code></td><td>Sets disc radius as a fraction of the shorter viewport side, clamped to 0.005..0.20.</td></tr>
+        <tr><td><code>set_sun_size(value)</code></td><td>Sets the projected angular size of the sun, clamped to 0.005..0.20.</td></tr>
         <tr><td><code>set_sun_glow(value)</code></td><td>Sets the low-cost layered glow strength from 0..1.</td></tr>
       </table>
 
@@ -1013,6 +1018,32 @@ fog: <span class="tok-type">Fog</span> = Fog.linear(sky.fog_color(), <span class
 fog.set_shape(FogShape.depth())
 env.set_fog(fog)</code></pre>
       <div class="note">The Vulkan renderer draws a per-pixel world-space gradient before world meshes, with subtle dithering to prevent color banding. The linked sun and stars stay fixed to world directions instead of the screen.</div>
+    </section>
+    <section id="day-cycle">
+      <h2>DayCycle</h2>
+      <p class="lead">Optional scene-owned time-of-day animation for a sun, sky colors, stars, light, and fog. Nothing changes automatically until a cycle is explicitly attached.</p>
+
+      <pre><code>cycle: <span class="tok-type">DayCycle</span> = DayCycle.create(sun)
+cycle.set_duration(<span class="tok-num">120.0</span>)
+cycle.set_time(<span class="tok-num">0.25</span>)
+scene.set_day_cycle(cycle)</code></pre>
+
+      <h4>DayCycle</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>DayCycle.create()</code></td><td>Creates a cycle; assign its sun later with <code>set_sun()</code>.</td></tr>
+        <tr><td><code>DayCycle.create(sun)</code></td><td>Creates a cycle controlling the supplied directional light.</td></tr>
+        <tr><td><code>set_duration(seconds)</code></td><td>Sets the length of one complete day.</td></tr>
+        <tr><td><code>set_time(value)</code></td><td>Sets normalized time in the repeating 0..1 day range.</td></tr>
+        <tr><td><code>time()</code></td><td>Returns normalized time in the current day.</td></tr>
+        <tr><td><code>set_sun_path_depth(depth)</code></td><td>Adjusts the sun path tilt from -1..1.</td></tr>
+        <tr><td><code>control_sky(enabled)</code></td><td>Enables or disables automatic sky colors and stars.</td></tr>
+        <tr><td><code>control_light(enabled)</code></td><td>Enables or disables automatic sun color, intensity, and ambient values.</td></tr>
+        <tr><td><code>control_fog(enabled)</code></td><td>Enables or disables automatic fog color updates while preserving its mode, shape, density, and distances.</td></tr>
+        <tr><td><code>play()</code> / <code>pause()</code></td><td>Runs or freezes time without detaching the cycle.</td></tr>
+      </table>
+
+      <div class="note">The scene owns an attached <code>DayCycle</code> and destroys it with the scene. For fully manual art direction, do not attach a cycle; update the light, sky, and fog directly.</div>
     </section>
     <section id="vec3">
       <h2>Vec3</h2>
