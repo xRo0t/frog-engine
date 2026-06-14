@@ -1,0 +1,190 @@
+##############################
+# Frog - Fullscreen Sky Pass
+# One runtime-owned pipeline for the engine's single Vulkan device.
+##############################
+
+static g_sky_pipeline_layout: i64 = 0
+static g_sky_pipeline: i64 = 0
+static g_sky_vert_shader_module: i64 = 0
+static g_sky_frag_shader_module: i64 = 0
+static g_sky_initialized: i32 = 0
+
+fun frog_sky_pass_create_shader_module(device: i64, code: i64, size: i64) -> i64:
+    if code == 0 or size <= 0:
+        return 0
+    ci: i64 = Memory.malloc_zeroed(40)
+    out: i64 = Memory.malloc_zeroed(8)
+    if ci == 0 or out == 0:
+        if ci != 0:
+            Memory.free(ci)
+        if out != 0:
+            Memory.free(out)
+        return 0
+    Memory.write_i32(ci, 12)
+    Memory.write_i64(ci + 24, size)
+    Memory.write_ptr(ci + 32, code)
+    result: i32 = vkCreateShaderModule(device, ci, 0, out)
+    shader_handle: i64 = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    if result != 0:
+        return 0
+    return shader_handle
+
+fun frog_sky_pass_create_pipeline_layout(device: i64) -> i32:
+    pc_range: i64 = Memory.malloc_zeroed(12)
+    ci: i64 = Memory.malloc_zeroed(48)
+    out: i64 = Memory.malloc_zeroed(8)
+    if pc_range == 0 or ci == 0 or out == 0:
+        if pc_range != 0:
+            Memory.free(pc_range)
+        if ci != 0:
+            Memory.free(ci)
+        if out != 0:
+            Memory.free(out)
+        return 0
+    Memory.write_i32(pc_range, 16)
+    Memory.write_i32(pc_range + 4, 0)
+    Memory.write_i32(pc_range + 8, 128)
+    Memory.write_i32(ci, 30)
+    Memory.write_i32(ci + 32, 1)
+    Memory.write_ptr(ci + 40, pc_range)
+    result: i32 = vkCreatePipelineLayout(device, ci, 0, out)
+    g_sky_pipeline_layout = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    Memory.free(pc_range)
+    if result != 0:
+        return 0
+    return 1
+
+fun frog_sky_pass_create_pipeline(device: i64, render_pass: i64) -> i32:
+    entry: str = "main"
+    stages: i64 = Memory.malloc_zeroed(96)
+    vertex_input: i64 = Memory.malloc_zeroed(48)
+    input_assembly: i64 = Memory.malloc_zeroed(32)
+    viewport_state: i64 = Memory.malloc_zeroed(48)
+    raster: i64 = Memory.malloc_zeroed(64)
+    multisample: i64 = Memory.malloc_zeroed(48)
+    depth: i64 = Memory.malloc_zeroed(104)
+    color_attachment: i64 = Memory.malloc_zeroed(32)
+    blend: i64 = Memory.malloc_zeroed(56)
+    dynamic_values: i64 = Memory.malloc_zeroed(8)
+    dynamic_state: i64 = Memory.malloc_zeroed(32)
+    ci: i64 = Memory.malloc_zeroed(144)
+    out: i64 = Memory.malloc_zeroed(8)
+    if stages == 0 or vertex_input == 0 or input_assembly == 0 or viewport_state == 0 or raster == 0 or multisample == 0 or depth == 0 or color_attachment == 0 or blend == 0 or dynamic_values == 0 or dynamic_state == 0 or ci == 0 or out == 0:
+        return 0
+
+    Memory.write_i32(stages, 18)
+    Memory.write_i32(stages + 20, 1)
+    Memory.write_ptr(stages + 24, g_sky_vert_shader_module)
+    Memory.write_ptr(stages + 32, entry)
+    Memory.write_i32(stages + 48, 18)
+    Memory.write_i32(stages + 68, 16)
+    Memory.write_ptr(stages + 72, g_sky_frag_shader_module)
+    Memory.write_ptr(stages + 80, entry)
+
+    Memory.write_i32(vertex_input, 19)
+    Memory.write_i32(input_assembly, 20)
+    Memory.write_i32(input_assembly + 20, 3)
+
+    Memory.write_i32(viewport_state, 22)
+    Memory.write_i32(viewport_state + 20, 1)
+    Memory.write_i32(viewport_state + 32, 1)
+
+    Memory.write_i32(raster, 23)
+    Memory.write_i32(raster + 24, 0)
+    Memory.write_i32(raster + 28, 0)
+    Memory.write_i32(raster + 32, 0)
+    Memory.write_i32(raster + 36, 0)
+    Memory.write_f32(raster + 56, 1.0)
+
+    Memory.write_i32(multisample, 24)
+    Memory.write_i32(multisample + 20, 1)
+    Memory.write_f32(multisample + 28, 1.0)
+
+    Memory.write_i32(depth, 25)
+    Memory.write_i32(depth + 20, 0)
+    Memory.write_i32(depth + 24, 0)
+
+    Memory.write_i32(color_attachment + 28, 15)
+    Memory.write_i32(blend, 26)
+    Memory.write_i32(blend + 28, 1)
+    Memory.write_ptr(blend + 32, color_attachment)
+
+    Memory.write_i32(dynamic_values, 0)
+    Memory.write_i32(dynamic_values + 4, 1)
+    Memory.write_i32(dynamic_state, 27)
+    Memory.write_i32(dynamic_state + 20, 2)
+    Memory.write_ptr(dynamic_state + 24, dynamic_values)
+
+    Memory.write_i32(ci, 28)
+    Memory.write_i32(ci + 20, 2)
+    Memory.write_ptr(ci + 24, stages)
+    Memory.write_ptr(ci + 32, vertex_input)
+    Memory.write_ptr(ci + 40, input_assembly)
+    Memory.write_ptr(ci + 56, viewport_state)
+    Memory.write_ptr(ci + 64, raster)
+    Memory.write_ptr(ci + 72, multisample)
+    Memory.write_ptr(ci + 80, depth)
+    Memory.write_ptr(ci + 88, blend)
+    Memory.write_ptr(ci + 96, dynamic_state)
+    Memory.write_ptr(ci + 104, g_sky_pipeline_layout)
+    Memory.write_ptr(ci + 112, render_pass)
+    Memory.write_i32(ci + 136, 0 - 1)
+
+    result: i32 = vkCreateGraphicsPipelines(device, 0, 1, ci, 0, out)
+    g_sky_pipeline = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    Memory.free(dynamic_state)
+    Memory.free(dynamic_values)
+    Memory.free(blend)
+    Memory.free(color_attachment)
+    Memory.free(depth)
+    Memory.free(multisample)
+    Memory.free(raster)
+    Memory.free(viewport_state)
+    Memory.free(input_assembly)
+    Memory.free(vertex_input)
+    Memory.free(stages)
+    if result != 0:
+        return 0
+    return 1
+
+fun frog_sky_pass_init(device: i64, render_pass: i64, vert_data: i64, vert_size: i64, frag_data: i64, frag_size: i64) -> i32:
+    g_sky_vert_shader_module = frog_sky_pass_create_shader_module(device, vert_data, vert_size)
+    g_sky_frag_shader_module = frog_sky_pass_create_shader_module(device, frag_data, frag_size)
+    if g_sky_vert_shader_module == 0 or g_sky_frag_shader_module == 0:
+        return 0
+    if frog_sky_pass_create_pipeline_layout(device) == 0:
+        return 0
+    if frog_sky_pass_create_pipeline(device, render_pass) == 0:
+        return 0
+    g_sky_initialized = 1
+    return 1
+
+fun frog_sky_pass_ready() -> i32:
+    return g_sky_initialized
+
+fun frog_sky_pass_pipeline() -> i64:
+    return g_sky_pipeline
+
+fun frog_sky_pass_layout() -> i64:
+    return g_sky_pipeline_layout
+
+fun frog_sky_pass_cleanup(device: i64):
+    if g_sky_pipeline != 0:
+        vkDestroyPipeline(device, g_sky_pipeline, 0)
+    if g_sky_pipeline_layout != 0:
+        vkDestroyPipelineLayout(device, g_sky_pipeline_layout, 0)
+    if g_sky_vert_shader_module != 0:
+        vkDestroyShaderModule(device, g_sky_vert_shader_module, 0)
+    if g_sky_frag_shader_module != 0:
+        vkDestroyShaderModule(device, g_sky_frag_shader_module, 0)
+    g_sky_pipeline = 0
+    g_sky_pipeline_layout = 0
+    g_sky_vert_shader_module = 0
+    g_sky_frag_shader_module = 0
+    g_sky_initialized = 0

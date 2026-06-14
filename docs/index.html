@@ -953,7 +953,7 @@ camera.add_child(raycast)
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
         <tr><td><code>Environment.create()</code></td><td>Environment</td><td>Creates the default scene environment.</td></tr>
         <tr><td><code>set_clear_color(color)</code></td><td>Environment</td><td>Sets the Vulkan clear color for this scene.</td></tr>
-        <tr><td><code>set_sky(sky)</code></td><td>Environment</td><td>Sets the camera-aware gradient sky for this scene.</td></tr>
+        <tr><td><code>set_sky(sky)</code></td><td>Environment</td><td>Sets the smooth world-space gradient sky for this scene.</td></tr>
         <tr><td><code>clear_sky()</code></td><td>Environment</td><td>Disables the rendered sky and falls back to the clear color.</td></tr>
         <tr><td><code>set_fog(fog)</code></td><td>Environment</td><td>Stores fog settings for this scene.</td></tr>
         <tr><td><code>clear_fog()</code></td><td>Environment</td><td>Disables fog on this environment.</td></tr>
@@ -975,7 +975,6 @@ camera.add_child(raycast)
         <tr><td><code>set_sun_color(color)</code></td><td>Sets the sun disc and glow tint.</td></tr>
         <tr><td><code>set_sun_size(value)</code></td><td>Sets disc radius as a fraction of the shorter viewport side, clamped to 0.005..0.20.</td></tr>
         <tr><td><code>set_sun_glow(value)</code></td><td>Sets the low-cost layered glow strength from 0..1.</td></tr>
-        <tr><td><code>set_bands(count)</code></td><td>Controls gradient band smoothness.</td></tr>
       </table>
 
       <h4>Fog</h4>
@@ -1006,7 +1005,6 @@ sky.set_sun_size(<span class="tok-num">0.035</span>)
 sky.set_sun_glow(<span class="tok-num">0.70</span>)
 sky.set_star_color(Color.rgb(<span class="tok-num">0.83</span>, <span class="tok-num">0.86</span>, <span class="tok-num">0.94</span>))
 sky.set_stars(<span class="tok-num">0.55</span>, <span class="tok-num">90</span>)
-sky.set_bands(<span class="tok-num">64</span>)
 env.set_sky(sky)
 env.set_fog(Fog.view_distance(sky.fog_color(), <span class="tok-num">480.0</span>))
 scene.set_environment(env)</code></pre>
@@ -1014,7 +1012,7 @@ scene.set_environment(env)</code></pre>
 fog: <span class="tok-type">Fog</span> = Fog.linear(sky.fog_color(), <span class="tok-num">350.0</span>, <span class="tok-num">480.0</span>)
 fog.set_shape(FogShape.depth())
 env.set_fog(fog)</code></pre>
-      <div class="note">The Vulkan renderer draws the gradient, stars, and linked sun before world meshes. The sun is sky rendering, not a mesh or collider, and follows light direction changes immediately.</div>
+      <div class="note">The Vulkan renderer draws a per-pixel world-space gradient before world meshes, with subtle dithering to prevent color banding. The linked sun and stars stay fixed to world directions instead of the screen.</div>
     </section>
     <section id="vec3">
       <h2>Vec3</h2>

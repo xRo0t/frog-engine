@@ -54,9 +54,9 @@ function emitShader(prefix, getterName, compiled) {
   return [...chunks, init.join("\n"), getter.join("\n")].join("\n\n");
 }
 
-const [vertexPath, fragmentPath, shadowVertexPath, outputPathArg] = process.argv.slice(2);
-if (!vertexPath || !fragmentPath || !shadowVertexPath) {
-  fail("Usage: node tools/embed_spirv.mjs <vertex.spv> <fragment.spv> <shadow-vertex.spv> [gpu_shaders.dlt]");
+const [vertexPath, fragmentPath, shadowVertexPath, skyVertexPath, skyFragmentPath, outputPathArg] = process.argv.slice(2);
+if (!vertexPath || !fragmentPath || !shadowVertexPath || !skyVertexPath || !skyFragmentPath) {
+  fail("Usage: node tools/embed_spirv.mjs <vertex.spv> <fragment.spv> <shadow-vertex.spv> <sky-vertex.spv> <sky-fragment.spv> [gpu_shaders.dlt]");
 }
 
 const outputPath = outputPathArg ?? path.join("render", "gpu_shaders.dlt");
@@ -72,9 +72,11 @@ if (markerIndex < 0) {
 const vertex = readWords(vertexPath);
 const fragment = readWords(fragmentPath);
 const shadowVertex = readWords(shadowVertexPath);
+const skyVertex = readWords(skyVertexPath);
+const skyFragment = readWords(skyFragmentPath);
 const generated = [
   GENERATED_MARKER,
-  "# Generated from render/shaders/textured.vert and textured.frag.",
+  "# Generated from the GLSL files in render/shaders.",
   "# Run glslangValidator, then tools/embed_spirv.mjs to regenerate.",
   "",
   emitShader("tex_vert", "get_textured_vert_shader", vertex),
@@ -83,9 +85,13 @@ const generated = [
   "",
   emitShader("shadow_vert", "get_shadow_vert_shader", shadowVertex),
   "",
+  emitShader("sky_vert", "get_sky_vert_shader", skyVertex),
+  "",
+  emitShader("sky_frag", "get_sky_frag_shader", skyFragment),
+  "",
   "# END GENERATED TEXTURED SHADERS",
   "",
 ].join("\n");
 
 fs.writeFileSync(outputPath, current.slice(0, markerIndex) + generated, "utf8");
-console.log(`Embedded ${vertex.byteLength}-byte vertex, ${fragment.byteLength}-byte fragment, and ${shadowVertex.byteLength}-byte shadow vertex shaders.`);
+console.log(`Embedded ${vertex.byteLength}-byte vertex, ${fragment.byteLength}-byte fragment, ${shadowVertex.byteLength}-byte shadow vertex, ${skyVertex.byteLength}-byte sky vertex, and ${skyFragment.byteLength}-byte sky fragment shaders.`);

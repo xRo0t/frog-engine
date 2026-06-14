@@ -798,6 +798,7 @@ attach RenderPass:
         if self.desc_set_layout != 0:
             vkDestroyDescriptorSetLayout(device, self.desc_set_layout, 0)
         self.shadow.cleanup(device)
+        frog_sky_pass_cleanup(device)
         if self.vert_shader_module != 0:
             vkDestroyShaderModule(device, self.vert_shader_module, 0)
         if self.frag_shader_module != 0:

@@ -51,6 +51,8 @@ attach EngineRuntime:
         vert_shader: EmbeddedShader = get_textured_vert_shader()
         frag_shader: EmbeddedShader = get_textured_frag_shader()
         shadow_vert_shader: EmbeddedShader = get_shadow_vert_shader()
+        sky_vert_shader: EmbeddedShader = get_sky_vert_shader()
+        sky_frag_shader: EmbeddedShader = get_sky_frag_shader()
         render_pass: RenderPass = RenderPass()
         if render_pass.init(ctx.vk_device, ctx.vk_physical_device, swapchain.format, swapchain.image_count, swapchain.image_views, swapchain.depth_view, width, height, ctx.graphics_family, vert_shader.data, vert_shader.size, frag_shader.data, frag_shader.size, shadow_vert_shader.data, shadow_vert_shader.size) == 0:
             print("GPU render pass init failed")
@@ -58,6 +60,18 @@ attach EngineRuntime:
             ctx.cleanup()
             runtime.app.shutdown()
             return runtime
+        if frog_sky_pass_init(ctx.vk_device, render_pass.vk_render_pass, sky_vert_shader.data, sky_vert_shader.size, sky_frag_shader.data, sky_frag_shader.size) == 0:
+            print("GPU sky pass init failed")
+            render_pass.cleanup(ctx.vk_device)
+            swapchain.cleanup(ctx.vk_instance, ctx.vk_device)
+            ctx.cleanup()
+            runtime.app.shutdown()
+            return runtime
+        vert_shader.release()
+        frag_shader.release()
+        shadow_vert_shader.release()
+        sky_vert_shader.release()
+        sky_frag_shader.release()
         runtime.render_pass = render_pass
 
         renderer: Renderer = Renderer.create()
@@ -219,12 +233,25 @@ attach EngineRuntime:
         vert_shader: EmbeddedShader = get_textured_vert_shader()
         frag_shader: EmbeddedShader = get_textured_frag_shader()
         shadow_vert_shader: EmbeddedShader = get_shadow_vert_shader()
+        sky_vert_shader: EmbeddedShader = get_sky_vert_shader()
+        sky_frag_shader: EmbeddedShader = get_sky_frag_shader()
         render_pass: RenderPass = RenderPass()
         if render_pass.init(self.ctx.vk_device, self.ctx.vk_physical_device, swapchain.format, swapchain.image_count, swapchain.image_views, swapchain.depth_view, new_width, new_height, self.ctx.graphics_family, vert_shader.data, vert_shader.size, frag_shader.data, frag_shader.size, shadow_vert_shader.data, shadow_vert_shader.size) == 0:
             print("GPU render pass resize failed")
             swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
             self.ready_flag = 0
             return 0
+        if frog_sky_pass_init(self.ctx.vk_device, render_pass.vk_render_pass, sky_vert_shader.data, sky_vert_shader.size, sky_frag_shader.data, sky_frag_shader.size) == 0:
+            print("GPU sky pass resize failed")
+            render_pass.cleanup(self.ctx.vk_device)
+            swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
+            self.ready_flag = 0
+            return 0
+        vert_shader.release()
+        frag_shader.release()
+        shadow_vert_shader.release()
+        sky_vert_shader.release()
+        sky_frag_shader.release()
         self.render_pass = render_pass
         if self.renderer.rebuild_texture_descriptors(self.render_pass) == 0:
             print("GPU texture descriptor resize failed")

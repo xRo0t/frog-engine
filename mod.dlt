@@ -46,6 +46,7 @@ load frog/render/platform/{platform}/gpu_vulkan_context
 load frog/render/gpu_swapchain
 load frog/render/gpu_texture
 load frog/render/gpu_shadow
+load frog/render/gpu_sky
 load frog/render/gpu_render_pass
 load frog/render/gpu_renderer_core
 load frog/render/gpu_mesh
