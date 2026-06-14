@@ -159,6 +159,37 @@ attach Mat4:
         m.m14 = (znear * zfar) / (znear - zfar)
         return m
 
+    # Orthographic projection using Vulkan depth 0..1 and the same flipped Y
+    # convention as perspective().
+    static fun orthographic(left: f32, right: f32, bottom: f32, top: f32, znear: f32, zfar: f32) -> Mat4:
+        width: f32 = right - left
+        height: f32 = top - bottom
+        depth: f32 = znear - zfar
+        width_abs: f32 = width
+        if width_abs < 0.0:
+            width_abs = 0.0 - width_abs
+        height_abs: f32 = height
+        if height_abs < 0.0:
+            height_abs = 0.0 - height_abs
+        depth_abs: f32 = depth
+        if depth_abs < 0.0:
+            depth_abs = 0.0 - depth_abs
+        if width_abs < 0.0001:
+            width = 0.0001
+        if height_abs < 0.0001:
+            height = 0.0001
+        if depth_abs < 0.0001:
+            depth = 0.0001
+        m: Mat4 = Mat4.zero()
+        m.m0 = 2.0 / width
+        m.m5 = 0.0 - (2.0 / height)
+        m.m10 = 1.0 / depth
+        m.m12 = 0.0 - ((right + left) / width)
+        m.m13 = (top + bottom) / height
+        m.m14 = znear / depth
+        m.m15 = 1.0
+        return m
+
     # Look-at view matrix. Camera at eye, looking at target, world up.
     static fun look_at(ex: f32, ey: f32, ez: f32, tx: f32, ty: f32, tz: f32, ux: f32, uy: f32, uz: f32) -> Mat4:
         # z = normalize(eye - target)

@@ -54,9 +54,9 @@ function emitShader(prefix, getterName, compiled) {
   return [...chunks, init.join("\n"), getter.join("\n")].join("\n\n");
 }
 
-const [vertexPath, fragmentPath, outputPathArg] = process.argv.slice(2);
-if (!vertexPath || !fragmentPath) {
-  fail("Usage: node tools/embed_spirv.mjs <vertex.spv> <fragment.spv> [gpu_shaders.dlt]");
+const [vertexPath, fragmentPath, shadowVertexPath, outputPathArg] = process.argv.slice(2);
+if (!vertexPath || !fragmentPath || !shadowVertexPath) {
+  fail("Usage: node tools/embed_spirv.mjs <vertex.spv> <fragment.spv> <shadow-vertex.spv> [gpu_shaders.dlt]");
 }
 
 const outputPath = outputPathArg ?? path.join("render", "gpu_shaders.dlt");
@@ -71,6 +71,7 @@ if (markerIndex < 0) {
 
 const vertex = readWords(vertexPath);
 const fragment = readWords(fragmentPath);
+const shadowVertex = readWords(shadowVertexPath);
 const generated = [
   GENERATED_MARKER,
   "# Generated from render/shaders/textured.vert and textured.frag.",
@@ -80,9 +81,11 @@ const generated = [
   "",
   emitShader("tex_frag", "get_textured_frag_shader", fragment),
   "",
+  emitShader("shadow_vert", "get_shadow_vert_shader", shadowVertex),
+  "",
   "# END GENERATED TEXTURED SHADERS",
   "",
 ].join("\n");
 
 fs.writeFileSync(outputPath, current.slice(0, markerIndex) + generated, "utf8");
-console.log(`Embedded ${vertex.byteLength}-byte vertex and ${fragment.byteLength}-byte fragment shaders.`);
+console.log(`Embedded ${vertex.byteLength}-byte vertex, ${fragment.byteLength}-byte fragment, and ${shadowVertex.byteLength}-byte shadow vertex shaders.`);

@@ -255,6 +255,9 @@ attach Renderer:
     fun bind_material(self, mesh_id: i32, material: Material3D):
         self.core.bind_material(mesh_id, material)
 
+    fun set_shadow_flags(self, mesh_id: i32, cast_shadows: i32, receive_shadows: i32):
+        self.core.set_shadow_flags(mesh_id, cast_shadows, receive_shadows)
+
     fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         self.core.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
 
@@ -272,6 +275,9 @@ attach Renderer:
 
     fun set_directional_light(self, light_ptr: i64):
         self.core.set_directional_light(light_ptr)
+
+    fun set_shadow_camera(self, x: f32, y: f32, z: f32, pitch: f32, yaw: f32):
+        self.core.set_shadow_camera(x, y, z, pitch, yaw)
 
     fun render_camera3d_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32):
         self.core.render_camera3d_frame(render_pass, swapchain, ctx, camera, width, height)
@@ -383,6 +389,7 @@ attach GpuRendererCore:
         proj: i64 = self.scratch_camera_proj
         gpu_camera_view_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y, view)
         gpu_camera_proj_into(camera.fov, (width as f32) / (height as f32), proj)
+        self.set_shadow_camera(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y)
         self.render_frame_with_environment(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height, env)
 
     fun render_camera3d_frame_scaled(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32, render_width: i32, render_height: i32):
@@ -393,4 +400,5 @@ attach GpuRendererCore:
         proj: i64 = self.scratch_camera_proj
         gpu_camera_view_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y, view)
         gpu_camera_proj_into(camera.fov, (render_width as f32) / (render_height as f32), proj)
+        self.set_shadow_camera(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y)
         self.render_frame_scaled_with_environment(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height, render_width, render_height, env)

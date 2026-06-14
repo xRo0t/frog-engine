@@ -34,6 +34,11 @@ struct Sky:
     star_strength: f32 = 0.0
     star_count: i32 = 0
     band_count: i32 = 0
+    sun_light_ptr: i64 = 0
+    sun_color: Color = Color()
+    sun_size: f32 = 0.035
+    sun_glow: f32 = 0.65
+    sun_enabled: i32 = 0
 
 struct Environment:
     clear_color: Color = Color()
@@ -115,6 +120,11 @@ attach Sky:
         sky.star_strength = 0.0
         sky.star_count = 0
         sky.band_count = 0
+        sky.sun_light_ptr = 0
+        sky.sun_color = Color.rgb(1.0, 0.86, 0.62)
+        sky.sun_size = 0.035
+        sky.sun_glow = 0.65
+        sky.sun_enabled = 0
         return sky
 
     static fun gradient(zenith: Color, horizon: Color, lower: Color) -> Sky:
@@ -170,6 +180,30 @@ attach Sky:
             self.band_count = 4
         if self.band_count > 96:
             self.band_count = 96
+        return self
+
+    fun set_sun(self, light: DirectionalLight3D) -> Sky:
+        self.sun_light_ptr = light as i64
+        self.sun_enabled = 1
+        if self.sun_light_ptr == 0:
+            self.sun_enabled = 0
+        return self
+
+    fun clear_sun(self) -> Sky:
+        self.sun_light_ptr = 0
+        self.sun_enabled = 0
+        return self
+
+    fun set_sun_color(self, color: Color) -> Sky:
+        self.sun_color = color
+        return self
+
+    fun set_sun_size(self, value: f32) -> Sky:
+        self.sun_size = clamp(value, 0.005, 0.20)
+        return self
+
+    fun set_sun_glow(self, value: f32) -> Sky:
+        self.sun_glow = clamp(value, 0.0, 1.0)
         return self
 
     fun fog_color(self) -> Color:

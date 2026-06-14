@@ -14,6 +14,7 @@ struct RenderPass:
     framebuffer_count:    i32 = 0
     vert_shader_module:   i64 = 0
     frag_shader_module:   i64 = 0
+    shadow:               ShadowPass = ShadowPass()
     # Texture descriptor objects (combined image sampler, fragment stage)
     desc_set_layout:      i64 = 0
     desc_pool:            i64 = 0
@@ -39,7 +40,7 @@ struct RenderPass:
 
 attach RenderPass:
 
-    fun init(self, device: i64, swapchain_format: i32, sc_image_count: i32, sc_image_views: i64, depth_view: i64, width: i32, height: i32, gfx_family: i32, vert_data: i64, vert_size: i64, frag_data: i64, frag_size: i64) -> i32:
+    fun init(self, device: i64, phys_device: i64, swapchain_format: i32, sc_image_count: i32, sc_image_views: i64, depth_view: i64, width: i32, height: i32, gfx_family: i32, vert_data: i64, vert_size: i64, frag_data: i64, frag_size: i64, shadow_vert_data: i64, shadow_vert_size: i64) -> i32:
         # 1. Create render pass — color + depth attachments
         # Two attachment descriptions: [0]=color, [1]=depth
         att_descs: i64 = Memory.malloc_zeroed(72)
@@ -142,16 +143,26 @@ attach RenderPass:
         if self.frag_shader_module == 0:
             return 0
 
-        # 2b. Descriptor set layout: binding 0 = combined image sampler, fragment stage.
+        shadow_pass: ShadowPass = ShadowPass()
+        if shadow_pass.init(device, phys_device, shadow_vert_data, shadow_vert_size) == 0:
+            return 0
+        self.shadow = shadow_pass
+
+        # 2b. Descriptor set layout:
+        # binding 0 = albedo, binding 1 = comparison shadow map.
         # VkDescriptorSetLayoutBinding (24 bytes): binding(0), descriptorType(4),
         # descriptorCount(8), stageFlags(12), pImmutableSamplers(16).
-        dsl_bind: i64 = Memory.malloc_zeroed(24)
+        dsl_bind: i64 = Memory.malloc_zeroed(48)
         if dsl_bind == 0:
             return 0
         Memory.write_i32(dsl_bind, 0)        # binding 0
         Memory.write_i32(dsl_bind + 4, 1)    # COMBINED_IMAGE_SAMPLER
         Memory.write_i32(dsl_bind + 8, 1)    # descriptorCount
         Memory.write_i32(dsl_bind + 12, 16)  # STAGE_FRAGMENT
+        Memory.write_i32(dsl_bind + 24, 1)   # binding 1
+        Memory.write_i32(dsl_bind + 28, 1)   # COMBINED_IMAGE_SAMPLER
+        Memory.write_i32(dsl_bind + 32, 1)
+        Memory.write_i32(dsl_bind + 36, 16)
         # VkDescriptorSetLayoutCreateInfo (sType = 32):
         #  0 sType, 8 pNext, 16 flags, 20 bindingCount, 24 pBindings
         dsl_ci: i64 = Memory.malloc_zeroed(32)
@@ -159,7 +170,7 @@ attach RenderPass:
             Memory.free(dsl_bind)
             return 0
         Memory.write_i32(dsl_ci, 32)
-        Memory.write_i32(dsl_ci + 20, 1)
+        Memory.write_i32(dsl_ci + 20, 2)
         Memory.write_ptr(dsl_ci + 24, dsl_bind)
         dsl_ptr: i64 = Memory.malloc_zeroed(8)
         dsl_r: i32 = vkCreateDescriptorSetLayout(device, dsl_ci, 0, dsl_ptr)
@@ -176,7 +187,7 @@ attach RenderPass:
         if dps == 0:
             return 0
         Memory.write_i32(dps, 1)             # COMBINED_IMAGE_SAMPLER
-        Memory.write_i32(dps + 4, 1024)      # descriptorCount
+        Memory.write_i32(dps + 4, 4096)      # two samplers per set
         # VkDescriptorPoolCreateInfo (sType = 33):
         #  0 sType, 8 pNext, 16 flags, 20 maxSets, 24 poolSizeCount, 32 pPoolSizes
         dp_ci: i64 = Memory.malloc_zeroed(40)
@@ -184,7 +195,7 @@ attach RenderPass:
             Memory.free(dps)
             return 0
         Memory.write_i32(dp_ci, 33)
-        Memory.write_i32(dp_ci + 20, 1024)   # maxSets
+        Memory.write_i32(dp_ci + 20, 2048)   # maxSets
         Memory.write_i32(dp_ci + 24, 1)      # poolSizeCount
         Memory.write_ptr(dp_ci + 32, dps)
         dp_ptr: i64 = Memory.malloc_zeroed(8)
@@ -364,8 +375,7 @@ attach RenderPass:
 
         return 1
 
-    # Allocate a descriptor set for a texture and write its image view + sampler
-    # into binding 0. Returns the VkDescriptorSet (0 on failure).
+    # Allocate a descriptor set and bind albedo + the shared shadow map.
     fun make_texture_descriptor(self, device: i64, view: i64, sampler: i64) -> i64:
         if self.desc_pool == 0:
             return 0
@@ -408,7 +418,36 @@ attach RenderPass:
         vkUpdateDescriptorSets(device, 1, wds, 0, 0)
         Memory.free(wds)
         Memory.free(img_info)
+        self.update_shadow_descriptor(device, dset)
         return dset
+
+    fun update_shadow_descriptor(self, device: i64, dset: i64):
+        if dset == 0:
+            return
+        if self.shadow.view == 0:
+            return
+        if self.shadow.sampler == 0:
+            return
+        img_info: i64 = Memory.malloc_zeroed(24)
+        wds: i64 = Memory.malloc_zeroed(64)
+        if img_info == 0 or wds == 0:
+            if img_info != 0:
+                Memory.free(img_info)
+            if wds != 0:
+                Memory.free(wds)
+            return
+        Memory.write_ptr(img_info, self.shadow.sampler)
+        Memory.write_ptr(img_info + 8, self.shadow.view)
+        Memory.write_i32(img_info + 16, 5)
+        Memory.write_i32(wds, 35)
+        Memory.write_ptr(wds + 16, dset)
+        Memory.write_i32(wds + 24, 1)
+        Memory.write_i32(wds + 32, 1)
+        Memory.write_i32(wds + 36, 1)
+        Memory.write_ptr(wds + 40, img_info)
+        vkUpdateDescriptorSets(device, 1, wds, 0, 0)
+        Memory.free(wds)
+        Memory.free(img_info)
 
     fun _create_shader_module(self, device: i64, code: i64, size: i64) -> i64:
         sm_ci: i64 = Memory.malloc_zeroed(40)
@@ -459,7 +498,8 @@ attach RenderPass:
         # Vertex input:
         # binding 0: pos(3f) + color(3f) + uv(2f), per vertex, stride 32
         # binding 1: model matrix + material vec4, per instance, stride 80
-        bind: i64 = Memory.malloc_zeroed(24)
+        # binding 2: global light matrix + shadow params, stride 0
+        bind: i64 = Memory.malloc_zeroed(36)
         if bind == 0:
             Memory.free(stages)
             return 0
@@ -469,8 +509,11 @@ attach RenderPass:
         Memory.write_i32(bind + 12, 1)
         Memory.write_i32(bind + 16, 80)
         Memory.write_i32(bind + 20, 1)
+        Memory.write_i32(bind + 24, 2)
+        Memory.write_i32(bind + 28, 0)
+        Memory.write_i32(bind + 32, 1)
 
-        attrs: i64 = Memory.malloc_zeroed(128)
+        attrs: i64 = Memory.malloc_zeroed(208)
         if attrs == 0:
             Memory.free(stages)
             Memory.free(bind)
@@ -512,6 +555,15 @@ attach RenderPass:
         Memory.write_i32(attrs + 116, 1)
         Memory.write_i32(attrs + 120, 109)
         Memory.write_i32(attrs + 124, 64)
+        # Light VP columns (loc=8..11) and shadow params (loc=12), binding 2.
+        sai: i32 = 0
+        while sai < 5:
+            soff: i64 = 128 + (sai as i64) * 16
+            Memory.write_i32(attrs + soff, 8 + sai)
+            Memory.write_i32(attrs + soff + 4, 2)
+            Memory.write_i32(attrs + soff + 8, 109)
+            Memory.write_i32(attrs + soff + 12, sai * 16)
+            sai = sai + 1
 
         vi_ci: i64 = Memory.malloc_zeroed(48)
         if vi_ci == 0:
@@ -522,9 +574,9 @@ attach RenderPass:
         Memory.write_i32(vi_ci, 19)
         Memory.write_ptr(vi_ci + 8, 0)
         Memory.write_i32(vi_ci + 16, 0)
-        Memory.write_i32(vi_ci + 20, 2)
+        Memory.write_i32(vi_ci + 20, 3)
         Memory.write_ptr(vi_ci + 24, bind)
-        Memory.write_i32(vi_ci + 32, 8)
+        Memory.write_i32(vi_ci + 32, 13)
         Memory.write_ptr(vi_ci + 40, attrs)
 
         # Input assembly (32 bytes)
@@ -745,6 +797,7 @@ attach RenderPass:
             vkDestroyDescriptorPool(device, self.desc_pool, 0)
         if self.desc_set_layout != 0:
             vkDestroyDescriptorSetLayout(device, self.desc_set_layout, 0)
+        self.shadow.cleanup(device)
         if self.vert_shader_module != 0:
             vkDestroyShaderModule(device, self.vert_shader_module, 0)
         if self.frag_shader_module != 0:

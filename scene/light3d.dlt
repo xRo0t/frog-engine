@@ -8,8 +8,8 @@ struct ShadowSettings:
     map_size: i32 = 1024
     cascades: i32 = 1
     distance: f32 = 120.0
-    bias: f32 = 0.0015
-    normal_bias: f32 = 0.02
+    bias: f32 = 0.04
+    normal_bias: f32 = 0.10
     softness: f32 = 0.5
 
 @heap struct DirectionalLight3D extends Node3D:
@@ -27,16 +27,16 @@ attach ShadowSettings:
         return ShadowSettings(enabled=0, map_size=0, cascades=0, distance=0.0, bias=0.0, normal_bias=0.0, softness=0.0)
 
     static fun low() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=1024, cascades=1, distance=80.0, bias=0.0025, normal_bias=0.03, softness=0.25)
+        return ShadowSettings(enabled=1, map_size=1024, cascades=1, distance=80.0, bias=0.08, normal_bias=0.20, softness=0.25)
 
     static fun medium() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=2048, cascades=2, distance=140.0, bias=0.0020, normal_bias=0.025, softness=0.50)
+        return ShadowSettings(enabled=1, map_size=2048, cascades=2, distance=140.0, bias=0.06, normal_bias=0.15, softness=0.50)
 
     static fun high() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=4096, cascades=3, distance=220.0, bias=0.0015, normal_bias=0.020, softness=0.75)
+        return ShadowSettings(enabled=1, map_size=4096, cascades=3, distance=220.0, bias=0.04, normal_bias=0.10, softness=0.75)
 
     static fun ultra() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=8192, cascades=4, distance=320.0, bias=0.0010, normal_bias=0.015, softness=1.00)
+        return ShadowSettings(enabled=1, map_size=8192, cascades=4, distance=320.0, bias=0.03, normal_bias=0.08, softness=1.00)
 
     fun set_map_size(self, size: i32) -> ShadowSettings:
         if size <= 0:
@@ -114,6 +114,8 @@ fun directional_light3d_create(name: str) -> DirectionalLight3D:
     node.velocity_z = 0.0
     node.mass = 1.0
     node.texture_id = -1
+    node.cast_shadows = 1
+    node.receive_shadows = 1
     node.color = Color.rgb(1.0, 0.95, 0.84)
     node.intensity = 1.0
     node.ambient = 0.35

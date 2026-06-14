@@ -711,6 +711,9 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
         <tr><td><code>set_model(model)</code></td><td>Binds a loaded <code>Model3D</code> (uploads to GPU if needed, sets <code>mesh_id</code>).</td></tr>
         <tr><td><code>set_texture(texture)</code></td><td>Dresses the node with a loaded <code>Texture2D</code>. Safe before or after <code>set_model</code>.</td></tr>
         <tr><td><code>set_visible(on)</code></td><td>Shows (1) or hides (0) this node's mesh instance.</td></tr>
+        <tr><td><code>set_cast_shadows(enabled)</code></td><td>Controls whether this object's mesh is included in shadow rendering. Enabled by default.</td></tr>
+        <tr><td><code>set_receive_shadows(enabled)</code></td><td>Controls whether this object's surface receives shadows. Enabled by default.</td></tr>
+        <tr><td><code>casts_shadows()</code> / <code>receives_shadows()</code></td><td>Returns the stored shadow state.</td></tr>
       </table>
 
       <h4>Tree &amp; lifetime</h4>
@@ -750,14 +753,14 @@ cube.set_material(mat)</code></pre>
         <tr><td><code>set_emissive(color)</code> / <code>set_emissive(color, strength)</code></td><td>Sets the material glow color and optional strength.</td></tr>
         <tr><td><code>set_emissive_strength(value)</code></td><td>Sets emissive strength, clamped at zero.</td></tr>
         <tr><td><code>set_shader(shader)</code></td><td>Stores a custom shader descriptor for the future shader pipeline.</td></tr>
-        <tr><td><code>set_unlit(enabled)</code></td><td>Bypasses directional diffuse/specular lighting while keeping texture and emissive output.</td></tr>
+        <tr><td><code>set_unlit(enabled)</code></td><td>Bypasses directional lighting and automatically disables effective shadow receiving while keeping texture and emissive output.</td></tr>
         <tr><td><code>set_double_sided(enabled)</code></td><td>Stores the flag for later pipeline-state support.</td></tr>
       </table>
     </section>
 
     <section id="lights">
       <h2>Lights</h2>
-      <p class="lead">Scene graph sunlight. Direction, color, intensity, and ambient contribution are applied by the current Vulkan shader without adding draw calls. Shadow settings describe the next depth-map pipeline.</p>
+      <p class="lead">Scene graph sunlight. Direction, color, intensity, ambient contribution, and a directional depth-map shadow are applied by the Vulkan renderer.</p>
       <pre><code>sun: <span class="tok-type">DirectionalLight3D</span> = DirectionalLight3D.create(<span class="tok-str">"Sun"</span>)
 sun.set_direction(<span class="tok-num">-0.4</span>, <span class="tok-num">-1.0</span>, <span class="tok-num">-0.2</span>)
 sun.set_color(Color.rgb(<span class="tok-num">1.0</span>, <span class="tok-num">0.92</span>, <span class="tok-num">0.78</span>))
@@ -783,11 +786,12 @@ scene.add_child(sun)</code></pre>
       <table>
         <tr><th>Method</th><th>Description</th></tr>
         <tr><td><code>ShadowSettings.off()</code></td><td>No shadows.</td></tr>
-        <tr><td><code>low()</code> / <code>medium()</code> / <code>high()</code> / <code>ultra()</code></td><td>Preset quality levels for map size, cascades, distance, bias, and softness.</td></tr>
+        <tr><td><code>low()</code> / <code>medium()</code> / <code>high()</code> / <code>ultra()</code></td><td>Preset quality levels for map size, distance, bias, and PCF softness. Cascade counts are stored for future CSM support; the current renderer uses one directional map.</td></tr>
         <tr><td><code>set_map_size(size)</code></td><td>Sets the desired shadow map resolution.</td></tr>
         <tr><td><code>set_cascades(count)</code></td><td>Clamps cascade count to 1..4.</td></tr>
         <tr><td><code>set_distance(value)</code></td><td>Sets shadow draw distance.</td></tr>
-        <tr><td><code>set_bias(value)</code> / <code>set_normal_bias(value)</code></td><td>Stores acne-fighting depth bias values.</td></tr>
+        <tr><td><code>set_bias(value)</code></td><td>Sets the constant shadow bias in world units.</td></tr>
+        <tr><td><code>set_normal_bias(value)</code></td><td>Sets the slope-sensitive shadow bias in world units. The renderer converts both bias values to the active shadow depth range.</td></tr>
         <tr><td><code>set_softness(value)</code></td><td>Stores softness 0..1.</td></tr>
       </table>
     </section>
@@ -807,6 +811,8 @@ cube.scale(<span class="tok-num">1.5</span>, <span class="tok-num">1.5</span>, <
 cube.collision_box(<span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>)
 scene.add_child(cube)</code></pre>
 
+      <div class="note"><strong>Shadow defaults.</strong> Renderable nodes cast and receive shadows by default. Only write <code>set_cast_shadows(0)</code> or <code>set_receive_shadows(0)</code> for exceptions such as effects, sky geometry, viewmodels, or special materials. Unlit materials never receive shadows effectively.</div>
+
       <table>
         <tr><th>Method</th><th>Description</th></tr>
         <tr><td><code>Mesh3D.create()</code></td><td>Creates an unnamed renderable node using the default name <code>Mesh3D</code>.</td></tr>
@@ -817,6 +823,8 @@ scene.add_child(cube)</code></pre>
         <tr><td><code>set_color(color)</code></td><td>Convenience shortcut for simple colored primitives.</td></tr>
         <tr><td><code>set_texture(texture)</code></td><td>Convenience shortcut that edits this mesh's material texture.</td></tr>
         <tr><td><code>set_alpha(alpha)</code></td><td>Convenience shortcut that edits this mesh's material alpha.</td></tr>
+        <tr><td><code>set_cast_shadows(enabled)</code></td><td>Overrides the default cast state for this mesh.</td></tr>
+        <tr><td><code>set_receive_shadows(enabled)</code></td><td>Overrides the default receive state for this mesh. An unlit material still forces effective receiving off.</td></tr>
         <tr><td><code>position(x,y,z)</code> / <code>rotation(x,y,z)</code> / <code>scale(x,y,z)</code></td><td>Updates the node transform and renderer transform together.</td></tr>
         <tr><td><code>collision_box(x,y,z)</code></td><td>Enables box collision in local units.</td></tr>
       </table>
@@ -960,8 +968,13 @@ camera.add_child(raycast)
         <tr><td><code>set_zenith(color)</code></td><td>Sets the top sky color.</td></tr>
         <tr><td><code>set_horizon(color)</code></td><td>Sets the middle horizon color.</td></tr>
         <tr><td><code>set_lower(color)</code></td><td>Sets the lower sky color.</td></tr>
-        <tr><td><code>set_stars(strength, count)</code></td><td>Configures subtle sky stars.</td></tr>
+        <tr><td><code>set_stars(strength, count)</code></td><td>Configures subtle stars fixed to world-space sky directions; camera rotation reveals different stars without screen-space sticking.</td></tr>
         <tr><td><code>set_star_color(color)</code></td><td>Sets the star tint.</td></tr>
+        <tr><td><code>set_sun(light)</code></td><td>Links the visible sky sun to a <code>DirectionalLight3D</code>. Its position follows the opposite of the light direction.</td></tr>
+        <tr><td><code>clear_sun()</code></td><td>Disables the visible sun without changing scene lighting.</td></tr>
+        <tr><td><code>set_sun_color(color)</code></td><td>Sets the sun disc and glow tint.</td></tr>
+        <tr><td><code>set_sun_size(value)</code></td><td>Sets disc radius as a fraction of the shorter viewport side, clamped to 0.005..0.20.</td></tr>
+        <tr><td><code>set_sun_glow(value)</code></td><td>Sets the low-cost layered glow strength from 0..1.</td></tr>
         <tr><td><code>set_bands(count)</code></td><td>Controls gradient band smoothness.</td></tr>
       </table>
 
@@ -982,6 +995,15 @@ sky: <span class="tok-type">Sky</span> = Sky.create()
 sky.set_zenith(Color.rgb(<span class="tok-num">0.30</span>, <span class="tok-num">0.37</span>, <span class="tok-num">0.55</span>))
 sky.set_horizon(Color.rgb(<span class="tok-num">0.62</span>, <span class="tok-num">0.42</span>, <span class="tok-num">0.47</span>))
 sky.set_lower(Color.rgb(<span class="tok-num">0.86</span>, <span class="tok-num">0.39</span>, <span class="tok-num">0.23</span>))
+sun: <span class="tok-type">DirectionalLight3D</span> = DirectionalLight3D.create(<span class="tok-str">"Sun"</span>)
+sun.set_direction(<span class="tok-num">-0.55</span>, <span class="tok-num">-1.0</span>, <span class="tok-num">-0.35</span>)
+sun.set_shadows(ShadowSettings.high())
+scene.add_child(sun)
+
+sky.set_sun(sun)
+sky.set_sun_color(Color.rgb(<span class="tok-num">1.0</span>, <span class="tok-num">0.84</span>, <span class="tok-num">0.58</span>))
+sky.set_sun_size(<span class="tok-num">0.035</span>)
+sky.set_sun_glow(<span class="tok-num">0.70</span>)
 sky.set_star_color(Color.rgb(<span class="tok-num">0.83</span>, <span class="tok-num">0.86</span>, <span class="tok-num">0.94</span>))
 sky.set_stars(<span class="tok-num">0.55</span>, <span class="tok-num">90</span>)
 sky.set_bands(<span class="tok-num">64</span>)
@@ -992,7 +1014,7 @@ scene.set_environment(env)</code></pre>
 fog: <span class="tok-type">Fog</span> = Fog.linear(sky.fog_color(), <span class="tok-num">350.0</span>, <span class="tok-num">480.0</span>)
 fog.set_shape(FogShape.depth())
 env.set_fog(fog)</code></pre>
-      <div class="note">The current Vulkan renderer draws the sky before world meshes using the active camera orientation, then applies fog to world geometry.</div>
+      <div class="note">The Vulkan renderer draws the gradient, stars, and linked sun before world meshes. The sun is sky rendering, not a mesh or collider, and follows light direction changes immediately.</div>
     </section>
     <section id="vec3">
       <h2>Vec3</h2>
@@ -1117,7 +1139,7 @@ debug_cube.set_color(Color.rgb(<span class="tok-num">0.95</span>, <span class="t
         <tr><td><code>Mesh3D.set_color</code></td><td>One debug cube, simple primitive, quick test.</td><td>Fine during setup; avoid changing it every frame.</td></tr>
         <tr><td><code>Mesh3D.set_texture</code></td><td>One mesh with one texture.</td><td>Load the texture once; do not call <code>Assets.textures.load</code> inside the loop.</td></tr>
       </table>
-      <div class="note warn"><strong>Current renderer.</strong> Directional diffuse light, color, albedo, emissive, and unlit materials are active. Roughness/metallic specular lighting, normal maps, custom shaders, double-sided state, and shadow maps remain staged for the advanced PBR pipeline.</div>
+      <div class="note warn"><strong>Current renderer.</strong> Directional diffuse light, color, albedo, emissive, unlit materials, and one directional depth-map shadow with PCF filtering are active. Renderable meshes cast and receive shadows by default. Roughness/metallic specular lighting, normal maps, custom shaders, double-sided state, and cascaded shadow maps remain staged for the advanced PBR pipeline.</div>
     </section>
 
     <section id="textures">

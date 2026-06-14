@@ -1,0 +1,399 @@
+##############################
+# Frog - Directional Shadow Pass
+# Owns the depth-only Vulkan pass, pipeline, and sampled depth target.
+##############################
+
+struct ShadowPass:
+    vk_render_pass: i64 = 0
+    vk_pipeline_layout: i64 = 0
+    vk_pipeline: i64 = 0
+    vert_shader_module: i64 = 0
+    image: i64 = 0
+    memory: i64 = 0
+    view: i64 = 0
+    sampler: i64 = 0
+    framebuffer: i64 = 0
+    map_size: i32 = 0
+    initialized: i32 = 0
+
+attach ShadowPass:
+
+    fun init(self, device: i64, phys_device: i64, vert_data: i64, vert_size: i64) -> i32:
+        if self._create_render_pass(device) == 0:
+            return 0
+        self.vert_shader_module = self._create_shader_module(device, vert_data, vert_size)
+        if self.vert_shader_module == 0:
+            return 0
+        if self._create_pipeline_layout(device) == 0:
+            return 0
+        if self._create_pipeline(device) == 0:
+            return 0
+        self.sampler = self._create_sampler(device)
+        if self.sampler == 0:
+            return 0
+        if self.ensure_target(device, phys_device, 1) == 0:
+            return 0
+        self.initialized = 1
+        return 1
+
+    fun _create_shader_module(self, device: i64, code: i64, size: i64) -> i64:
+        if code == 0:
+            return 0
+        if size <= 0:
+            return 0
+        ci: i64 = Memory.malloc_zeroed(40)
+        if ci == 0:
+            return 0
+        Memory.write_i32(ci, 12)
+        Memory.write_i64(ci + 24, size)
+        Memory.write_ptr(ci + 32, code)
+        out: i64 = Memory.malloc_zeroed(8)
+        if out == 0:
+            Memory.free(ci)
+            return 0
+        result: i32 = vkCreateShaderModule(device, ci, 0, out)
+        shader_handle: i64 = Memory.read_ptr(out)
+        Memory.free(out)
+        Memory.free(ci)
+        if result != 0:
+            return 0
+        return shader_handle
+
+    fun _create_render_pass(self, device: i64) -> i32:
+        # One D32 depth attachment. It starts discarded and ends shader-readable.
+        attachment: i64 = Memory.malloc_zeroed(36)
+        depth_ref: i64 = Memory.malloc_zeroed(8)
+        subpass: i64 = Memory.malloc_zeroed(72)
+        dependencies: i64 = Memory.malloc_zeroed(56)
+        ci: i64 = Memory.malloc_zeroed(64)
+        out: i64 = Memory.malloc_zeroed(8)
+        if attachment == 0 or depth_ref == 0 or subpass == 0 or dependencies == 0 or ci == 0 or out == 0:
+            if attachment != 0:
+                Memory.free(attachment)
+            if depth_ref != 0:
+                Memory.free(depth_ref)
+            if subpass != 0:
+                Memory.free(subpass)
+            if dependencies != 0:
+                Memory.free(dependencies)
+            if ci != 0:
+                Memory.free(ci)
+            if out != 0:
+                Memory.free(out)
+            return 0
+
+        Memory.write_i32(attachment + 4, 126) # D32_SFLOAT
+        Memory.write_i32(attachment + 8, 1)   # SAMPLE_COUNT_1
+        Memory.write_i32(attachment + 12, 1)  # LOAD_OP_CLEAR
+        Memory.write_i32(attachment + 16, 0)  # STORE_OP_STORE
+        Memory.write_i32(attachment + 20, 2)  # stencil don't care
+        Memory.write_i32(attachment + 24, 2)
+        Memory.write_i32(attachment + 28, 0)  # UNDEFINED
+        Memory.write_i32(attachment + 32, 5)  # SHADER_READ_ONLY_OPTIMAL
+
+        Memory.write_i32(depth_ref, 0)
+        Memory.write_i32(depth_ref + 4, 3)     # DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+
+        Memory.write_i32(subpass + 8, 0)       # GRAPHICS
+        Memory.write_ptr(subpass + 48, depth_ref)
+
+        # External fragment sampling -> depth write.
+        Memory.write_i32(dependencies, 0 - 1)
+        Memory.write_i32(dependencies + 4, 0)
+        Memory.write_i32(dependencies + 8, 128)
+        Memory.write_i32(dependencies + 12, 768)
+        Memory.write_i32(dependencies + 16, 32)
+        Memory.write_i32(dependencies + 20, 1024)
+        Memory.write_i32(dependencies + 24, 1)
+        # Depth write -> external fragment sampling.
+        Memory.write_i32(dependencies + 28, 0)
+        Memory.write_i32(dependencies + 32, 0 - 1)
+        Memory.write_i32(dependencies + 36, 768)
+        Memory.write_i32(dependencies + 40, 128)
+        Memory.write_i32(dependencies + 44, 1024)
+        Memory.write_i32(dependencies + 48, 32)
+        Memory.write_i32(dependencies + 52, 1)
+
+        Memory.write_i32(ci, 38)
+        Memory.write_i32(ci + 20, 1)
+        Memory.write_ptr(ci + 24, attachment)
+        Memory.write_i32(ci + 32, 1)
+        Memory.write_ptr(ci + 40, subpass)
+        Memory.write_i32(ci + 48, 2)
+        Memory.write_ptr(ci + 56, dependencies)
+
+        result: i32 = vkCreateRenderPass(device, ci, 0, out)
+        self.vk_render_pass = Memory.read_ptr(out)
+        Memory.free(out)
+        Memory.free(ci)
+        Memory.free(dependencies)
+        Memory.free(subpass)
+        Memory.free(depth_ref)
+        Memory.free(attachment)
+        if result != 0:
+            return 0
+        return 1
+
+    fun _create_pipeline_layout(self, device: i64) -> i32:
+        pc_range: i64 = Memory.malloc_zeroed(12)
+        ci: i64 = Memory.malloc_zeroed(48)
+        out: i64 = Memory.malloc_zeroed(8)
+        if pc_range == 0 or ci == 0 or out == 0:
+            if pc_range != 0:
+                Memory.free(pc_range)
+            if ci != 0:
+                Memory.free(ci)
+            if out != 0:
+                Memory.free(out)
+            return 0
+        Memory.write_i32(pc_range, 1) # vertex stage
+        Memory.write_i32(pc_range + 4, 0)
+        Memory.write_i32(pc_range + 8, 64)
+        Memory.write_i32(ci, 30)
+        Memory.write_i32(ci + 32, 1)
+        Memory.write_ptr(ci + 40, pc_range)
+        result: i32 = vkCreatePipelineLayout(device, ci, 0, out)
+        self.vk_pipeline_layout = Memory.read_ptr(out)
+        Memory.free(out)
+        Memory.free(ci)
+        Memory.free(pc_range)
+        if result != 0:
+            return 0
+        return 1
+
+    fun _create_pipeline(self, device: i64) -> i32:
+        entry: str = "main"
+        stage: i64 = Memory.malloc_zeroed(48)
+        bindings: i64 = Memory.malloc_zeroed(24)
+        attrs: i64 = Memory.malloc_zeroed(80)
+        vi: i64 = Memory.malloc_zeroed(48)
+        ia: i64 = Memory.malloc_zeroed(32)
+        viewport_state: i64 = Memory.malloc_zeroed(48)
+        raster: i64 = Memory.malloc_zeroed(64)
+        multisample: i64 = Memory.malloc_zeroed(48)
+        depth: i64 = Memory.malloc_zeroed(104)
+        blend: i64 = Memory.malloc_zeroed(56)
+        dynamic_values: i64 = Memory.malloc_zeroed(12)
+        dynamic_state: i64 = Memory.malloc_zeroed(32)
+        ci: i64 = Memory.malloc_zeroed(144)
+        out: i64 = Memory.malloc_zeroed(8)
+        if stage == 0 or bindings == 0 or attrs == 0 or vi == 0 or ia == 0 or viewport_state == 0 or raster == 0 or multisample == 0 or depth == 0 or blend == 0 or dynamic_values == 0 or dynamic_state == 0 or ci == 0 or out == 0:
+            return 0
+
+        Memory.write_i32(stage, 18)
+        Memory.write_i32(stage + 20, 1)
+        Memory.write_ptr(stage + 24, self.vert_shader_module)
+        Memory.write_ptr(stage + 32, entry)
+
+        Memory.write_i32(bindings, 0)
+        Memory.write_i32(bindings + 4, 32)
+        Memory.write_i32(bindings + 8, 0)
+        Memory.write_i32(bindings + 12, 1)
+        Memory.write_i32(bindings + 16, 80)
+        Memory.write_i32(bindings + 20, 1)
+
+        # Position and model matrix columns.
+        Memory.write_i32(attrs, 0)
+        Memory.write_i32(attrs + 4, 0)
+        Memory.write_i32(attrs + 8, 106)
+        Memory.write_i32(attrs + 12, 0)
+        ai: i32 = 0
+        while ai < 4:
+            off: i64 = 16 + (ai as i64) * 16
+            Memory.write_i32(attrs + off, 2 + ai)
+            Memory.write_i32(attrs + off + 4, 1)
+            Memory.write_i32(attrs + off + 8, 109)
+            Memory.write_i32(attrs + off + 12, ai * 16)
+            ai = ai + 1
+
+        Memory.write_i32(vi, 19)
+        Memory.write_i32(vi + 20, 2)
+        Memory.write_ptr(vi + 24, bindings)
+        Memory.write_i32(vi + 32, 5)
+        Memory.write_ptr(vi + 40, attrs)
+
+        Memory.write_i32(ia, 20)
+        Memory.write_i32(ia + 20, 3)
+
+        Memory.write_i32(viewport_state, 22)
+        Memory.write_i32(viewport_state + 20, 1)
+        Memory.write_i32(viewport_state + 32, 1)
+
+        Memory.write_i32(raster, 23)
+        Memory.write_i32(raster + 28, 0)
+        Memory.write_i32(raster + 32, 0)
+        Memory.write_i32(raster + 36, 0)
+        Memory.write_i32(raster + 40, 1) # depthBiasEnable
+        Memory.write_f32(raster + 44, 1.25)
+        Memory.write_f32(raster + 52, 1.75)
+        Memory.write_f32(raster + 56, 1.0)
+
+        Memory.write_i32(multisample, 24)
+        Memory.write_i32(multisample + 20, 1)
+        Memory.write_f32(multisample + 28, 1.0)
+
+        Memory.write_i32(depth, 25)
+        Memory.write_i32(depth + 20, 1)
+        Memory.write_i32(depth + 24, 1)
+        Memory.write_i32(depth + 28, 1)
+
+        Memory.write_i32(blend, 26)
+        Memory.write_i32(blend + 28, 0)
+
+        Memory.write_i32(dynamic_values, 0)     # VIEWPORT
+        Memory.write_i32(dynamic_values + 4, 1) # SCISSOR
+        Memory.write_i32(dynamic_state, 27)
+        Memory.write_i32(dynamic_state + 20, 2)
+        Memory.write_ptr(dynamic_state + 24, dynamic_values)
+
+        Memory.write_i32(ci, 28)
+        Memory.write_i32(ci + 20, 1)
+        Memory.write_ptr(ci + 24, stage)
+        Memory.write_ptr(ci + 32, vi)
+        Memory.write_ptr(ci + 40, ia)
+        Memory.write_ptr(ci + 56, viewport_state)
+        Memory.write_ptr(ci + 64, raster)
+        Memory.write_ptr(ci + 72, multisample)
+        Memory.write_ptr(ci + 80, depth)
+        Memory.write_ptr(ci + 88, blend)
+        Memory.write_ptr(ci + 96, dynamic_state)
+        Memory.write_ptr(ci + 104, self.vk_pipeline_layout)
+        Memory.write_ptr(ci + 112, self.vk_render_pass)
+        Memory.write_i32(ci + 136, 0 - 1)
+
+        result: i32 = vkCreateGraphicsPipelines(device, 0, 1, ci, 0, out)
+        self.vk_pipeline = Memory.read_ptr(out)
+        Memory.free(out)
+        Memory.free(ci)
+        Memory.free(dynamic_state)
+        Memory.free(dynamic_values)
+        Memory.free(blend)
+        Memory.free(depth)
+        Memory.free(multisample)
+        Memory.free(raster)
+        Memory.free(viewport_state)
+        Memory.free(ia)
+        Memory.free(vi)
+        Memory.free(attrs)
+        Memory.free(bindings)
+        Memory.free(stage)
+        if result != 0:
+            return 0
+        return 1
+
+    fun _create_sampler(self, device: i64) -> i64:
+        ci: i64 = Memory.malloc_zeroed(80)
+        out: i64 = Memory.malloc_zeroed(8)
+        if ci == 0 or out == 0:
+            if ci != 0:
+                Memory.free(ci)
+            if out != 0:
+                Memory.free(out)
+            return 0
+        Memory.write_i32(ci, 31)
+        Memory.write_i32(ci + 20, 1) # linear
+        Memory.write_i32(ci + 24, 1)
+        Memory.write_i32(ci + 28, 1)
+        Memory.write_i32(ci + 32, 3) # clamp to border
+        Memory.write_i32(ci + 36, 3)
+        Memory.write_i32(ci + 40, 3)
+        Memory.write_i32(ci + 56, 1) # compare enabled
+        Memory.write_i32(ci + 60, 3) # LESS_OR_EQUAL
+        Memory.write_f32(ci + 64, 0.0)
+        Memory.write_f32(ci + 68, 0.0)
+        Memory.write_i32(ci + 72, 4) # FLOAT_OPAQUE_WHITE
+        result: i32 = vkCreateSampler(device, ci, 0, out)
+        sampler_handle: i64 = Memory.read_ptr(out)
+        Memory.free(out)
+        Memory.free(ci)
+        if result != 0:
+            return 0
+        return sampler_handle
+
+    fun ensure_target(self, device: i64, phys_device: i64, requested_size: i32) -> i32:
+        size: i32 = requested_size
+        if size < 1:
+            size = 1
+        if size > 8192:
+            size = 8192
+        if self.framebuffer != 0:
+            if self.map_size == size:
+                return 1
+
+        if self.framebuffer != 0:
+            vkDestroyFramebuffer(device, self.framebuffer, 0)
+            self.framebuffer = 0
+        if self.view != 0:
+            vkDestroyImageView(device, self.view, 0)
+            self.view = 0
+        if self.image != 0:
+            vkDestroyImage(device, self.image, 0)
+            self.image = 0
+        if self.memory != 0:
+            vkFreeMemory(device, self.memory, 0)
+            self.memory = 0
+
+        image_out: i64 = Memory.malloc_zeroed(8)
+        memory_out: i64 = Memory.malloc_zeroed(8)
+        if image_out == 0 or memory_out == 0:
+            if image_out != 0:
+                Memory.free(image_out)
+            if memory_out != 0:
+                Memory.free(memory_out)
+            return 0
+        if gpu_make_image_usage(device, phys_device, size, size, 126, 36, image_out, memory_out) == 0:
+            Memory.free(image_out)
+            Memory.free(memory_out)
+            return 0
+        self.image = Memory.read_ptr(image_out)
+        self.memory = Memory.read_ptr(memory_out)
+        Memory.free(image_out)
+        Memory.free(memory_out)
+
+        self.view = gpu_make_image_view_aspect(device, self.image, 126, 2)
+        if self.view == 0:
+            return 0
+
+        attachments: i64 = Memory.malloc_zeroed(8)
+        ci: i64 = Memory.malloc_zeroed(64)
+        out: i64 = Memory.malloc_zeroed(8)
+        if attachments == 0 or ci == 0 or out == 0:
+            return 0
+        Memory.write_ptr(attachments, self.view)
+        Memory.write_i32(ci, 37)
+        Memory.write_ptr(ci + 24, self.vk_render_pass)
+        Memory.write_i32(ci + 32, 1)
+        Memory.write_ptr(ci + 40, attachments)
+        Memory.write_i32(ci + 48, size)
+        Memory.write_i32(ci + 52, size)
+        Memory.write_i32(ci + 56, 1)
+        result: i32 = vkCreateFramebuffer(device, ci, 0, out)
+        self.framebuffer = Memory.read_ptr(out)
+        Memory.free(out)
+        Memory.free(ci)
+        Memory.free(attachments)
+        if result != 0:
+            return 0
+        self.map_size = size
+        return 1
+
+    fun cleanup(self, device: i64):
+        if self.framebuffer != 0:
+            vkDestroyFramebuffer(device, self.framebuffer, 0)
+        if self.view != 0:
+            vkDestroyImageView(device, self.view, 0)
+        if self.image != 0:
+            vkDestroyImage(device, self.image, 0)
+        if self.memory != 0:
+            vkFreeMemory(device, self.memory, 0)
+        if self.sampler != 0:
+            vkDestroySampler(device, self.sampler, 0)
+        if self.vk_pipeline != 0:
+            vkDestroyPipeline(device, self.vk_pipeline, 0)
+        if self.vk_pipeline_layout != 0:
+            vkDestroyPipelineLayout(device, self.vk_pipeline_layout, 0)
+        if self.vert_shader_module != 0:
+            vkDestroyShaderModule(device, self.vert_shader_module, 0)
+        if self.vk_render_pass != 0:
+            vkDestroyRenderPass(device, self.vk_render_pass, 0)
+        self.initialized = 0

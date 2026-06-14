@@ -39,6 +39,8 @@ struct Node:
     velocity_z: f32 = 0.0
     mass: f32 = 1.0
     texture_id: i32 = -1
+    cast_shadows: i32 = 1
+    receive_shadows: i32 = 1
 
 @heap struct Camera3D extends Node3D:
     fov: f32 = 82.0
@@ -224,6 +226,8 @@ attach Node3D:
         if self.texture_id >= 0:
             if self.mesh_id >= 0:
                 Engine.bind_texture(self.mesh_id, self.texture_id)
+        if self.mesh_id >= 0:
+            Engine.set_shadow_flags(self.mesh_id, self.cast_shadows, self.receive_shadows)
         return self
 
     # Dress this node with an uploaded texture. Mirrors set_model: the node
@@ -248,6 +252,28 @@ attach Node3D:
         if self.mesh_id >= 0:
             Engine.set_instance_visible(self.mesh_id, on)
         return self
+
+    fun set_cast_shadows(self, enabled: i32) -> Node3D:
+        self.cast_shadows = 1
+        if enabled == 0:
+            self.cast_shadows = 0
+        if self.mesh_id >= 0:
+            Engine.set_shadow_flags(self.mesh_id, self.cast_shadows, self.receive_shadows)
+        return self
+
+    fun set_receive_shadows(self, enabled: i32) -> Node3D:
+        self.receive_shadows = 1
+        if enabled == 0:
+            self.receive_shadows = 0
+        if self.mesh_id >= 0:
+            Engine.set_shadow_flags(self.mesh_id, self.cast_shadows, self.receive_shadows)
+        return self
+
+    fun casts_shadows(self) -> i32:
+        return self.cast_shadows
+
+    fun receives_shadows(self) -> i32:
+        return self.receive_shadows
 
     fun destroy(self):
         node_destroy(self as i64)
@@ -349,6 +375,9 @@ fun node3d_create(name: str) -> Node3D:
     node.velocity_y = 0.0
     node.velocity_z = 0.0
     node.mass = 1.0
+    node.texture_id = -1
+    node.cast_shadows = 1
+    node.receive_shadows = 1
     return node
 
 fun camera3d_create(name: str) -> Camera3D:
@@ -382,6 +411,9 @@ fun camera3d_create(name: str) -> Camera3D:
     node.velocity_y = 0.0
     node.velocity_z = 0.0
     node.mass = 1.0
+    node.texture_id = -1
+    node.cast_shadows = 1
+    node.receive_shadows = 1
     node.fov = 82.0
     node.near_z = 0.1
     node.far_z = 1000.0

@@ -292,6 +292,8 @@ fun raycast3d_create(name: str) -> Raycast3D:
     node.velocity_z = 0.0
     node.mass = 1.0
     node.texture_id = -1
+    node.cast_shadows = 1
+    node.receive_shadows = 1
     node.enabled = 1
     node.max_distance = 10.0
     node.last_hit = RaycastHit.miss()

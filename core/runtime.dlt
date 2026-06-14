@@ -50,8 +50,9 @@ attach EngineRuntime:
 
         vert_shader: EmbeddedShader = get_textured_vert_shader()
         frag_shader: EmbeddedShader = get_textured_frag_shader()
+        shadow_vert_shader: EmbeddedShader = get_shadow_vert_shader()
         render_pass: RenderPass = RenderPass()
-        if render_pass.init(ctx.vk_device, swapchain.format, swapchain.image_count, swapchain.image_views, swapchain.depth_view, width, height, ctx.graphics_family, vert_shader.data, vert_shader.size, frag_shader.data, frag_shader.size) == 0:
+        if render_pass.init(ctx.vk_device, ctx.vk_physical_device, swapchain.format, swapchain.image_count, swapchain.image_views, swapchain.depth_view, width, height, ctx.graphics_family, vert_shader.data, vert_shader.size, frag_shader.data, frag_shader.size, shadow_vert_shader.data, shadow_vert_shader.size) == 0:
             print("GPU render pass init failed")
             swapchain.cleanup(ctx.vk_instance, ctx.vk_device)
             ctx.cleanup()
@@ -165,6 +166,9 @@ attach EngineRuntime:
     fun bind_material(self, mesh_id: i32, material: Material3D):
         self.renderer.bind_material(mesh_id, material)
 
+    fun set_shadow_flags(self, mesh_id: i32, cast_shadows: i32, receive_shadows: i32):
+        self.renderer.set_shadow_flags(mesh_id, cast_shadows, receive_shadows)
+
     fun set_transform(self, mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         self.renderer.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
 
@@ -214,8 +218,9 @@ attach EngineRuntime:
 
         vert_shader: EmbeddedShader = get_textured_vert_shader()
         frag_shader: EmbeddedShader = get_textured_frag_shader()
+        shadow_vert_shader: EmbeddedShader = get_shadow_vert_shader()
         render_pass: RenderPass = RenderPass()
-        if render_pass.init(self.ctx.vk_device, swapchain.format, swapchain.image_count, swapchain.image_views, swapchain.depth_view, new_width, new_height, self.ctx.graphics_family, vert_shader.data, vert_shader.size, frag_shader.data, frag_shader.size) == 0:
+        if render_pass.init(self.ctx.vk_device, self.ctx.vk_physical_device, swapchain.format, swapchain.image_count, swapchain.image_views, swapchain.depth_view, new_width, new_height, self.ctx.graphics_family, vert_shader.data, vert_shader.size, frag_shader.data, frag_shader.size, shadow_vert_shader.data, shadow_vert_shader.size) == 0:
             print("GPU render pass resize failed")
             swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
             self.ready_flag = 0
