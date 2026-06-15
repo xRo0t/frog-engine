@@ -557,6 +557,9 @@ print(@"present requested={requested_name}, active={active_name}")</code></pre>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
         <tr><td><code>render_stats(enabled)</code></td><td>—</td><td>Toggles on-screen render statistics.</td></tr>
         <tr><td><code>render_stats_enabled()</code></td><td>i32</td><td>Current stats state.</td></tr>
+        <tr><td><code>collisions(enabled)</code></td><td>-</td><td>Draws active collider boxes and <code>Raycast3D</code> queries. Raycasts use a yellow line and a red hit marker.</td></tr>
+        <tr><td><code>collisions_enabled()</code></td><td>i32</td><td>Current collision-debug state.</td></tr>
+        <tr><td><code>box(center, size, color)</code></td><td>-</td><td>Queues one custom debug box for the current frame. Calls are ignored while collision debugging is disabled.</td></tr>
         <tr><td><code>frame_pacing(enabled)</code></td><td>-</td><td>Prints periodic frame pacing diagnostics from <code>Engine.begin_frame()</code>: avg/min/max frame time, spike count, target FPS, render scale, and active present mode.</td></tr>
         <tr><td><code>frame_pacing_enabled()</code></td><td>i32</td><td>Current frame pacing diagnostics state.</td></tr>
         <tr><td><code>set_frame_pacing_interval(frames)</code></td><td>-</td><td>Changes how many frames are sampled per console report. Defaults to 120.</td></tr>
@@ -565,6 +568,17 @@ print(@"present requested={requested_name}, active={active_name}")</code></pre>
 
       <pre><code>Engine.debug.frame_pacing(1)
 Engine.debug.set_frame_pacing_interval(120)</code></pre>
+
+      <h4>Collision visualization</h4>
+      <pre><code>Engine.debug.collisions(1)
+
+# Custom boxes are per-frame; call after Engine.begin_frame().
+Engine.debug.box(
+    Vec3.make(0.0, 1.0, 0.0),
+    Vec3.make(1.0, 2.0, 1.0),
+    Color.rgba(0.1, 0.8, 1.0, 0.9)
+)</code></pre>
+      <p>The renderer discovers regular <code>Node3D</code> collision boxes and enabled <code>Raycast3D</code> nodes automatically, then submits the debug outlines as batched instanced line draws. If collision debugging is never enabled, Frog performs no physics-debug traversal, creates no debug GPU buffers, and submits no debug draw calls. Disabling it after first use stops traversal and rendering while retaining the cached GPU buffers for fast re-enabling.</p>
 
       <h4>Engine.scene</h4>
       <table>
@@ -711,7 +725,7 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
         <tr><td><code>without_collision()</code></td><td>Disables collision.</td></tr>
         <tr><td><code>set_model(model)</code></td><td>Binds a loaded <code>Model3D</code> (uploads to GPU if needed, sets <code>mesh_id</code>).</td></tr>
         <tr><td><code>set_texture(texture)</code></td><td>Dresses the node with a loaded <code>Texture2D</code>. Safe before or after <code>set_model</code>.</td></tr>
-        <tr><td><code>set_visible(on)</code></td><td>Shows (1) or hides (0) this node's mesh instance.</td></tr>
+        <tr><td><code>set_visible(on)</code></td><td>Shows (1) or hides (0) this node's mesh instance. It does not disable collision or logic.</td></tr>
         <tr><td><code>set_cast_shadows(enabled)</code></td><td>Controls whether this object's mesh is included in shadow rendering. Enabled by default.</td></tr>
         <tr><td><code>set_receive_shadows(enabled)</code></td><td>Controls whether this object's surface receives shadows. Enabled by default.</td></tr>
         <tr><td><code>casts_shadows()</code> / <code>receives_shadows()</code></td><td>Returns the stored shadow state.</td></tr>
@@ -813,6 +827,7 @@ cube.collision_box(<span class="tok-num">1.0</span>, <span class="tok-num">1.0</
 scene.add_child(cube)</code></pre>
 
       <div class="note"><strong>Shadow defaults.</strong> Renderable nodes cast and receive shadows by default. Only write <code>set_cast_shadows(0)</code> or <code>set_receive_shadows(0)</code> for exceptions such as effects, sky geometry, viewmodels, or special materials. Unlit materials never receive shadows effectively.</div>
+      <div class="note"><strong>Visibility is render-only.</strong> <code>set_visible(0)</code> removes the mesh from color rendering and shadow rendering, but the node, transform, raycast target, and collision box remain active. Use <code>without_collision()</code> or your own gameplay state when collision should disappear too.</div>
 
       <table>
         <tr><th>Method</th><th>Description</th></tr>
@@ -824,6 +839,7 @@ scene.add_child(cube)</code></pre>
         <tr><td><code>set_color(color)</code></td><td>Convenience shortcut for simple colored primitives.</td></tr>
         <tr><td><code>set_texture(texture)</code></td><td>Convenience shortcut that edits this mesh's material texture.</td></tr>
         <tr><td><code>set_alpha(alpha)</code></td><td>Convenience shortcut that edits this mesh's material alpha.</td></tr>
+        <tr><td><code>set_visible(enabled)</code></td><td>Shows or hides the mesh render instance while preserving collision and gameplay state. The state survives material, color, and primitive rebuilds.</td></tr>
         <tr><td><code>set_cast_shadows(enabled)</code></td><td>Overrides the default cast state for this mesh.</td></tr>
         <tr><td><code>set_receive_shadows(enabled)</code></td><td>Overrides the default receive state for this mesh. An unlit material still forces effective receiving off.</td></tr>
         <tr><td><code>position(x,y,z)</code> / <code>rotation(x,y,z)</code> / <code>scale(x,y,z)</code></td><td>Updates the node transform and renderer transform together.</td></tr>

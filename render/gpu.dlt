@@ -270,6 +270,18 @@ attach Renderer:
     fun set_render_stats(self, enabled: i32):
         self.core.set_render_stats(enabled)
 
+    fun set_collision_debug(self, enabled: i32):
+        self.core.set_collision_debug(enabled)
+
+    fun set_collision_debug_root(self, root_ptr: i64):
+        self.core.set_collision_debug_root(root_ptr)
+
+    fun begin_collision_debug_frame(self):
+        self.core.begin_collision_debug_frame()
+
+    fun add_collision_debug_box(self, center: Vec3, size: Vec3, color: Color):
+        self.core.add_collision_debug_box(center, size, color)
+
     fun set_instance_culling(self, enabled: i32):
         self.core.set_instance_culling(enabled)
 

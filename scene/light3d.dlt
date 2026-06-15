@@ -116,6 +116,7 @@ fun directional_light3d_create(name: str) -> DirectionalLight3D:
     node.texture_id = -1
     node.cast_shadows = 1
     node.receive_shadows = 1
+    node.visible = 1
     node.color = Color.rgb(1.0, 0.95, 0.84)
     node.intensity = 1.0
     node.ambient = 0.35

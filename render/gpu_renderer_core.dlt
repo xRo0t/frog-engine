@@ -179,6 +179,11 @@ struct GpuRendererCore:
     debug_draw_calls: i32 = 0
     debug_indexed_draw_calls: i32 = 0
     debug_visible_instances: i32 = 0
+    debug_collisions_enabled: i32 = 0
+    debug_collision_root_ptr: i64 = 0
+    debug_manual_boxes: i64 = 0
+    debug_manual_box_count: i32 = 0
+    debug_manual_box_capacity: i32 = 0
     # Texture registry
     tex_views:      i64 = 0    # VkImageView[]
     tex_samplers:   i64 = 0    # VkSampler[]
@@ -1213,8 +1218,6 @@ attach GpuRendererCore:
         Memory.write_i64(self.ib_alloc_sizes + mesh_id * 8, uploaded_ib.capacity)
         Memory.write_i32(self.ib_index_counts + mesh_id * 4, mesh.index_count)
         self._write_mesh_bounds(mesh_id, mesh.vertices, mesh.vertex_count)
-        if self.vb_visible != 0:
-            Memory.write_i32(self.vb_visible + mesh_id * 4, 1)
         return mesh_id
 
     # Register an instance that shares VkBuffer with source but gets own model matrix
@@ -2336,12 +2339,21 @@ attach GpuRendererCore:
                     self.debug_indexed_draw_calls = self.debug_indexed_draw_calls + frame_indexed_draw_calls
                     self.debug_visible_instances = self.debug_visible_instances + frame_visible_instances
 
+        debug_vp: i64 = 0
+        if self.debug_collisions_enabled == 1:
+            if cam_view != 0 and cam_proj != 0:
+                debug_vp = self.scratch_vp_matrix
+                if debug_vp != 0:
+                    _frog_multiply_4x4_into(cam_proj, cam_view, debug_vp)
+            self._record_collision_debug(cmd, rp, debug_vp, width, height)
+
         vkCmdEndRenderPass(cmd)
         if use_scaled == 1:
             self._record_render_scale_blit(cmd, scale_color_image, swap_image, swap_old_layout, width, height, swap_width, swap_height)
         vkEndCommandBuffer(cmd)
 
     fun cleanup(self) -> void:
+        self.cleanup_collision_debug()
         self.destroy_render_scale_target()
         if self.retire_buffers != 0:
             ri: i32 = 0

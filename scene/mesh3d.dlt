@@ -59,12 +59,26 @@ fun mesh3d_create(name: str) -> Mesh3D:
     node.texture_id = -1
     node.cast_shadows = 1
     node.receive_shadows = 1
+    node.visible = 1
     node.primitive_kind = 0
     node.color = Color.white()
     node.material = Material3D.create()
     return node
 
 attach Mesh3D:
+
+    fun apply_visibility(self) -> Mesh3D:
+        if self.mesh_id >= 0:
+            Engine.set_instance_visible(self.mesh_id, self.visible)
+        return self
+
+    fun replace_mesh_id(self, mesh_id: i32) -> Mesh3D:
+        old_id: i32 = self.mesh_id
+        if old_id >= 0:
+            if old_id != mesh_id:
+                Engine.set_instance_visible(old_id, 0)
+        self.mesh_id = mesh_id
+        return self.apply_visibility()
 
     static fun create() -> Mesh3D:
         return mesh3d_create("Mesh3D")
@@ -84,20 +98,27 @@ attach Mesh3D:
             if self.material.unlit != 0:
                 effective_receive = 0
             Engine.set_shadow_flags(self.mesh_id, self.cast_shadows, effective_receive)
+            Engine.set_instance_visible(self.mesh_id, self.visible)
         return self
 
     fun rebuild_mesh(self) -> Mesh3D:
         if self.primitive_kind == MESH3D_SHAPE_CUBE:
-            self.mesh_id = Engine.upload_colored_cube_mesh(self.material.color)
+            new_mesh_id: i32 = Engine.upload_colored_cube_mesh(self.material.color)
+            if new_mesh_id < 0:
+                return self
+            self.replace_mesh_id(new_mesh_id)
             self.sync_transform()
             self.apply_material_bindings()
             return self
         if self.primitive_kind == MESH3D_SHAPE_PLANE:
-            self.mesh_id = Engine.upload_colored_plane_mesh(self.material.color)
+            new_mesh_id: i32 = Engine.upload_colored_plane_mesh(self.material.color)
+            if new_mesh_id < 0:
+                return self
+            self.replace_mesh_id(new_mesh_id)
             self.sync_transform()
             self.apply_material_bindings()
             return self
-        self.mesh_id = -1
+        self.replace_mesh_id(-1)
         return self
 
     fun sync_transform(self) -> Mesh3D:
@@ -194,6 +215,12 @@ attach Mesh3D:
     fun without_collision(self) -> Mesh3D:
         self.collision_type = 0
         return self
+
+    fun set_visible(self, on: i32) -> Mesh3D:
+        self.visible = 1
+        if on == 0:
+            self.visible = 0
+        return self.apply_visibility()
 
     fun set_cast_shadows(self, enabled: i32) -> Mesh3D:
         self.cast_shadows = 1

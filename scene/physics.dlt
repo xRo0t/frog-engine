@@ -265,7 +265,7 @@ fun raycast3d_create(name: str) -> Raycast3D:
     node.id = -1
     node.name = name
     node.active = 1
-    node.kind = 4
+    node.kind = 5
     node.parent_ptr = 0
     node.first_child_ptr = 0
     node.next_sibling_ptr = 0
@@ -294,6 +294,7 @@ fun raycast3d_create(name: str) -> Raycast3D:
     node.texture_id = -1
     node.cast_shadows = 1
     node.receive_shadows = 1
+    node.visible = 1
     node.enabled = 1
     node.max_distance = 10.0
     node.last_hit = RaycastHit.miss()

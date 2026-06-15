@@ -1,0 +1,655 @@
+##############################
+# Frog - GPU Debug Drawing
+# Lazy collision wireframes. No scene traversal or GPU work while disabled.
+##############################
+
+static g_debug_collision_pipeline_layout: i64 = 0
+static g_debug_collision_pipeline: i64 = 0
+static g_debug_collision_vert_module: i64 = 0
+static g_debug_collision_frag_module: i64 = 0
+static g_debug_collision_render_pass: i64 = 0
+static g_debug_collision_vertex_buffer: i64 = 0
+static g_debug_collision_vertex_memory: i64 = 0
+static g_debug_collision_instance_buffers: i64 = 0
+static g_debug_collision_instance_memories: i64 = 0
+static g_debug_collision_instance_mapped: i64 = 0
+static g_debug_collision_instance_capacity: i32 = 0
+
+fun frog_debug_collision_shader_module(device: i64, code: i64, size: i64) -> i64:
+    if code == 0 or size <= 0:
+        return 0
+    ci: i64 = Memory.malloc_zeroed(40)
+    out: i64 = Memory.malloc_zeroed(8)
+    if ci == 0 or out == 0:
+        if ci != 0:
+            Memory.free(ci)
+        if out != 0:
+            Memory.free(out)
+        return 0
+    Memory.write_i32(ci, 12)
+    Memory.write_i64(ci + 24, size)
+    Memory.write_ptr(ci + 32, code)
+    result: i32 = vkCreateShaderModule(device, ci, 0, out)
+    handle: i64 = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    if result != 0:
+        return 0
+    return handle
+
+fun frog_debug_collision_destroy_pipeline(device: i64):
+    if g_debug_collision_pipeline != 0:
+        vkDestroyPipeline(device, g_debug_collision_pipeline, 0)
+    if g_debug_collision_pipeline_layout != 0:
+        vkDestroyPipelineLayout(device, g_debug_collision_pipeline_layout, 0)
+    if g_debug_collision_vert_module != 0:
+        vkDestroyShaderModule(device, g_debug_collision_vert_module, 0)
+    if g_debug_collision_frag_module != 0:
+        vkDestroyShaderModule(device, g_debug_collision_frag_module, 0)
+    g_debug_collision_pipeline = 0
+    g_debug_collision_pipeline_layout = 0
+    g_debug_collision_vert_module = 0
+    g_debug_collision_frag_module = 0
+    g_debug_collision_render_pass = 0
+
+fun frog_debug_collision_create_layout(device: i64) -> i32:
+    push_range: i64 = Memory.malloc_zeroed(12)
+    ci: i64 = Memory.malloc_zeroed(48)
+    out: i64 = Memory.malloc_zeroed(8)
+    if push_range == 0 or ci == 0 or out == 0:
+        return 0
+    Memory.write_i32(push_range, 1)
+    Memory.write_i32(push_range + 4, 0)
+    Memory.write_i32(push_range + 8, 64)
+    Memory.write_i32(ci, 30)
+    Memory.write_i32(ci + 32, 1)
+    Memory.write_ptr(ci + 40, push_range)
+    result: i32 = vkCreatePipelineLayout(device, ci, 0, out)
+    g_debug_collision_pipeline_layout = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    Memory.free(push_range)
+    if result != 0:
+        return 0
+    return 1
+
+fun frog_debug_collision_create_pipeline(device: i64, render_pass: i64) -> i32:
+    entry: str = "main"
+    stages: i64 = Memory.malloc_zeroed(96)
+    bindings: i64 = Memory.malloc_zeroed(24)
+    attributes: i64 = Memory.malloc_zeroed(96)
+    vertex_input: i64 = Memory.malloc_zeroed(48)
+    input_assembly: i64 = Memory.malloc_zeroed(32)
+    viewport_state: i64 = Memory.malloc_zeroed(48)
+    raster: i64 = Memory.malloc_zeroed(64)
+    multisample: i64 = Memory.malloc_zeroed(48)
+    depth: i64 = Memory.malloc_zeroed(104)
+    color_attachment: i64 = Memory.malloc_zeroed(32)
+    blend: i64 = Memory.malloc_zeroed(56)
+    dynamic_values: i64 = Memory.malloc_zeroed(8)
+    dynamic_state: i64 = Memory.malloc_zeroed(32)
+    ci: i64 = Memory.malloc_zeroed(144)
+    out: i64 = Memory.malloc_zeroed(8)
+    if stages == 0 or bindings == 0 or attributes == 0 or vertex_input == 0 or input_assembly == 0 or viewport_state == 0 or raster == 0 or multisample == 0 or depth == 0 or color_attachment == 0 or blend == 0 or dynamic_values == 0 or dynamic_state == 0 or ci == 0 or out == 0:
+        return 0
+
+    Memory.write_i32(stages, 18)
+    Memory.write_i32(stages + 20, 1)
+    Memory.write_ptr(stages + 24, g_debug_collision_vert_module)
+    Memory.write_ptr(stages + 32, entry)
+    Memory.write_i32(stages + 48, 18)
+    Memory.write_i32(stages + 68, 16)
+    Memory.write_ptr(stages + 72, g_debug_collision_frag_module)
+    Memory.write_ptr(stages + 80, entry)
+
+    Memory.write_i32(bindings, 0)
+    Memory.write_i32(bindings + 4, 12)
+    Memory.write_i32(bindings + 8, 0)
+    Memory.write_i32(bindings + 12, 1)
+    Memory.write_i32(bindings + 16, 80)
+    Memory.write_i32(bindings + 20, 1)
+
+    Memory.write_i32(attributes, 0)
+    Memory.write_i32(attributes + 4, 0)
+    Memory.write_i32(attributes + 8, 106)
+    Memory.write_i32(attributes + 12, 0)
+    ai: i32 = 0
+    while ai < 4:
+        off: i64 = 16 + (ai as i64) * 16
+        Memory.write_i32(attributes + off, 1 + ai)
+        Memory.write_i32(attributes + off + 4, 1)
+        Memory.write_i32(attributes + off + 8, 109)
+        Memory.write_i32(attributes + off + 12, ai * 16)
+        ai = ai + 1
+    Memory.write_i32(attributes + 80, 5)
+    Memory.write_i32(attributes + 84, 1)
+    Memory.write_i32(attributes + 88, 109)
+    Memory.write_i32(attributes + 92, 64)
+
+    Memory.write_i32(vertex_input, 19)
+    Memory.write_i32(vertex_input + 20, 2)
+    Memory.write_ptr(vertex_input + 24, bindings)
+    Memory.write_i32(vertex_input + 32, 6)
+    Memory.write_ptr(vertex_input + 40, attributes)
+
+    Memory.write_i32(input_assembly, 20)
+    Memory.write_i32(input_assembly + 20, 1)
+
+    Memory.write_i32(viewport_state, 22)
+    Memory.write_i32(viewport_state + 20, 1)
+    Memory.write_i32(viewport_state + 32, 1)
+
+    Memory.write_i32(raster, 23)
+    Memory.write_i32(raster + 24, 0)
+    Memory.write_i32(raster + 28, 0)
+    Memory.write_i32(raster + 32, 0)
+    Memory.write_i32(raster + 36, 0)
+    Memory.write_f32(raster + 56, 1.0)
+
+    Memory.write_i32(multisample, 24)
+    Memory.write_i32(multisample + 20, 1)
+    Memory.write_f32(multisample + 28, 1.0)
+
+    Memory.write_i32(depth, 25)
+    Memory.write_i32(depth + 20, 1)
+    Memory.write_i32(depth + 24, 0)
+    Memory.write_i32(depth + 28, 1)
+
+    Memory.write_i32(color_attachment, 1)
+    Memory.write_i32(color_attachment + 4, 6)
+    Memory.write_i32(color_attachment + 8, 7)
+    Memory.write_i32(color_attachment + 12, 0)
+    Memory.write_i32(color_attachment + 16, 1)
+    Memory.write_i32(color_attachment + 20, 0)
+    Memory.write_i32(color_attachment + 24, 0)
+    Memory.write_i32(color_attachment + 28, 15)
+    Memory.write_i32(blend, 26)
+    Memory.write_i32(blend + 28, 1)
+    Memory.write_ptr(blend + 32, color_attachment)
+
+    Memory.write_i32(dynamic_values, 0)
+    Memory.write_i32(dynamic_values + 4, 1)
+    Memory.write_i32(dynamic_state, 27)
+    Memory.write_i32(dynamic_state + 20, 2)
+    Memory.write_ptr(dynamic_state + 24, dynamic_values)
+
+    Memory.write_i32(ci, 28)
+    Memory.write_i32(ci + 20, 2)
+    Memory.write_ptr(ci + 24, stages)
+    Memory.write_ptr(ci + 32, vertex_input)
+    Memory.write_ptr(ci + 40, input_assembly)
+    Memory.write_ptr(ci + 56, viewport_state)
+    Memory.write_ptr(ci + 64, raster)
+    Memory.write_ptr(ci + 72, multisample)
+    Memory.write_ptr(ci + 80, depth)
+    Memory.write_ptr(ci + 88, blend)
+    Memory.write_ptr(ci + 96, dynamic_state)
+    Memory.write_ptr(ci + 104, g_debug_collision_pipeline_layout)
+    Memory.write_ptr(ci + 112, render_pass)
+    Memory.write_i32(ci + 136, 0 - 1)
+
+    result: i32 = vkCreateGraphicsPipelines(device, 0, 1, ci, 0, out)
+    g_debug_collision_pipeline = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    Memory.free(dynamic_state)
+    Memory.free(dynamic_values)
+    Memory.free(blend)
+    Memory.free(color_attachment)
+    Memory.free(depth)
+    Memory.free(multisample)
+    Memory.free(raster)
+    Memory.free(viewport_state)
+    Memory.free(input_assembly)
+    Memory.free(vertex_input)
+    Memory.free(attributes)
+    Memory.free(bindings)
+    Memory.free(stages)
+    if result != 0:
+        return 0
+    return 1
+
+fun frog_debug_collision_ensure_pipeline(device: i64, render_pass: i64) -> i32:
+    if g_debug_collision_pipeline != 0:
+        if g_debug_collision_render_pass == render_pass:
+            return 1
+        frog_debug_collision_destroy_pipeline(device)
+
+    vert: EmbeddedShader = get_debug_collision_vert_shader()
+    frag: EmbeddedShader = get_debug_collision_frag_shader()
+    g_debug_collision_vert_module = frog_debug_collision_shader_module(device, vert.data, vert.size)
+    g_debug_collision_frag_module = frog_debug_collision_shader_module(device, frag.data, frag.size)
+    vert.release()
+    frag.release()
+    if g_debug_collision_vert_module == 0 or g_debug_collision_frag_module == 0:
+        frog_debug_collision_destroy_pipeline(device)
+        return 0
+    if frog_debug_collision_create_layout(device) == 0:
+        frog_debug_collision_destroy_pipeline(device)
+        return 0
+    if frog_debug_collision_create_pipeline(device, render_pass) == 0:
+        frog_debug_collision_destroy_pipeline(device)
+        return 0
+    g_debug_collision_render_pass = render_pass
+    return 1
+
+fun frog_debug_collision_write_vertex(vertices: i64, index: i32, x: f32, y: f32, z: f32):
+    off: i64 = (index as i64) * 12
+    Memory.write_f32(vertices + off, x)
+    Memory.write_f32(vertices + off + 4, y)
+    Memory.write_f32(vertices + off + 8, z)
+
+attach GpuRendererCore:
+
+    fun _ensure_debug_collision_vertex_buffer(self) -> i32:
+        if g_debug_collision_vertex_buffer != 0:
+            return 1
+        vertices: i64 = Memory.malloc_zeroed(312)
+        if vertices == 0:
+            return 0
+        frog_debug_collision_write_vertex(vertices, 0, -0.5, -0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 1, 0.5, -0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 2, 0.5, -0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 3, 0.5, -0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 4, 0.5, -0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 5, -0.5, -0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 6, -0.5, -0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 7, -0.5, -0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 8, -0.5, 0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 9, 0.5, 0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 10, 0.5, 0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 11, 0.5, 0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 12, 0.5, 0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 13, -0.5, 0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 14, -0.5, 0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 15, -0.5, 0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 16, -0.5, -0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 17, -0.5, 0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 18, 0.5, -0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 19, 0.5, 0.5, -0.5)
+        frog_debug_collision_write_vertex(vertices, 20, 0.5, -0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 21, 0.5, 0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 22, -0.5, -0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 23, -0.5, 0.5, 0.5)
+        frog_debug_collision_write_vertex(vertices, 24, 0.0, 0.0, 0.0)
+        frog_debug_collision_write_vertex(vertices, 25, 0.0, 0.0, 1.0)
+        uploaded: GpuBufferUpload = self._upload_buffer(vertices, 312, 128)
+        Memory.free(vertices)
+        if uploaded.ok == 0:
+            return 0
+        g_debug_collision_vertex_buffer = uploaded.handle
+        g_debug_collision_vertex_memory = uploaded.memory
+        return 1
+
+    fun _destroy_debug_collision_instances(self):
+        slot: i32 = 0
+        while slot < 2:
+            buffer: i64 = 0
+            memory: i64 = 0
+            mapped: i64 = 0
+            if g_debug_collision_instance_buffers != 0:
+                buffer = Memory.read_ptr(g_debug_collision_instance_buffers + slot * 8)
+            if g_debug_collision_instance_memories != 0:
+                memory = Memory.read_ptr(g_debug_collision_instance_memories + slot * 8)
+            if g_debug_collision_instance_mapped != 0:
+                mapped = Memory.read_ptr(g_debug_collision_instance_mapped + slot * 8)
+            if memory != 0 and mapped != 0:
+                vkUnmapMemory(self.device, memory)
+            if buffer != 0:
+                vkDestroyBuffer(self.device, buffer, 0)
+            if memory != 0:
+                vkFreeMemory(self.device, memory, 0)
+            slot = slot + 1
+        if g_debug_collision_instance_buffers != 0:
+            Memory.free(g_debug_collision_instance_buffers)
+        if g_debug_collision_instance_memories != 0:
+            Memory.free(g_debug_collision_instance_memories)
+        if g_debug_collision_instance_mapped != 0:
+            Memory.free(g_debug_collision_instance_mapped)
+        g_debug_collision_instance_buffers = 0
+        g_debug_collision_instance_memories = 0
+        g_debug_collision_instance_mapped = 0
+        g_debug_collision_instance_capacity = 0
+
+    fun _ensure_debug_collision_instances(self, needed: i32) -> i32:
+        if needed <= 0:
+            return 0
+        if g_debug_collision_instance_capacity >= needed:
+            return 1
+
+        new_capacity: i32 = g_debug_collision_instance_capacity
+        if new_capacity <= 0:
+            new_capacity = 256
+        while new_capacity < needed:
+            new_capacity = new_capacity * 2
+
+        vkDeviceWaitIdle(self.device)
+        self._destroy_debug_collision_instances()
+        g_debug_collision_instance_buffers = Memory.malloc_zeroed(16)
+        g_debug_collision_instance_memories = Memory.malloc_zeroed(16)
+        g_debug_collision_instance_mapped = Memory.malloc_zeroed(16)
+        if g_debug_collision_instance_buffers == 0 or g_debug_collision_instance_memories == 0 or g_debug_collision_instance_mapped == 0:
+            self._destroy_debug_collision_instances()
+            return 0
+
+        size: i64 = (new_capacity as i64) * 80
+        zeros: i64 = Memory.malloc_zeroed(size)
+        if zeros == 0:
+            self._destroy_debug_collision_instances()
+            return 0
+        slot: i32 = 0
+        while slot < 2:
+            uploaded: GpuBufferUpload = self._upload_buffer(zeros, size, 128)
+            if uploaded.ok == 0:
+                Memory.free(zeros)
+                self._destroy_debug_collision_instances()
+                return 0
+            Memory.write_ptr(g_debug_collision_instance_buffers + slot * 8, uploaded.handle)
+            Memory.write_ptr(g_debug_collision_instance_memories + slot * 8, uploaded.memory)
+            Memory.write_ptr(self.scratch_map_pp, 0)
+            result: i32 = vkMapMemory(self.device, uploaded.memory, 0, size, 0, self.scratch_map_pp)
+            mapped: i64 = Memory.read_ptr(self.scratch_map_pp)
+            if result != 0 or mapped == 0:
+                Memory.free(zeros)
+                self._destroy_debug_collision_instances()
+                return 0
+            Memory.write_ptr(g_debug_collision_instance_mapped + slot * 8, mapped)
+            slot = slot + 1
+        Memory.free(zeros)
+        g_debug_collision_instance_capacity = new_capacity
+        return 1
+
+    fun set_collision_debug(self, enabled: i32):
+        if enabled == 0:
+            self.debug_collisions_enabled = 0
+        else:
+            self.debug_collisions_enabled = 1
+
+    fun set_collision_debug_root(self, root_ptr: i64):
+        self.debug_collision_root_ptr = root_ptr
+
+    fun begin_collision_debug_frame(self):
+        if self.debug_collisions_enabled == 0:
+            return
+        self.debug_manual_box_count = 0
+
+    fun add_collision_debug_box(self, center: Vec3, size: Vec3, color: Color):
+        if self.debug_collisions_enabled == 0:
+            return
+        if self.debug_manual_box_capacity <= self.debug_manual_box_count:
+            new_capacity: i32 = self.debug_manual_box_capacity
+            if new_capacity <= 0:
+                new_capacity = 32
+            while new_capacity <= self.debug_manual_box_count:
+                new_capacity = new_capacity * 2
+            boxes: i64 = Memory.malloc_zeroed((new_capacity as i64) * 40)
+            if boxes == 0:
+                return
+            if self.debug_manual_boxes != 0:
+                Memory.copy(boxes, self.debug_manual_boxes, (self.debug_manual_box_count as i64) * 40)
+                Memory.free(self.debug_manual_boxes)
+            self.debug_manual_boxes = boxes
+            self.debug_manual_box_capacity = new_capacity
+
+        dst: i64 = self.debug_manual_boxes + (self.debug_manual_box_count as i64) * 40
+        Memory.write_f32(dst, center.x)
+        Memory.write_f32(dst + 4, center.y)
+        Memory.write_f32(dst + 8, center.z)
+        Memory.write_f32(dst + 12, size.x)
+        Memory.write_f32(dst + 16, size.y)
+        Memory.write_f32(dst + 20, size.z)
+        Memory.write_f32(dst + 24, color.r)
+        Memory.write_f32(dst + 28, color.g)
+        Memory.write_f32(dst + 32, color.b)
+        Memory.write_f32(dst + 36, color.a)
+        self.debug_manual_box_count = self.debug_manual_box_count + 1
+
+    fun cleanup_collision_debug(self):
+        if self.device != 0:
+            vkDeviceWaitIdle(self.device)
+            frog_debug_collision_destroy_pipeline(self.device)
+            self._destroy_debug_collision_instances()
+            if g_debug_collision_vertex_buffer != 0:
+                vkDestroyBuffer(self.device, g_debug_collision_vertex_buffer, 0)
+            if g_debug_collision_vertex_memory != 0:
+                vkFreeMemory(self.device, g_debug_collision_vertex_memory, 0)
+        g_debug_collision_vertex_buffer = 0
+        g_debug_collision_vertex_memory = 0
+        if self.debug_manual_boxes != 0:
+            Memory.free(self.debug_manual_boxes)
+        self.debug_manual_boxes = 0
+        self.debug_manual_box_count = 0
+        self.debug_manual_box_capacity = 0
+
+fun frog_debug_collision_count_nodes(node_ptr: i64) -> i32:
+    if node_ptr == 0:
+        return 0
+    node: Node = node_ptr as Node
+    if node.active == 0:
+        return 0
+    count: i32 = 0
+    if node.kind >= 2:
+        collider: Node3D = node_ptr as Node3D
+        if collider.collision_type == 1:
+            count = 1
+    if node.kind == 5:
+        raycast: Raycast3D = node_ptr as Raycast3D
+        if raycast.enabled == 1 and raycast.max_distance > 0.0:
+            count = count + 2
+    child_ptr: i64 = node.first_child_ptr
+    while child_ptr != 0:
+        count = count + frog_debug_collision_count_nodes(child_ptr)
+        child: Node = child_ptr as Node
+        child_ptr = child.next_sibling_ptr
+    return count
+
+fun frog_debug_collision_write_instance(dst: i64, cx: f32, cy: f32, cz: f32, sx: f32, sy: f32, sz: f32, color: Color):
+    x_size: f32 = physics_abs_f32(sx) + 0.012
+    y_size: f32 = physics_abs_f32(sy) + 0.012
+    z_size: f32 = physics_abs_f32(sz) + 0.012
+    Memory.set(dst, 0, 80)
+    Memory.write_f32(dst, x_size)
+    Memory.write_f32(dst + 20, y_size)
+    Memory.write_f32(dst + 40, z_size)
+    Memory.write_f32(dst + 48, cx)
+    Memory.write_f32(dst + 52, cy)
+    Memory.write_f32(dst + 56, cz)
+    Memory.write_f32(dst + 60, 1.0)
+    Memory.write_f32(dst + 64, color.r)
+    Memory.write_f32(dst + 68, color.g)
+    Memory.write_f32(dst + 72, color.b)
+    Memory.write_f32(dst + 76, color.a)
+
+fun frog_debug_collision_write_ray_instance(dst: i64, origin: Vec3, direction: Vec3, distance: f32, color: Color):
+    forward: Vec3 = direction.normalize()
+    if forward.length_sq() < 0.000001:
+        return
+
+    Memory.set(dst, 0, 80)
+    Memory.write_f32(dst, 1.0)
+    Memory.write_f32(dst + 20, 1.0)
+    Memory.write_f32(dst + 32, forward.x * distance)
+    Memory.write_f32(dst + 36, forward.y * distance)
+    Memory.write_f32(dst + 40, forward.z * distance)
+    Memory.write_f32(dst + 48, origin.x)
+    Memory.write_f32(dst + 52, origin.y)
+    Memory.write_f32(dst + 56, origin.z)
+    Memory.write_f32(dst + 60, 1.0)
+    Memory.write_f32(dst + 64, color.r)
+    Memory.write_f32(dst + 68, color.g)
+    Memory.write_f32(dst + 72, color.b)
+    Memory.write_f32(dst + 76, color.a)
+
+fun frog_debug_collision_fill_nodes(node_ptr: i64, parent_x: f32, parent_y: f32, parent_z: f32, parent_sx: f32, parent_sy: f32, parent_sz: f32, mapped: i64, write_index: i32) -> i32:
+    if node_ptr == 0:
+        return write_index
+    node: Node = node_ptr as Node
+    if node.active == 0:
+        return write_index
+    next_index: i32 = write_index
+
+    world_x: f32 = parent_x + node.pos_x
+    world_y: f32 = parent_y + node.pos_y
+    world_z: f32 = parent_z + node.pos_z
+    world_sx: f32 = parent_sx * node.scale_x
+    world_sy: f32 = parent_sy * node.scale_y
+    world_sz: f32 = parent_sz * node.scale_z
+
+    if node.kind >= 2:
+        collider: Node3D = node_ptr as Node3D
+        if collider.collision_type == 1:
+            center_x: f32 = world_x + collider.collision_offset_x * world_sx
+            center_y: f32 = world_y + collider.collision_offset_y * world_sy
+            center_z: f32 = world_z + collider.collision_offset_z * world_sz
+            size_x: f32 = collider.collision_size_x * world_sx
+            size_y: f32 = collider.collision_size_y * world_sy
+            size_z: f32 = collider.collision_size_z * world_sz
+            color: Color = Color.rgb(0.16, 0.58, 1.0)
+            color.a = 0.92
+            if collider.body_type == 1:
+                color = Color.rgb(0.20, 1.0, 0.35)
+                color.a = 0.92
+            elif collider.body_type == 2:
+                color = Color.rgb(0.18, 1.0, 0.95)
+                color.a = 0.92
+            dst: i64 = mapped + (next_index as i64) * 80
+            frog_debug_collision_write_instance(dst, center_x, center_y, center_z, size_x, size_y, size_z, color)
+            next_index = next_index + 1
+
+    if node.kind == 5:
+        raycast: Raycast3D = node_ptr as Raycast3D
+        if raycast.enabled == 1 and raycast.max_distance > 0.0:
+            raycast.refresh()
+            if raycast.last_hit.hit == 1:
+                hit_color: Color = Color.rgba(1.0, 0.18, 0.12, 0.98)
+                hit_dst: i64 = mapped + (next_index as i64) * 80
+                frog_debug_collision_write_instance(
+                    hit_dst,
+                    raycast.last_hit.point.x,
+                    raycast.last_hit.point.y,
+                    raycast.last_hit.point.z,
+                    0.14,
+                    0.14,
+                    0.14,
+                    hit_color
+                )
+                next_index = next_index + 1
+
+    child_ptr: i64 = node.first_child_ptr
+    while child_ptr != 0:
+        next_index = frog_debug_collision_fill_nodes(child_ptr, world_x, world_y, world_z, world_sx, world_sy, world_sz, mapped, next_index)
+        child: Node = child_ptr as Node
+        child_ptr = child.next_sibling_ptr
+    return next_index
+
+fun frog_debug_collision_fill_rays(node_ptr: i64, mapped: i64, write_index: i32) -> i32:
+    if node_ptr == 0:
+        return write_index
+    node: Node = node_ptr as Node
+    if node.active == 0:
+        return write_index
+    next_index: i32 = write_index
+
+    if node.kind == 5:
+        raycast: Raycast3D = node_ptr as Raycast3D
+        if raycast.enabled == 1 and raycast.max_distance > 0.0:
+            raycast.refresh()
+            ray: Ray3D = raycast.ray()
+            distance: f32 = raycast.max_distance
+            if raycast.last_hit.hit == 1:
+                distance = raycast.last_hit.distance
+            ray_color: Color = Color.rgba(1.0, 0.78, 0.12, 0.96)
+            ray_dst: i64 = mapped + (next_index as i64) * 80
+            frog_debug_collision_write_ray_instance(ray_dst, ray.origin, ray.direction, distance, ray_color)
+            next_index = next_index + 1
+
+    child_ptr: i64 = node.first_child_ptr
+    while child_ptr != 0:
+        next_index = frog_debug_collision_fill_rays(child_ptr, mapped, next_index)
+        child: Node = child_ptr as Node
+        child_ptr = child.next_sibling_ptr
+    return next_index
+
+attach GpuRendererCore:
+
+    fun _record_collision_debug(self, cmd: i64, rp: RenderPass, vp_matrix: i64, width: i32, height: i32):
+        if self.debug_collisions_enabled == 0:
+            return
+        if vp_matrix == 0:
+            return
+
+        automatic_count: i32 = frog_debug_collision_count_nodes(self.debug_collision_root_ptr)
+        total_count: i32 = automatic_count + self.debug_manual_box_count
+        if total_count <= 0:
+            return
+        if frog_debug_collision_ensure_pipeline(self.device, rp.vk_render_pass) == 0:
+            return
+        if self._ensure_debug_collision_vertex_buffer() == 0:
+            return
+        if self._ensure_debug_collision_instances(total_count) == 0:
+            return
+
+        frame_slot: i32 = self.current_frame
+        if frame_slot < 0:
+            frame_slot = 0
+        if frame_slot > 1:
+            frame_slot = 1
+        mapped: i64 = Memory.read_ptr(g_debug_collision_instance_mapped + frame_slot * 8)
+        instance_buffer: i64 = Memory.read_ptr(g_debug_collision_instance_buffers + frame_slot * 8)
+        if mapped == 0 or instance_buffer == 0:
+            return
+
+        box_count: i32 = frog_debug_collision_fill_nodes(self.debug_collision_root_ptr, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, mapped, 0)
+        manual_index: i32 = 0
+        while manual_index < self.debug_manual_box_count:
+            src: i64 = self.debug_manual_boxes + (manual_index as i64) * 40
+            color: Color = Color.rgba(
+                Memory.read_f32(src + 24),
+                Memory.read_f32(src + 28),
+                Memory.read_f32(src + 32),
+                Memory.read_f32(src + 36)
+            )
+            dst: i64 = mapped + (box_count as i64) * 80
+            frog_debug_collision_write_instance(
+                dst,
+                Memory.read_f32(src),
+                Memory.read_f32(src + 4),
+                Memory.read_f32(src + 8),
+                Memory.read_f32(src + 12),
+                Memory.read_f32(src + 16),
+                Memory.read_f32(src + 20),
+                color
+            )
+            box_count = box_count + 1
+            manual_index = manual_index + 1
+        written: i32 = frog_debug_collision_fill_rays(self.debug_collision_root_ptr, mapped, box_count)
+        ray_count: i32 = written - box_count
+        if box_count <= 0 and ray_count <= 0:
+            return
+
+        vkCmdBindPipeline(cmd, 0, g_debug_collision_pipeline)
+        viewport: i64 = self.scratch_viewport
+        scissor: i64 = self.scratch_scissor
+        Memory.set(viewport, 0, 24)
+        Memory.write_f32(viewport + 8, width as f32)
+        Memory.write_f32(viewport + 12, height as f32)
+        Memory.write_f32(viewport + 20, 1.0)
+        vkCmdSetViewport(cmd, 0, 1, viewport)
+        Memory.set(scissor, 0, 16)
+        Memory.write_i32(scissor + 8, width)
+        Memory.write_i32(scissor + 12, height)
+        vkCmdSetScissor(cmd, 0, 1, scissor)
+        vkCmdPushConstants(cmd, g_debug_collision_pipeline_layout, 1, 0, 64, vp_matrix)
+
+        Memory.write_ptr(self.scratch_vb_arr, g_debug_collision_vertex_buffer)
+        Memory.write_i64(self.scratch_off_arr, 0)
+        vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
+        Memory.write_ptr(self.scratch_inst_vb_arr, instance_buffer)
+        Memory.write_i64(self.scratch_inst_off_arr, 0)
+        vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
+        if box_count > 0:
+            vkCmdDraw(cmd, 24, box_count, 0, 0)
+        if ray_count > 0:
+            Memory.write_i64(self.scratch_inst_off_arr, (box_count as i64) * 80)
+            vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
+            vkCmdDraw(cmd, 2, ray_count, 24, 0)

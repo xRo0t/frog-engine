@@ -195,6 +195,18 @@ attach EngineRuntime:
     fun set_render_stats(self, enabled: i32):
         self.renderer.set_render_stats(enabled)
 
+    fun set_collision_debug(self, enabled: i32):
+        self.renderer.set_collision_debug(enabled)
+
+    fun set_collision_debug_root(self, root_ptr: i64):
+        self.renderer.set_collision_debug_root(root_ptr)
+
+    fun begin_collision_debug_frame(self):
+        self.renderer.begin_collision_debug_frame()
+
+    fun add_collision_debug_box(self, center: Vec3, size: Vec3, color: Color):
+        self.renderer.add_collision_debug_box(center, size, color)
+
     fun set_instance_culling(self, enabled: i32):
         self.renderer.set_instance_culling(enabled)
 
@@ -219,6 +231,7 @@ attach EngineRuntime:
             return 0
 
         vkDeviceWaitIdle(self.ctx.vk_device)
+        frog_debug_collision_destroy_pipeline(self.ctx.vk_device)
         self.renderer.destroy_render_scale_target()
         self.render_pass.cleanup(self.ctx.vk_device)
         self.swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)

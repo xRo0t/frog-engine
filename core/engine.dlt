@@ -44,6 +44,7 @@ static g_engine_target_fps: i32 = 0
 static g_engine_render_scale: f32 = 1.0
 static g_engine_gpu_preference: i32 = 0
 static g_engine_render_stats_enabled: i32 = 0
+static g_engine_collision_debug_enabled: i32 = 0
 static g_engine_frame_pacing_enabled: i32 = 0
 static g_engine_frame_pacing_interval: i32 = 120
 static g_engine_frame_pacing_samples: i32 = 0
@@ -73,6 +74,7 @@ attach DisplayWindow:
         g_engine_render_scale = 1.0
         g_engine_gpu_preference = 0
         g_engine_render_stats_enabled = 0
+        g_engine_collision_debug_enabled = 0
         g_engine_frame_pacing_enabled = 0
         g_engine_frame_pacing_interval = 120
         Debug.reset_frame_pacing()
@@ -224,6 +226,24 @@ attach Debug:
     static fun render_stats_enabled() -> i32:
         return g_engine_render_stats_enabled
 
+    static fun collisions(enabled: i32):
+        if enabled == 0:
+            g_engine_collision_debug_enabled = 0
+        else:
+            g_engine_collision_debug_enabled = 1
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_collision_debug(g_engine_collision_debug_enabled)
+
+    static fun collisions_enabled() -> i32:
+        return g_engine_collision_debug_enabled
+
+    static fun box(center: Vec3, size: Vec3, color: Color):
+        if g_engine_collision_debug_enabled == 0:
+            return
+        if g_engine_runtime.ready() == 0:
+            return
+        g_engine_runtime.add_collision_debug_box(center, size, color)
+
     static fun frame_pacing(enabled: i32):
         if enabled == 0:
             g_engine_frame_pacing_enabled = 0
@@ -364,6 +384,7 @@ attach Engine:
         g_engine_runtime = EngineRuntime.create_with_options(g_engine_title, g_engine_width, g_engine_height, g_engine_vsync_enabled, g_engine_gpu_preference, g_engine_present_mode_preference)
         if g_engine_runtime.ready() == 1:
             g_engine_runtime.set_render_stats(g_engine_render_stats_enabled)
+            g_engine_runtime.set_collision_debug(g_engine_collision_debug_enabled)
             g_engine_runtime.set_instance_culling(g_engine_frustum_culling_enabled)
             if g_engine_has_window_mode == 1:
                 mode: WindowMode = WindowMode(kind=g_engine_window_mode_kind, width=g_engine_window_mode_width, height=g_engine_window_mode_height)
@@ -375,6 +396,8 @@ attach Engine:
 
     static fun begin_frame() -> f32:
         dt: f32 = g_engine_runtime.begin_frame_limited(g_engine_target_fps)
+        if g_engine_collision_debug_enabled == 1:
+            g_engine_runtime.begin_collision_debug_frame()
         if g_engine_has_scene == 1:
             g_engine_scene.update_day_cycle(dt)
         Debug.sample_frame_pacing(dt)
@@ -448,6 +471,8 @@ attach Engine:
         if (camera as i64) == 0:
             return
         g_engine_runtime.set_directional_light(g_engine_scene.directional_light_ptr)
+        if g_engine_collision_debug_enabled == 1:
+            g_engine_runtime.set_collision_debug_root(g_engine_scene.root_ptr)
         env: Environment = g_engine_scene.environment()
         g_engine_runtime.render_camera_scaled_with_environment(camera, g_engine_render_scale, env)
 

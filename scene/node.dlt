@@ -41,6 +41,7 @@ struct Node:
     texture_id: i32 = -1
     cast_shadows: i32 = 1
     receive_shadows: i32 = 1
+    visible: i32 = 1
 
 @heap struct Camera3D extends Node3D:
     fov: f32 = 82.0
@@ -217,9 +218,13 @@ attach Node3D:
         return self
 
     fun set_model(self, model: Model3D) -> Node3D:
+        old_mid: i32 = self.mesh_id
         mid: i32 = model.mesh_id
         if mid < 0:
             mid = Engine.upload_model_mesh(model)
+        if old_mid >= 0:
+            if old_mid != mid:
+                Engine.set_instance_visible(old_mid, 0)
         self.mesh_id = mid
         # If a texture was already chosen for this node, bind it now that we
         # have a real mesh id (order-independent: set_texture/set_model in any order).
@@ -228,6 +233,7 @@ attach Node3D:
                 Engine.bind_texture(self.mesh_id, self.texture_id)
         if self.mesh_id >= 0:
             Engine.set_shadow_flags(self.mesh_id, self.cast_shadows, self.receive_shadows)
+            Engine.set_instance_visible(self.mesh_id, self.visible)
         return self
 
     # Dress this node with an uploaded texture. Mirrors set_model: the node
@@ -249,8 +255,11 @@ attach Node3D:
 
     # Show or hide this node's mesh instance (1 = visible, 0 = hidden).
     fun set_visible(self, on: i32) -> Node3D:
+        self.visible = 1
+        if on == 0:
+            self.visible = 0
         if self.mesh_id >= 0:
-            Engine.set_instance_visible(self.mesh_id, on)
+            Engine.set_instance_visible(self.mesh_id, self.visible)
         return self
 
     fun set_cast_shadows(self, enabled: i32) -> Node3D:
@@ -259,6 +268,7 @@ attach Node3D:
             self.cast_shadows = 0
         if self.mesh_id >= 0:
             Engine.set_shadow_flags(self.mesh_id, self.cast_shadows, self.receive_shadows)
+            Engine.set_instance_visible(self.mesh_id, self.visible)
         return self
 
     fun set_receive_shadows(self, enabled: i32) -> Node3D:
@@ -267,6 +277,7 @@ attach Node3D:
             self.receive_shadows = 0
         if self.mesh_id >= 0:
             Engine.set_shadow_flags(self.mesh_id, self.cast_shadows, self.receive_shadows)
+            Engine.set_instance_visible(self.mesh_id, self.visible)
         return self
 
     fun casts_shadows(self) -> i32:
@@ -378,6 +389,7 @@ fun node3d_create(name: str) -> Node3D:
     node.texture_id = -1
     node.cast_shadows = 1
     node.receive_shadows = 1
+    node.visible = 1
     return node
 
 fun camera3d_create(name: str) -> Camera3D:
@@ -414,6 +426,7 @@ fun camera3d_create(name: str) -> Camera3D:
     node.texture_id = -1
     node.cast_shadows = 1
     node.receive_shadows = 1
+    node.visible = 1
     node.fov = 82.0
     node.near_z = 0.1
     node.far_z = 1000.0

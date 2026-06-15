@@ -3,6 +3,7 @@ import path from "node:path";
 
 const CHUNK_WORDS = 120;
 const GENERATED_MARKER = "# BEGIN GENERATED TEXTURED SHADERS";
+const GENERATED_END_MARKER = "# END GENERATED TEXTURED SHADERS";
 
 function fail(message) {
   console.error(message);
@@ -68,6 +69,13 @@ if (markerIndex < 0) {
 if (markerIndex < 0) {
   fail(`Could not find generated shader section in ${outputPath}`);
 }
+const endMarkerIndex = current.indexOf(GENERATED_END_MARKER, markerIndex);
+const preservedTail =
+  endMarkerIndex >= 0
+    ? current
+        .slice(endMarkerIndex + GENERATED_END_MARKER.length)
+        .replace(/^\s+/, "")
+    : "";
 
 const vertex = readWords(vertexPath);
 const fragment = readWords(fragmentPath);
@@ -93,5 +101,6 @@ const generated = [
   "",
 ].join("\n");
 
-fs.writeFileSync(outputPath, current.slice(0, markerIndex) + generated, "utf8");
+const tail = preservedTail.length > 0 ? `\n${preservedTail}` : "";
+fs.writeFileSync(outputPath, current.slice(0, markerIndex) + generated + tail, "utf8");
 console.log(`Embedded ${vertex.byteLength}-byte vertex, ${fragment.byteLength}-byte fragment, ${shadowVertex.byteLength}-byte shadow vertex, ${skyVertex.byteLength}-byte sky vertex, and ${skyFragment.byteLength}-byte sky fragment shaders.`);
