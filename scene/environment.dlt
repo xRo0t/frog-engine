@@ -13,6 +13,11 @@ const FOG_SHAPE_SPHERICAL: i32 = 1
 
 const SKY_MODE_NONE: i32 = 0
 const SKY_MODE_GRADIENT: i32 = 1
+const SKY_OBJECT_SHAPE_CIRCLE: i32 = 1
+const SKY_OBJECT_SHAPE_QUAD: i32 = 2
+const SKY_OBJECT_SHAPE_STARS: i32 = 3
+const SKY_MAX_OBJECTS: i32 = 8
+const SKY_OBJECT_STRIDE: i32 = 80
 
 struct FogShape:
     value: i32 = FOG_SHAPE_SPHERICAL
@@ -24,6 +29,26 @@ struct Fog:
     start_distance: f32 = 0.0
     end_distance: f32 = 0.0
     density: f32 = 0.0
+
+struct SkyShape:
+    value: i32 = SKY_OBJECT_SHAPE_CIRCLE
+
+struct SkyObject:
+    enabled: i32 = 0
+    shape: i32 = SKY_OBJECT_SHAPE_CIRCLE
+    light_ptr: i64 = 0
+    has_direction: i32 = 0
+    dir_x: f32 = 0.0
+    dir_y: f32 = 1.0
+    dir_z: f32 = 0.0
+    color: Color = Color()
+    size: f32 = 0.045
+    glow: f32 = 0.0
+    softness: f32 = 0.70
+    blur: f32 = 0.0
+    opacity: f32 = 1.0
+    strength: f32 = 1.0
+    count: i32 = 0
 
 struct Sky:
     mode: i32 = SKY_MODE_NONE
@@ -40,6 +65,29 @@ struct Sky:
     sun_glow: f32 = 0.78
     sun_softness: f32 = 0.85
     sun_enabled: i32 = 0
+    sun_has_direction: i32 = 0
+    sun_dir_x: f32 = 0.0
+    sun_dir_y: f32 = 1.0
+    sun_dir_z: f32 = 0.0
+    moon_light_ptr: i64 = 0
+    moon_color: Color = Color()
+    moon_size: f32 = 0.032
+    moon_glow: f32 = 0.24
+    moon_softness: f32 = 0.70
+    moon_enabled: i32 = 0
+    object_count: i32 = 0
+    primary_object_index: i32 = -1
+    primary_light_ptr: i64 = 0
+    primary_has_direction: i32 = 0
+    primary_dir_x: f32 = 0.0
+    primary_dir_y: f32 = 1.0
+    primary_dir_z: f32 = 0.0
+    primary_color: Color = Color()
+    primary_size: f32 = 0.045
+    primary_glow: f32 = 0.78
+    primary_softness: f32 = 0.85
+    primary_enabled: i32 = 0
+    object_store: i64 = 0
 
 struct Environment:
     clear_color: Color = Color()
@@ -53,6 +101,103 @@ attach FogShape:
 
     static fun depth() -> FogShape:
         return FogShape(value=FOG_SHAPE_DEPTH)
+
+attach SkyShape:
+
+    static fun circle() -> SkyShape:
+        return SkyShape(value=SKY_OBJECT_SHAPE_CIRCLE)
+
+    static fun quad() -> SkyShape:
+        return SkyShape(value=SKY_OBJECT_SHAPE_QUAD)
+
+    static fun stars() -> SkyShape:
+        return SkyShape(value=SKY_OBJECT_SHAPE_STARS)
+
+attach SkyObject:
+
+    static fun create(name: str) -> SkyObject:
+        obj: SkyObject = SkyObject()
+        obj.enabled = 1
+        obj.shape = SKY_OBJECT_SHAPE_CIRCLE
+        obj.light_ptr = 0
+        obj.has_direction = 0
+        obj.dir_x = 0.0
+        obj.dir_y = 1.0
+        obj.dir_z = 0.0
+        obj.color = Color.white()
+        obj.size = 0.045
+        obj.glow = 0.0
+        obj.softness = 0.70
+        obj.blur = 0.0
+        obj.opacity = 1.0
+        obj.strength = 1.0
+        obj.count = 0
+        return obj
+
+    fun set_visible(self, visible: i32) -> SkyObject:
+        if visible == 0:
+            self.enabled = 0
+        else:
+            self.enabled = 1
+        return self
+
+    fun set_shape(self, shape: SkyShape) -> SkyObject:
+        self.shape = shape.value
+        return self
+
+    fun follow_light(self, light: DirectionalLight3D) -> SkyObject:
+        self.light_ptr = light as i64
+        self.has_direction = 0
+        return self
+
+    fun set_direction(self, x: f32, y: f32, z: f32) -> SkyObject:
+        length_sq: f32 = x * x + y * y + z * z
+        if length_sq <= 0.000001:
+            self.dir_x = 0.0
+            self.dir_y = 1.0
+            self.dir_z = 0.0
+        else:
+            inv_len: f32 = 1.0 / @sqrt(length_sq)
+            self.dir_x = x * inv_len
+            self.dir_y = y * inv_len
+            self.dir_z = z * inv_len
+        self.has_direction = 1
+        self.light_ptr = 0
+        return self
+
+    fun set_color(self, color: Color) -> SkyObject:
+        self.color = color
+        return self
+
+    fun set_size(self, value: f32) -> SkyObject:
+        self.size = clamp(value, 0.005, 0.20)
+        return self
+
+    fun set_glow(self, value: f32) -> SkyObject:
+        self.glow = clamp(value, 0.0, 1.0)
+        return self
+
+    fun set_softness(self, value: f32) -> SkyObject:
+        self.softness = clamp(value, 0.0, 1.0)
+        return self
+
+    fun set_blur(self, value: f32) -> SkyObject:
+        self.blur = clamp(value, 0.0, 1.0)
+        return self
+
+    fun set_opacity(self, value: f32) -> SkyObject:
+        self.opacity = clamp(value, 0.0, 1.0)
+        return self
+
+    fun set_strength(self, value: f32) -> SkyObject:
+        self.strength = clamp(value, 0.0, 1.0)
+        return self
+
+    fun set_count(self, value: i32) -> SkyObject:
+        self.count = value
+        if self.count < 0:
+            self.count = 0
+        return self
 
 attach Fog:
 
@@ -127,6 +272,29 @@ attach Sky:
         sky.sun_glow = 0.78
         sky.sun_softness = 0.85
         sky.sun_enabled = 0
+        sky.sun_has_direction = 0
+        sky.sun_dir_x = 0.0
+        sky.sun_dir_y = 1.0
+        sky.sun_dir_z = 0.0
+        sky.moon_light_ptr = 0
+        sky.moon_color = Color.rgb(0.78, 0.84, 1.0)
+        sky.moon_size = 0.032
+        sky.moon_glow = 0.24
+        sky.moon_softness = 0.70
+        sky.moon_enabled = 0
+        sky.object_count = 0
+        sky.primary_object_index = -1
+        sky.primary_light_ptr = 0
+        sky.primary_has_direction = 0
+        sky.primary_dir_x = 0.0
+        sky.primary_dir_y = 1.0
+        sky.primary_dir_z = 0.0
+        sky.primary_color = Color.rgb(1.0, 0.72, 0.45)
+        sky.primary_size = 0.045
+        sky.primary_glow = 0.78
+        sky.primary_softness = 0.85
+        sky.primary_enabled = 0
+        sky.object_store = Memory.malloc_zeroed(SKY_MAX_OBJECTS * SKY_OBJECT_STRIDE)
         return sky
 
     static fun gradient(zenith: Color, horizon: Color, lower: Color) -> Sky:
@@ -145,6 +313,204 @@ attach Sky:
         if self.mode == SKY_MODE_NONE:
             return 0
         return 1
+
+    fun clear_objects(self) -> Sky:
+        self.object_count = 0
+        self.primary_object_index = -1
+        self.primary_light_ptr = 0
+        self.primary_has_direction = 0
+        self.primary_dir_x = 0.0
+        self.primary_dir_y = 1.0
+        self.primary_dir_z = 0.0
+        self.primary_enabled = 0
+        return self
+
+    fun ensure_object_store(self) -> i64:
+        if self.object_store == 0:
+            self.object_store = Memory.malloc_zeroed(SKY_MAX_OBJECTS * SKY_OBJECT_STRIDE)
+        return self.object_store
+
+    fun object_offset(self, index: i32) -> i64:
+        if index < 0:
+            return 0
+        if index >= SKY_MAX_OBJECTS:
+            return 0
+        store: i64 = self.ensure_object_store()
+        if store == 0:
+            return 0
+        return store + (index as i64) * (SKY_OBJECT_STRIDE as i64)
+
+    fun object_at(self, index: i32) -> SkyObject:
+        off: i64 = self.object_offset(index)
+        obj: SkyObject = SkyObject()
+        if off == 0:
+            return obj
+        obj.enabled = Memory.read_i32(off)
+        obj.shape = Memory.read_i32(off + 4)
+        obj.light_ptr = Memory.read_i64(off + 8)
+        obj.has_direction = Memory.read_i32(off + 16)
+        obj.dir_x = Memory.read_f32(off + 20)
+        obj.dir_y = Memory.read_f32(off + 24)
+        obj.dir_z = Memory.read_f32(off + 28)
+        color: Color = Color()
+        color.r = Memory.read_f32(off + 32)
+        color.g = Memory.read_f32(off + 36)
+        color.b = Memory.read_f32(off + 40)
+        color.a = Memory.read_f32(off + 44)
+        obj.color = color
+        obj.size = Memory.read_f32(off + 48)
+        obj.glow = Memory.read_f32(off + 52)
+        obj.softness = Memory.read_f32(off + 56)
+        obj.blur = Memory.read_f32(off + 60)
+        obj.opacity = Memory.read_f32(off + 64)
+        obj.strength = Memory.read_f32(off + 68)
+        obj.count = Memory.read_i32(off + 72)
+        return obj
+
+    fun set_object_at(self, index: i32, obj: SkyObject) -> Sky:
+        off: i64 = self.object_offset(index)
+        if off == 0:
+            return self
+        Memory.write_i32(off, obj.enabled)
+        Memory.write_i32(off + 4, obj.shape)
+        Memory.write_i64(off + 8, obj.light_ptr)
+        Memory.write_i32(off + 16, obj.has_direction)
+        Memory.write_f32(off + 20, obj.dir_x)
+        Memory.write_f32(off + 24, obj.dir_y)
+        Memory.write_f32(off + 28, obj.dir_z)
+        Memory.write_f32(off + 32, obj.color.r)
+        Memory.write_f32(off + 36, obj.color.g)
+        Memory.write_f32(off + 40, obj.color.b)
+        Memory.write_f32(off + 44, obj.color.a)
+        Memory.write_f32(off + 48, obj.size)
+        Memory.write_f32(off + 52, obj.glow)
+        Memory.write_f32(off + 56, obj.softness)
+        Memory.write_f32(off + 60, obj.blur)
+        Memory.write_f32(off + 64, obj.opacity)
+        Memory.write_f32(off + 68, obj.strength)
+        Memory.write_i32(off + 72, obj.count)
+        return self
+
+    fun sync_primary_object(self) -> Sky:
+        self.primary_enabled = 0
+        self.primary_object_index = -1
+        self.primary_light_ptr = 0
+        i: i32 = 0
+        while i < self.object_count:
+            obj: SkyObject = self.object_at(i)
+            if obj.enabled != 0:
+                if obj.shape != SKY_OBJECT_SHAPE_STARS:
+                    self.primary_enabled = 1
+                    self.primary_object_index = i
+                    self.primary_light_ptr = obj.light_ptr
+                    self.primary_has_direction = obj.has_direction
+                    self.primary_dir_x = obj.dir_x
+                    self.primary_dir_y = obj.dir_y
+                    self.primary_dir_z = obj.dir_z
+                    self.primary_color = obj.color
+                    self.primary_size = obj.size
+                    self.primary_glow = obj.glow
+                    self.primary_softness = obj.softness + obj.blur * 0.30
+                    if self.primary_softness > 1.0:
+                        self.primary_softness = 1.0
+                    return self
+            i = i + 1
+        return self
+
+    fun add_object(self, obj: SkyObject) -> Sky:
+        if self.object_count >= SKY_MAX_OBJECTS:
+            return self
+        self.set_object_at(self.object_count, obj)
+        self.object_count = self.object_count + 1
+        if obj.shape == SKY_OBJECT_SHAPE_STARS:
+            self.star_color = obj.color
+            self.star_strength = obj.strength * obj.opacity
+            self.star_count = obj.count
+        else:
+            if self.sun_enabled == 0:
+                self.sun_light_ptr = obj.light_ptr
+                self.sun_has_direction = obj.has_direction
+                self.sun_dir_x = obj.dir_x
+                self.sun_dir_y = obj.dir_y
+                self.sun_dir_z = obj.dir_z
+                self.sun_color = obj.color
+                self.sun_size = obj.size
+                self.sun_glow = obj.glow
+                self.sun_softness = obj.softness + obj.blur * 0.30
+                if self.sun_softness > 1.0:
+                    self.sun_softness = 1.0
+                self.sun_enabled = obj.enabled
+            else:
+                if self.moon_enabled == 0:
+                    self.moon_light_ptr = obj.light_ptr
+                    self.moon_color = obj.color
+                    self.moon_size = obj.size
+                    self.moon_glow = obj.glow
+                    self.moon_softness = obj.softness + obj.blur * 0.30
+                    if self.moon_softness > 1.0:
+                        self.moon_softness = 1.0
+                    self.moon_enabled = obj.enabled
+        self.sync_primary_object()
+        return self
+
+    fun find_object_by_light(self, light: DirectionalLight3D) -> i32:
+        light_ptr: i64 = light as i64
+        i: i32 = 0
+        while i < self.object_count:
+            obj: SkyObject = self.object_at(i)
+            if obj.enabled != 0:
+                if obj.light_ptr == light_ptr:
+                    return i
+            i = i + 1
+        return 0 - 1
+
+    fun ensure_light_object(self, light: DirectionalLight3D, name: str, color: Color, size: f32, glow: f32, softness: f32) -> Sky:
+        if self.find_object_by_light(light) >= 0:
+            return self
+        obj: SkyObject = SkyObject.create(name)
+        obj.follow_light(light)
+        obj.set_shape(SkyShape.circle())
+        obj.set_color(color)
+        obj.set_size(size)
+        obj.set_glow(glow)
+        obj.set_softness(softness)
+        self.add_object(obj)
+        return self
+
+    fun set_object_color_by_light(self, light: DirectionalLight3D, color: Color) -> Sky:
+        light_ptr: i64 = light as i64
+        i: i32 = 0
+        while i < self.object_count:
+            obj: SkyObject = self.object_at(i)
+            if obj.enabled != 0:
+                if obj.light_ptr == light_ptr:
+                    obj.set_color(color)
+                    self.set_object_at(i, obj)
+                    if self.sun_light_ptr == light_ptr:
+                        self.sun_color = color
+                    if self.moon_light_ptr == light_ptr:
+                        self.moon_color = color
+            i = i + 1
+        self.sync_primary_object()
+        return self
+
+    fun set_stars_object(self, strength: f32, count: i32, color: Color) -> Sky:
+        updated: i32 = 0
+        i: i32 = 0
+        while i < self.object_count:
+            obj: SkyObject = self.object_at(i)
+            if obj.enabled != 0:
+                if obj.shape == SKY_OBJECT_SHAPE_STARS:
+                    obj.set_strength(strength)
+                    obj.set_count(count)
+                    obj.set_color(color)
+                    self.set_object_at(i, obj)
+                    updated = 1
+            i = i + 1
+        if updated == 0:
+            self.set_stars(strength, count)
+            self.set_star_color(color)
+        return self
 
     fun set_zenith(self, color: Color) -> Sky:
         self.mode = SKY_MODE_GRADIENT
@@ -182,34 +548,6 @@ attach Sky:
             self.band_count = 4
         if self.band_count > 96:
             self.band_count = 96
-        return self
-
-    fun set_sun(self, light: DirectionalLight3D) -> Sky:
-        self.sun_light_ptr = light as i64
-        self.sun_enabled = 1
-        if self.sun_light_ptr == 0:
-            self.sun_enabled = 0
-        return self
-
-    fun clear_sun(self) -> Sky:
-        self.sun_light_ptr = 0
-        self.sun_enabled = 0
-        return self
-
-    fun set_sun_color(self, color: Color) -> Sky:
-        self.sun_color = color
-        return self
-
-    fun set_sun_size(self, value: f32) -> Sky:
-        self.sun_size = clamp(value, 0.005, 0.20)
-        return self
-
-    fun set_sun_glow(self, value: f32) -> Sky:
-        self.sun_glow = clamp(value, 0.0, 1.0)
-        return self
-
-    fun set_sun_softness(self, value: f32) -> Sky:
-        self.sun_softness = clamp(value, 0.0, 1.0)
         return self
 
     fun fog_color(self) -> Color:

@@ -989,14 +989,26 @@ camera.add_child(raycast)
         <tr><td><code>set_zenith(color)</code></td><td>Sets the top sky color.</td></tr>
         <tr><td><code>set_horizon(color)</code></td><td>Sets the middle horizon color.</td></tr>
         <tr><td><code>set_lower(color)</code></td><td>Sets the lower sky color.</td></tr>
-        <tr><td><code>set_stars(strength, count)</code></td><td>Configures subtle stars fixed to world-space sky directions; camera rotation reveals different stars without screen-space sticking.</td></tr>
-        <tr><td><code>set_star_color(color)</code></td><td>Sets the star tint.</td></tr>
-        <tr><td><code>set_sun(light)</code></td><td>Links the visible sky sun to a <code>DirectionalLight3D</code>. Its position follows the opposite of the light direction.</td></tr>
-        <tr><td><code>clear_sun()</code></td><td>Disables the visible sun without changing scene lighting.</td></tr>
-        <tr><td><code>set_sun_color(color)</code></td><td>Sets the sun disc and glow tint.</td></tr>
-        <tr><td><code>set_sun_size(value)</code></td><td>Sets the projected angular size of the sun, clamped to 0.005..0.20.</td></tr>
-        <tr><td><code>set_sun_glow(value)</code></td><td>Sets the low-cost layered glow strength from 0..1.</td></tr>
-        <tr><td><code>set_sun_softness(value)</code></td><td>Controls how smoothly the sun disc blends into its glow from 0..1. Use 1.0 for a general smooth game look, and lower values for sharper pixel/voxel skies.</td></tr>
+        <tr><td><code>add_object(object)</code></td><td>Adds a visible sky object. The first two circle/quad objects map to the optimized sky-body renderer; stars are drawn as one procedural field.</td></tr>
+        <tr><td><code>clear_objects()</code></td><td>Clears all explicit sky objects.</td></tr>
+        <tr><td><code>set_stars(strength, count)</code></td><td>Legacy shortcut for stars. Prefer <code>SkyObject</code> with <code>SkyShape.stars()</code>.</td></tr>
+        <tr><td><code>set_star_color(color)</code></td><td>Legacy shortcut for star tint.</td></tr>
+      </table>
+
+      <h4>SkyObject</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>SkyObject.create(name)</code></td><td>Creates a configurable object to render in the sky.</td></tr>
+        <tr><td><code>set_shape(SkyShape.circle())</code></td><td>Draws a round sky object. Use this for bright discs, planets, moons, portals, or stylized lights.</td></tr>
+        <tr><td><code>set_shape(SkyShape.quad())</code></td><td>Reserved for future image/quad rendering. Currently uses the same optimized disc path.</td></tr>
+        <tr><td><code>set_shape(SkyShape.stars())</code></td><td>Draws one procedural star field object; do not create one object per star.</td></tr>
+        <tr><td><code>follow_light(light)</code></td><td>Places the sky object opposite a <code>DirectionalLight3D</code>'s ray direction.</td></tr>
+        <tr><td><code>set_direction(x, y, z)</code></td><td>Places the first optimized sky object at a fixed world-space sky direction when it does not follow a light.</td></tr>
+        <tr><td><code>set_color(color)</code></td><td>Sets the object tint.</td></tr>
+        <tr><td><code>set_size(value)</code></td><td>Sets projected angular size, clamped to 0.005..0.20.</td></tr>
+        <tr><td><code>set_glow(value)</code></td><td>Sets glow strength from 0..1.</td></tr>
+        <tr><td><code>set_softness(value)</code> / <code>set_blur(value)</code></td><td>Controls edge and halo softness.</td></tr>
+        <tr><td><code>set_strength(value)</code> / <code>set_count(value)</code></td><td>Controls procedural star fields.</td></tr>
       </table>
 
       <h4>Fog</h4>
@@ -1020,14 +1032,35 @@ sun: <span class="tok-type">DirectionalLight3D</span> = DirectionalLight3D.creat
 sun.set_direction(<span class="tok-num">-0.55</span>, <span class="tok-num">-1.0</span>, <span class="tok-num">-0.35</span>)
 sun.set_shadows(ShadowSettings.high())
 scene.add_child(sun)
+moon: <span class="tok-type">DirectionalLight3D</span> = DirectionalLight3D.create(<span class="tok-str">"Moon"</span>)
+moon.set_direction(<span class="tok-num">0.55</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0.35</span>)
+scene.add_child(moon)
 
-sky.set_sun(sun)
-sky.set_sun_color(Color.rgb(<span class="tok-num">1.0</span>, <span class="tok-num">0.72</span>, <span class="tok-num">0.45</span>))
-sky.set_sun_size(<span class="tok-num">0.045</span>)
-sky.set_sun_glow(<span class="tok-num">0.78</span>)
-sky.set_sun_softness(<span class="tok-num">0.85</span>)
-sky.set_star_color(Color.rgb(<span class="tok-num">0.83</span>, <span class="tok-num">0.86</span>, <span class="tok-num">0.94</span>))
-sky.set_stars(<span class="tok-num">0.55</span>, <span class="tok-num">90</span>)
+day_object: <span class="tok-type">SkyObject</span> = SkyObject.create(<span class="tok-str">"DaySkyObject"</span>)
+day_object.follow_light(sun)
+day_object.set_shape(SkyShape.circle())
+day_object.set_color(Color.rgb(<span class="tok-num">1.0</span>, <span class="tok-num">0.72</span>, <span class="tok-num">0.45</span>))
+day_object.set_size(<span class="tok-num">0.045</span>)
+day_object.set_glow(<span class="tok-num">0.78</span>)
+day_object.set_softness(<span class="tok-num">0.85</span>)
+
+night_object: <span class="tok-type">SkyObject</span> = SkyObject.create(<span class="tok-str">"NightSkyObject"</span>)
+night_object.follow_light(moon)
+night_object.set_shape(SkyShape.circle())
+night_object.set_color(Color.rgb(<span class="tok-num">0.78</span>, <span class="tok-num">0.84</span>, <span class="tok-num">1.0</span>))
+night_object.set_size(<span class="tok-num">0.032</span>)
+night_object.set_glow(<span class="tok-num">0.24</span>)
+night_object.set_softness(<span class="tok-num">0.70</span>)
+
+stars: <span class="tok-type">SkyObject</span> = SkyObject.create(<span class="tok-str">"Stars"</span>)
+stars.set_shape(SkyShape.stars())
+stars.set_color(Color.rgb(<span class="tok-num">0.83</span>, <span class="tok-num">0.86</span>, <span class="tok-num">0.94</span>))
+stars.set_strength(<span class="tok-num">0.55</span>)
+stars.set_count(<span class="tok-num">90</span>)
+
+sky.add_object(day_object)
+sky.add_object(night_object)
+sky.add_object(stars)
 env.set_sky(sky)
 env.set_fog(Fog.view_distance(sky.fog_color(), <span class="tok-num">480.0</span>))
 scene.set_environment(env)</code></pre>
@@ -1035,13 +1068,14 @@ scene.set_environment(env)</code></pre>
 fog: <span class="tok-type">Fog</span> = Fog.linear(sky.fog_color(), <span class="tok-num">350.0</span>, <span class="tok-num">480.0</span>)
 fog.set_shape(FogShape.depth())
 env.set_fog(fog)</code></pre>
-      <div class="note">The Vulkan renderer draws a per-pixel world-space gradient before world meshes, with subtle dithering to prevent color banding. The linked sun and stars stay fixed to world directions instead of the screen.</div>
+      <div class="note">The Vulkan renderer draws a per-pixel world-space gradient before world meshes, with subtle dithering to prevent color banding. Sky objects are generic: the engine does not know whether an object is a sun, moon, planet, portal, or star field.</div>
     </section>
     <section id="day-cycle">
       <h2>DayCycle</h2>
       <p class="lead">Optional scene-owned time-of-day animation for a sun, sky colors, stars, light, and fog. Nothing changes automatically until a cycle is explicitly attached.</p>
 
-      <pre><code>cycle: <span class="tok-type">DayCycle</span> = DayCycle.create(sun)
+      <pre><code>moon: <span class="tok-type">DirectionalLight3D</span> = DirectionalLight3D.create(<span class="tok-str">"Moon"</span>)
+cycle: <span class="tok-type">DayCycle</span> = DayCycle.create(sun, moon)
 cycle.set_duration(<span class="tok-num">120.0</span>)
 cycle.set_time(<span class="tok-num">0.25</span>)
 scene.set_day_cycle(cycle)</code></pre>
@@ -1049,8 +1083,10 @@ scene.set_day_cycle(cycle)</code></pre>
       <h4>DayCycle</h4>
       <table>
         <tr><th>Method</th><th>Description</th></tr>
-        <tr><td><code>DayCycle.create()</code></td><td>Creates a cycle; assign its sun later with <code>set_sun()</code>.</td></tr>
+        <tr><td><code>DayCycle.create()</code></td><td>Creates a cycle; assign its day light later with <code>set_sun()</code>.</td></tr>
         <tr><td><code>DayCycle.create(sun)</code></td><td>Creates a cycle controlling the supplied directional light.</td></tr>
+        <tr><td><code>DayCycle.create(sun, moon)</code></td><td>Creates a cycle controlling sun and moon lights, switching the active directional light by intensity.</td></tr>
+        <tr><td><code>set_sun(light)</code> / <code>set_moon(light)</code></td><td>Assigns the day and optional night directional lights used by the cycle.</td></tr>
         <tr><td><code>set_duration(seconds)</code></td><td>Sets the length of one complete day.</td></tr>
         <tr><td><code>set_time(value)</code></td><td>Sets normalized time in the repeating 0..1 day range.</td></tr>
         <tr><td><code>time()</code></td><td>Returns normalized time in the current day.</td></tr>

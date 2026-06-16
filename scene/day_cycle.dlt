@@ -7,6 +7,7 @@
     elapsed: f32 = 0.0
     duration: f32 = 120.0
     sun_ptr: i64 = 0
+    moon_ptr: i64 = 0
     sun_path_depth: f32 = 0.32
     running: i32 = 1
     update_sky: i32 = 1
@@ -26,6 +27,10 @@ fun day_cycle_abs(value: f32) -> f32:
         return 0.0 - value
     return value
 
+fun day_cycle_smooth01(value: f32) -> f32:
+    t: f32 = clamp(value, 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
 attach DayCycle:
 
     static fun create() -> DayCycle:
@@ -36,8 +41,17 @@ attach DayCycle:
         cycle.sun_ptr = sun as i64
         return cycle
 
+    static fun create(sun: DirectionalLight3D, moon: DirectionalLight3D) -> DayCycle:
+        cycle: DayCycle = DayCycle.create(sun)
+        cycle.moon_ptr = moon as i64
+        return cycle
+
     fun set_sun(self, sun: DirectionalLight3D) -> DayCycle:
         self.sun_ptr = sun as i64
+        return self
+
+    fun set_moon(self, moon: DirectionalLight3D) -> DayCycle:
+        self.moon_ptr = moon as i64
         return self
 
     fun set_duration(self, seconds: f32) -> DayCycle:
@@ -60,6 +74,18 @@ attach DayCycle:
         if self.duration <= 0.0:
             return 0.0
         return self.elapsed / self.duration
+
+    fun active_light(self) -> DirectionalLight3D:
+        if self.sun_ptr == 0:
+            if self.moon_ptr != 0:
+                return self.moon_ptr as DirectionalLight3D
+            return self.sun_ptr as DirectionalLight3D
+        sun: DirectionalLight3D = self.sun_ptr as DirectionalLight3D
+        if self.moon_ptr != 0:
+            moon: DirectionalLight3D = self.moon_ptr as DirectionalLight3D
+            if moon.intensity > sun.intensity:
+                return moon
+        return sun
 
     fun set_sun_path_depth(self, depth: f32) -> DayCycle:
         self.sun_path_depth = clamp(depth, 0.0 - 1.0, 1.0)
@@ -112,24 +138,37 @@ attach DayCycle:
 
         sun: DirectionalLight3D = self.sun_ptr as DirectionalLight3D
         sun.set_direction(0.0 - sun_x, 0.0 - sun_y, 0.0 - self.sun_path_depth)
+        moonlight: f32 = day_cycle_smooth01(((0.0 - sun_y) - 0.08) / 0.38)
+        if self.moon_ptr != 0:
+            moon: DirectionalLight3D = self.moon_ptr as DirectionalLight3D
+            moon.set_direction(sun_x, sun_y, 0.0 - self.sun_path_depth)
 
-        daylight: f32 = clamp((sun_y + 0.12) / 0.32, 0.0, 1.0)
-        high_sun: f32 = clamp(sun_y * 1.45, 0.0, 1.0)
-        horizon_proximity: f32 = clamp(1.0 - day_cycle_abs(sun_y) * 4.5, 0.0, 1.0)
-        twilight: f32 = horizon_proximity * clamp((sun_y + 0.16) / 0.16, 0.0, 1.0)
+        daylight: f32 = day_cycle_smooth01((sun_y + 0.12) / 0.32)
+        high_sun: f32 = day_cycle_smooth01(sun_y * 1.45)
+        horizon_proximity: f32 = day_cycle_smooth01(1.0 - day_cycle_abs(sun_y) * 4.5)
+        twilight: f32 = horizon_proximity * day_cycle_smooth01((sun_y + 0.16) / 0.16)
 
         warm_sun: Color = Color.rgb(1.0, 0.55, 0.34)
         noon_sun: Color = Color.rgb(1.0, 0.94, 0.82)
         sun_color: Color = day_cycle_color_lerp(warm_sun, noon_sun, high_sun)
+        moon_color: Color = Color.rgb(0.48, 0.58, 0.82)
 
         if self.update_light == 1:
             sun.set_color(sun_color)
             sun.set_intensity(lerp(0.0, 1.05, daylight))
             sun.set_ambient(lerp(0.04, 0.42, daylight))
+            if self.moon_ptr != 0:
+                moon_light: DirectionalLight3D = self.moon_ptr as DirectionalLight3D
+                moon_light.set_color(moon_color)
+                moon_light.set_intensity(lerp(0.0, 0.22, moonlight))
+                moon_light.set_ambient(lerp(0.02, 0.13, moonlight))
 
         if self.update_sky == 1:
             sky: Sky = env.sky
-            sky.set_sun(sun)
+            sky.ensure_light_object(sun, "DaySkyObject", sun_color, 0.045, 0.78, 0.85)
+            if self.moon_ptr != 0:
+                moon_sky: DirectionalLight3D = self.moon_ptr as DirectionalLight3D
+                sky.ensure_light_object(moon_sky, "NightSkyObject", moon_color, 0.032, 0.24, 0.70)
 
             night_zenith: Color = Color.rgb(0.015, 0.025, 0.080)
             day_zenith: Color = Color.rgb(0.42, 0.57, 0.82)
@@ -149,8 +188,11 @@ attach DayCycle:
             sky.set_zenith(zenith)
             sky.set_horizon(horizon)
             sky.set_lower(lower)
-            sky.set_sun_color(sun_color)
-            sky.set_stars(1.0 - daylight, 110)
+            sky.set_object_color_by_light(sun, sun_color)
+            if self.moon_ptr != 0:
+                moon_color_target: DirectionalLight3D = self.moon_ptr as DirectionalLight3D
+                sky.set_object_color_by_light(moon_color_target, moon_color)
+            sky.set_stars_object(1.0 - daylight, 110, Color.rgb(0.86, 0.89, 0.95))
             env.set_sky(sky)
 
         if self.update_fog == 1:
@@ -192,4 +234,7 @@ attach Scene:
             return
         cycle: DayCycle = self.day_cycle_ptr as DayCycle
         self.env = cycle.update_environment(self.environment(), dt)
+        light: DirectionalLight3D = cycle.active_light()
+        if (light as i64) != 0:
+            self.directional_light_ptr = light as i64
         self.env_initialized = 1
