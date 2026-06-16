@@ -1717,15 +1717,43 @@ attach GpuRendererCore:
 
         base: Color = self._sky_world_color(sky, world_y)
         if sky.sun_glow > 0.0:
-            outer: Color = self._sky_lerp_color(base, sky.sun_color, sky.sun_glow * 0.08)
-            middle: Color = self._sky_lerp_color(base, sky.sun_color, sky.sun_glow * 0.16)
-            inner: Color = self._sky_lerp_color(base, sky.sun_color, sky.sun_glow * 0.32)
-            middle_radius: i32 = (radius as f32 * (1.55 + sky.sun_glow)) as i32
-            inner_radius: i32 = (radius as f32 * (1.15 + sky.sun_glow * 0.45)) as i32
-            self._sky_draw_circle(cmd, att, rect, width, height, center_x, center_y, outer_radius, outer)
-            self._sky_draw_circle(cmd, att, rect, width, height, center_x, center_y, middle_radius, middle)
-            self._sky_draw_circle(cmd, att, rect, width, height, center_x, center_y, inner_radius, inner)
-        self._sky_draw_circle(cmd, att, rect, width, height, center_x, center_y, radius, sky.sun_color)
+            if sky.sun_softness <= 0.0:
+                outer: Color = self._sky_lerp_color(base, sky.sun_color, sky.sun_glow * 0.08)
+                middle: Color = self._sky_lerp_color(base, sky.sun_color, sky.sun_glow * 0.16)
+                inner: Color = self._sky_lerp_color(base, sky.sun_color, sky.sun_glow * 0.32)
+                middle_radius: i32 = (radius as f32 * (1.55 + sky.sun_glow)) as i32
+                inner_radius: i32 = (radius as f32 * (1.15 + sky.sun_glow * 0.45)) as i32
+                self._sky_draw_circle(cmd, att, rect, width, height, center_x, center_y, outer_radius, outer)
+                self._sky_draw_circle(cmd, att, rect, width, height, center_x, center_y, middle_radius, middle)
+                self._sky_draw_circle(cmd, att, rect, width, height, center_x, center_y, inner_radius, inner)
+            else:
+                ring_count: i32 = 5 + (sky.sun_softness * 7.0) as i32
+                if ring_count < 5:
+                    ring_count = 5
+                if ring_count > 12:
+                    ring_count = 12
+                ring: i32 = ring_count
+                outer_f: f32 = outer_radius as f32
+                core_f: f32 = radius as f32 * (1.0 - sky.sun_softness * 0.22)
+                if core_f < 2.0:
+                    core_f = 2.0
+                while ring > 0:
+                    t: f32 = (ring as f32) / (ring_count as f32)
+                    inv: f32 = 1.0 - t
+                    rr: i32 = (core_f + (outer_f - core_f) * t) as i32
+                    strength: f32 = sky.sun_glow * (0.055 + inv * inv * 0.42)
+                    col: Color = self._sky_lerp_color(base, sky.sun_color, strength)
+                    self._sky_draw_circle(cmd, att, rect, width, height, center_x, center_y, rr, col)
+                    ring = ring - 1
+                core_halo_radius: i32 = (radius as f32 * (1.0 + sky.sun_softness * 0.28)) as i32
+                core_halo: Color = self._sky_lerp_color(base, sky.sun_color, 0.62 + sky.sun_softness * 0.18)
+                self._sky_draw_circle(cmd, att, rect, width, height, center_x, center_y, core_halo_radius, core_halo)
+        core_radius: i32 = radius
+        if sky.sun_softness > 0.0:
+            core_radius = (radius as f32 * (1.0 - sky.sun_softness * 0.18)) as i32
+            if core_radius < 2:
+                core_radius = 2
+        self._sky_draw_circle(cmd, att, rect, width, height, center_x, center_y, core_radius, sky.sun_color)
 
     fun _record_sky(self, cmd: i64, width: i32, height: i32, sky: Sky, cam_view: i64, cam_proj: i64):
         if sky.enabled() == 0:
@@ -1759,18 +1787,40 @@ attach GpuRendererCore:
 
                     Memory.set(push_data, 0, 128)
                     Memory.copy(push_data, cam_view, 64)
+                    sun_enabled: i32 = 0
+                    sun_dir_x: f32 = 0.0
+                    sun_dir_y: f32 = 1.0
+                    sun_dir_z: f32 = 0.0
+                    if sky.sun_enabled == 1:
+                        if sky.sun_light_ptr != 0:
+                            sun_light: DirectionalLight3D = sky.sun_light_ptr as DirectionalLight3D
+                            if sun_light.active != 0:
+                                sun_enabled = 1
+                                sun_dir_x = 0.0 - sun_light.dir_x
+                                sun_dir_y = 0.0 - sun_light.dir_y
+                                sun_dir_z = 0.0 - sun_light.dir_z
+                    # The sky shader only needs the top-left 3x3 of the view
+                    # matrix. Pack sun data into unused matrix slots to keep
+                    # the sky push constants within Vulkan's 128-byte minimum.
+                    Memory.write_f32(push_data + 12, sun_dir_x)
+                    Memory.write_f32(push_data + 28, sun_dir_y)
+                    Memory.write_f32(push_data + 44, sun_dir_z)
+                    Memory.write_f32(push_data + 48, sky.sun_color.r)
+                    Memory.write_f32(push_data + 52, sky.sun_color.g)
+                    Memory.write_f32(push_data + 56, sky.sun_color.b)
+                    Memory.write_f32(push_data + 60, sun_enabled as f32)
                     Memory.write_f32(push_data + 64, sky.zenith_color.r)
                     Memory.write_f32(push_data + 68, sky.zenith_color.g)
                     Memory.write_f32(push_data + 72, sky.zenith_color.b)
-                    Memory.write_f32(push_data + 76, sky.zenith_color.a)
+                    Memory.write_f32(push_data + 76, sky.sun_size)
                     Memory.write_f32(push_data + 80, sky.horizon_color.r)
                     Memory.write_f32(push_data + 84, sky.horizon_color.g)
                     Memory.write_f32(push_data + 88, sky.horizon_color.b)
-                    Memory.write_f32(push_data + 92, sky.horizon_color.a)
+                    Memory.write_f32(push_data + 92, sky.sun_glow)
                     Memory.write_f32(push_data + 96, sky.lower_color.r)
                     Memory.write_f32(push_data + 100, sky.lower_color.g)
                     Memory.write_f32(push_data + 104, sky.lower_color.b)
-                    Memory.write_f32(push_data + 108, sky.lower_color.a)
+                    Memory.write_f32(push_data + 108, sky.sun_softness)
                     Memory.write_f32(push_data + 112, Memory.read_f32(cam_proj))
                     Memory.write_f32(push_data + 116, Memory.read_f32(cam_proj + 20))
                     Memory.write_f32(push_data + 120, width as f32)
@@ -1788,7 +1838,6 @@ attach GpuRendererCore:
         Memory.set(rect, 0, 24)
 
         self._sky_draw_stars(cmd, att, rect, width, height, sky, cam_view, cam_proj)
-        self._sky_draw_sun(cmd, att, rect, width, height, sky, cam_view, cam_proj)
     fun render_frame(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32) -> void:
         self.render_frame_scaled_with_environment(rp, sc, device, gfx_queue, present_queue, cam_view, cam_proj, width, height, width, height, Environment.create())
 

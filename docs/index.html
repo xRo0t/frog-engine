@@ -996,6 +996,7 @@ camera.add_child(raycast)
         <tr><td><code>set_sun_color(color)</code></td><td>Sets the sun disc and glow tint.</td></tr>
         <tr><td><code>set_sun_size(value)</code></td><td>Sets the projected angular size of the sun, clamped to 0.005..0.20.</td></tr>
         <tr><td><code>set_sun_glow(value)</code></td><td>Sets the low-cost layered glow strength from 0..1.</td></tr>
+        <tr><td><code>set_sun_softness(value)</code></td><td>Controls how smoothly the sun disc blends into its glow from 0..1. Use 1.0 for a general smooth game look, and lower values for sharper pixel/voxel skies.</td></tr>
       </table>
 
       <h4>Fog</h4>
@@ -1021,9 +1022,10 @@ sun.set_shadows(ShadowSettings.high())
 scene.add_child(sun)
 
 sky.set_sun(sun)
-sky.set_sun_color(Color.rgb(<span class="tok-num">1.0</span>, <span class="tok-num">0.84</span>, <span class="tok-num">0.58</span>))
-sky.set_sun_size(<span class="tok-num">0.035</span>)
-sky.set_sun_glow(<span class="tok-num">0.70</span>)
+sky.set_sun_color(Color.rgb(<span class="tok-num">1.0</span>, <span class="tok-num">0.72</span>, <span class="tok-num">0.45</span>))
+sky.set_sun_size(<span class="tok-num">0.045</span>)
+sky.set_sun_glow(<span class="tok-num">0.78</span>)
+sky.set_sun_softness(<span class="tok-num">0.85</span>)
 sky.set_star_color(Color.rgb(<span class="tok-num">0.83</span>, <span class="tok-num">0.86</span>, <span class="tok-num">0.94</span>))
 sky.set_stars(<span class="tok-num">0.55</span>, <span class="tok-num">90</span>)
 env.set_sky(sky)

@@ -38,6 +38,27 @@ void main() {
         color = mix(sky.horizonColor.rgb, sky.lowerColor.rgb, -worldY);
     }
 
+    float sunEnabled = sky.view[3][3];
+    if (sunEnabled > 0.5) {
+        vec3 sunDirection = normalize(vec3(sky.view[0][3], sky.view[1][3], sky.view[2][3]));
+        vec3 sunColor = sky.view[3].xyz;
+        float cosAngle = clamp(dot(worldDirection, sunDirection), -1.0, 1.0);
+        float angle = acos(cosAngle);
+        float radius = max(sky.zenithColor.a, 0.001);
+        float glow = clamp(sky.horizonColor.a, 0.0, 1.0);
+        float softness = clamp(sky.lowerColor.a, 0.0, 1.0);
+        float glowRadius = radius * (2.0 + glow * 4.0);
+        float aa = max(fwidth(angle), 0.0006);
+        float edgeSoftness = mix(aa * 1.5, max(radius * 0.45, aa * 2.5), softness);
+
+        float disc = 1.0 - smoothstep(radius - edgeSoftness, radius + edgeSoftness, angle);
+        float halo = 1.0 - smoothstep(radius, glowRadius, angle);
+        halo = halo * halo * glow;
+
+        color = mix(color, sunColor, halo * 0.35);
+        color = mix(color, sunColor, disc);
+    }
+
     float dither = (gradientNoise(gl_FragCoord.xy) - 0.5) / 255.0;
     outColor = vec4(clamp(color + vec3(dither), 0.0, 1.0), 1.0);
 }

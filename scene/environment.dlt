@@ -36,8 +36,9 @@ struct Sky:
     band_count: i32 = 0
     sun_light_ptr: i64 = 0
     sun_color: Color = Color()
-    sun_size: f32 = 0.035
-    sun_glow: f32 = 0.65
+    sun_size: f32 = 0.045
+    sun_glow: f32 = 0.78
+    sun_softness: f32 = 0.85
     sun_enabled: i32 = 0
 
 struct Environment:
@@ -121,9 +122,10 @@ attach Sky:
         sky.star_count = 0
         sky.band_count = 0
         sky.sun_light_ptr = 0
-        sky.sun_color = Color.rgb(1.0, 0.86, 0.62)
-        sky.sun_size = 0.035
-        sky.sun_glow = 0.65
+        sky.sun_color = Color.rgb(1.0, 0.72, 0.45)
+        sky.sun_size = 0.045
+        sky.sun_glow = 0.78
+        sky.sun_softness = 0.85
         sky.sun_enabled = 0
         return sky
 
@@ -204,6 +206,10 @@ attach Sky:
 
     fun set_sun_glow(self, value: f32) -> Sky:
         self.sun_glow = clamp(value, 0.0, 1.0)
+        return self
+
+    fun set_sun_softness(self, value: f32) -> Sky:
+        self.sun_softness = clamp(value, 0.0, 1.0)
         return self
 
     fun fog_color(self) -> Color:
