@@ -1000,11 +1000,13 @@ camera.add_child(raycast)
         <tr><th>Method</th><th>Description</th></tr>
         <tr><td><code>SkyObject.create(name)</code></td><td>Creates a configurable object to render in the sky.</td></tr>
         <tr><td><code>set_shape(SkyShape.circle())</code></td><td>Draws a round sky object. Use this for bright discs, planets, moons, portals, or stylized lights.</td></tr>
-        <tr><td><code>set_shape(SkyShape.quad())</code></td><td>Reserved for future image/quad rendering. Currently uses the same optimized disc path.</td></tr>
+        <tr><td><code>set_shape(SkyShape.quad())</code></td><td>Reserved for explicit rectangular sky sprites. Circle remains the common path for planets, moons, and suns.</td></tr>
         <tr><td><code>set_shape(SkyShape.stars())</code></td><td>Draws one procedural star field object; do not create one object per star.</td></tr>
         <tr><td><code>follow_light(light)</code></td><td>Places the sky object opposite a <code>DirectionalLight3D</code>'s ray direction.</td></tr>
         <tr><td><code>set_direction(x, y, z)</code></td><td>Places the first optimized sky object at a fixed world-space sky direction when it does not follow a light.</td></tr>
         <tr><td><code>set_color(color)</code></td><td>Sets the object tint.</td></tr>
+        <tr><td><code>set_texture(texture)</code></td><td>Uses a loaded <code>Texture2D</code> as the visible sky object core. Useful for authored moons, planets, portals, or stylized discs.</td></tr>
+        <tr><td><code>set_texture_size(value)</code></td><td>Scales only the texture core inside the sky object. Use this when the image should be larger or smaller than the glow/halo.</td></tr>
         <tr><td><code>set_size(value)</code></td><td>Sets projected angular size, clamped to 0.005..0.20.</td></tr>
         <tr><td><code>set_glow(value)</code></td><td>Sets glow strength from 0..1.</td></tr>
         <tr><td><code>set_softness(value)</code> / <code>set_blur(value)</code></td><td>Controls edge and halo softness.</td></tr>
@@ -1036,6 +1038,8 @@ moon: <span class="tok-type">DirectionalLight3D</span> = DirectionalLight3D.crea
 moon.set_direction(<span class="tok-num">0.55</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0.35</span>)
 scene.add_child(moon)
 
+moon_texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/moon.png"</span>, TextureSpec.smooth())
+
 day_object: <span class="tok-type">SkyObject</span> = SkyObject.create(<span class="tok-str">"DaySkyObject"</span>)
 day_object.follow_light(sun)
 day_object.set_shape(SkyShape.circle())
@@ -1051,6 +1055,8 @@ night_object.set_color(Color.rgb(<span class="tok-num">0.78</span>, <span class=
 night_object.set_size(<span class="tok-num">0.032</span>)
 night_object.set_glow(<span class="tok-num">0.24</span>)
 night_object.set_softness(<span class="tok-num">0.70</span>)
+night_object.set_texture(moon_texture)
+night_object.set_texture_size(<span class="tok-num">1.35</span>)
 
 stars: <span class="tok-type">SkyObject</span> = SkyObject.create(<span class="tok-str">"Stars"</span>)
 stars.set_shape(SkyShape.stars())

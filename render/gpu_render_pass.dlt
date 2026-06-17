@@ -496,7 +496,7 @@ attach RenderPass:
         Memory.write_ptr(stages + 88, 0)
 
         # Vertex input:
-        # binding 0: pos(3f) + color(3f) + uv(2f), per vertex, stride 32
+        # binding 0: pos(3f) + normal(3f) + color(3f) + uv(2f), per vertex
         # binding 1: model matrix + material vec4, per instance, stride 80
         # binding 2: global light matrix + shadow params, stride 0
         bind: i64 = Memory.malloc_zeroed(36)
@@ -504,7 +504,7 @@ attach RenderPass:
             Memory.free(stages)
             return 0
         Memory.write_i32(bind, 0)
-        Memory.write_i32(bind + 4, 32)
+        Memory.write_i32(bind + 4, FROG_GPU_VERTEX_STRIDE)
         Memory.write_i32(bind + 8, 0)
         Memory.write_i32(bind + 12, 1)
         Memory.write_i32(bind + 16, 80)
@@ -513,7 +513,7 @@ attach RenderPass:
         Memory.write_i32(bind + 28, 0)
         Memory.write_i32(bind + 32, 1)
 
-        attrs: i64 = Memory.malloc_zeroed(208)
+        attrs: i64 = Memory.malloc_zeroed(224)
         if attrs == 0:
             Memory.free(stages)
             Memory.free(bind)
@@ -523,43 +523,48 @@ attach RenderPass:
         Memory.write_i32(attrs + 4, 0)
         Memory.write_i32(attrs + 8, 106)
         Memory.write_i32(attrs + 12, 0)
-        # Color attr (loc=1, R32G32B32=106, offset=12)
+        # Normal attr (loc=1, R32G32B32=106, offset=12)
         Memory.write_i32(attrs + 16, 1)
         Memory.write_i32(attrs + 20, 0)
         Memory.write_i32(attrs + 24, 106)
         Memory.write_i32(attrs + 28, 12)
-        # Model matrix columns (loc=2..5, binding=1, R32G32B32A32=109)
+        # Color attr (loc=2, R32G32B32=106, offset=24)
         Memory.write_i32(attrs + 32, 2)
-        Memory.write_i32(attrs + 36, 1)
-        Memory.write_i32(attrs + 40, 109)
-        Memory.write_i32(attrs + 44, 0)
+        Memory.write_i32(attrs + 36, 0)
+        Memory.write_i32(attrs + 40, 106)
+        Memory.write_i32(attrs + 44, 24)
+        # Model matrix columns (loc=3..6, binding=1, R32G32B32A32=109)
         Memory.write_i32(attrs + 48, 3)
         Memory.write_i32(attrs + 52, 1)
         Memory.write_i32(attrs + 56, 109)
-        Memory.write_i32(attrs + 60, 16)
+        Memory.write_i32(attrs + 60, 0)
         Memory.write_i32(attrs + 64, 4)
         Memory.write_i32(attrs + 68, 1)
         Memory.write_i32(attrs + 72, 109)
-        Memory.write_i32(attrs + 76, 32)
+        Memory.write_i32(attrs + 76, 16)
         Memory.write_i32(attrs + 80, 5)
         Memory.write_i32(attrs + 84, 1)
         Memory.write_i32(attrs + 88, 109)
-        Memory.write_i32(attrs + 92, 48)
-        # UV attr (loc=6, binding=0, R32G32_SFLOAT=103, offset=24)
+        Memory.write_i32(attrs + 92, 32)
         Memory.write_i32(attrs + 96, 6)
-        Memory.write_i32(attrs + 100, 0)
-        Memory.write_i32(attrs + 104, 103)
-        Memory.write_i32(attrs + 108, 24)
-        # Material params (loc=7, binding=1, R32G32B32A32=109, offset=64)
+        Memory.write_i32(attrs + 100, 1)
+        Memory.write_i32(attrs + 104, 109)
+        Memory.write_i32(attrs + 108, 48)
+        # UV attr (loc=7, binding=0, R32G32_SFLOAT=103, offset=36)
         Memory.write_i32(attrs + 112, 7)
-        Memory.write_i32(attrs + 116, 1)
-        Memory.write_i32(attrs + 120, 109)
-        Memory.write_i32(attrs + 124, 64)
-        # Light VP columns (loc=8..11) and shadow params (loc=12), binding 2.
+        Memory.write_i32(attrs + 116, 0)
+        Memory.write_i32(attrs + 120, 103)
+        Memory.write_i32(attrs + 124, 36)
+        # Material params (loc=8, binding=1, R32G32B32A32=109, offset=64)
+        Memory.write_i32(attrs + 128, 8)
+        Memory.write_i32(attrs + 132, 1)
+        Memory.write_i32(attrs + 136, 109)
+        Memory.write_i32(attrs + 140, 64)
+        # Light VP columns (loc=9..12) and shadow params (loc=13), binding 2.
         sai: i32 = 0
         while sai < 5:
-            soff: i64 = 128 + (sai as i64) * 16
-            Memory.write_i32(attrs + soff, 8 + sai)
+            soff: i64 = 144 + (sai as i64) * 16
+            Memory.write_i32(attrs + soff, 9 + sai)
             Memory.write_i32(attrs + soff + 4, 2)
             Memory.write_i32(attrs + soff + 8, 109)
             Memory.write_i32(attrs + soff + 12, sai * 16)
@@ -576,10 +581,10 @@ attach RenderPass:
         Memory.write_i32(vi_ci + 16, 0)
         Memory.write_i32(vi_ci + 20, 3)
         Memory.write_ptr(vi_ci + 24, bind)
-        Memory.write_i32(vi_ci + 32, 13)
+        Memory.write_i32(vi_ci + 32, 14)
         Memory.write_ptr(vi_ci + 40, attrs)
 
-        # Input assembly (32 bytes)
+        # Input assembly
         ia_ci: i64 = Memory.malloc_zeroed(32)
         if ia_ci == 0:
             Memory.free(stages)

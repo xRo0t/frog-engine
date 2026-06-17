@@ -31,13 +31,16 @@ fun frog_sky_pass_create_shader_module(device: i64, code: i64, size: i64) -> i64
         return 0
     return shader_handle
 
-fun frog_sky_pass_create_pipeline_layout(device: i64) -> i32:
+fun frog_sky_pass_create_pipeline_layout(device: i64, desc_set_layout: i64) -> i32:
     pc_range: i64 = Memory.malloc_zeroed(12)
+    dsl_arr: i64 = 0
     ci: i64 = Memory.malloc_zeroed(48)
     out: i64 = Memory.malloc_zeroed(8)
     if pc_range == 0 or ci == 0 or out == 0:
         if pc_range != 0:
             Memory.free(pc_range)
+        if dsl_arr != 0:
+            Memory.free(dsl_arr)
         if ci != 0:
             Memory.free(ci)
         if out != 0:
@@ -47,6 +50,16 @@ fun frog_sky_pass_create_pipeline_layout(device: i64) -> i32:
     Memory.write_i32(pc_range + 4, 0)
     Memory.write_i32(pc_range + 8, 128)
     Memory.write_i32(ci, 30)
+    if desc_set_layout != 0:
+        dsl_arr = Memory.malloc_zeroed(8)
+        if dsl_arr == 0:
+            Memory.free(pc_range)
+            Memory.free(ci)
+            Memory.free(out)
+            return 0
+        Memory.write_ptr(dsl_arr, desc_set_layout)
+        Memory.write_i32(ci + 20, 1)
+        Memory.write_ptr(ci + 24, dsl_arr)
     Memory.write_i32(ci + 32, 1)
     Memory.write_ptr(ci + 40, pc_range)
     result: i32 = vkCreatePipelineLayout(device, ci, 0, out)
@@ -54,6 +67,8 @@ fun frog_sky_pass_create_pipeline_layout(device: i64) -> i32:
     Memory.free(out)
     Memory.free(ci)
     Memory.free(pc_range)
+    if dsl_arr != 0:
+        Memory.free(dsl_arr)
     if result != 0:
         return 0
     return 1
@@ -108,6 +123,13 @@ fun frog_sky_pass_create_pipeline(device: i64, render_pass: i64) -> i32:
     Memory.write_i32(depth + 20, 0)
     Memory.write_i32(depth + 24, 0)
 
+    Memory.write_i32(color_attachment, 1)     # blendEnable
+    Memory.write_i32(color_attachment + 4, 6) # SRC_ALPHA
+    Memory.write_i32(color_attachment + 8, 7) # ONE_MINUS_SRC_ALPHA
+    Memory.write_i32(color_attachment + 12, 0)
+    Memory.write_i32(color_attachment + 16, 1)
+    Memory.write_i32(color_attachment + 20, 0)
+    Memory.write_i32(color_attachment + 24, 0)
     Memory.write_i32(color_attachment + 28, 15)
     Memory.write_i32(blend, 26)
     Memory.write_i32(blend + 28, 1)
@@ -153,12 +175,12 @@ fun frog_sky_pass_create_pipeline(device: i64, render_pass: i64) -> i32:
         return 0
     return 1
 
-fun frog_sky_pass_init(device: i64, render_pass: i64, vert_data: i64, vert_size: i64, frag_data: i64, frag_size: i64) -> i32:
+fun frog_sky_pass_init(device: i64, render_pass: i64, desc_set_layout: i64, vert_data: i64, vert_size: i64, frag_data: i64, frag_size: i64) -> i32:
     g_sky_vert_shader_module = frog_sky_pass_create_shader_module(device, vert_data, vert_size)
     g_sky_frag_shader_module = frog_sky_pass_create_shader_module(device, frag_data, frag_size)
     if g_sky_vert_shader_module == 0 or g_sky_frag_shader_module == 0:
         return 0
-    if frog_sky_pass_create_pipeline_layout(device) == 0:
+    if frog_sky_pass_create_pipeline_layout(device, desc_set_layout) == 0:
         return 0
     if frog_sky_pass_create_pipeline(device, render_pass) == 0:
         return 0

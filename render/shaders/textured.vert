@@ -1,18 +1,19 @@
 #version 450
 
 layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec3 inColor;
-layout(location = 2) in vec4 instanceColumn0;
-layout(location = 3) in vec4 instanceColumn1;
-layout(location = 4) in vec4 instanceColumn2;
-layout(location = 5) in vec4 instanceColumn3;
-layout(location = 6) in vec2 inUv;
-layout(location = 7) in vec4 instanceMaterial;
-layout(location = 8) in vec4 shadowColumn0;
-layout(location = 9) in vec4 shadowColumn1;
-layout(location = 10) in vec4 shadowColumn2;
-layout(location = 11) in vec4 shadowColumn3;
-layout(location = 12) in vec4 shadowParams;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec3 inColor;
+layout(location = 3) in vec4 instanceColumn0;
+layout(location = 4) in vec4 instanceColumn1;
+layout(location = 5) in vec4 instanceColumn2;
+layout(location = 6) in vec4 instanceColumn3;
+layout(location = 7) in vec2 inUv;
+layout(location = 8) in vec4 instanceMaterial;
+layout(location = 9) in vec4 shadowColumn0;
+layout(location = 10) in vec4 shadowColumn1;
+layout(location = 11) in vec4 shadowColumn2;
+layout(location = 12) in vec4 shadowColumn3;
+layout(location = 13) in vec4 shadowParams;
 
 layout(location = 0) out vec3 fragmentColor;
 layout(location = 1) out vec2 fragmentUv;
@@ -21,6 +22,7 @@ layout(location = 3) out vec3 fragmentWorldPosition;
 layout(location = 4) flat out vec4 fragmentMaterial;
 layout(location = 5) out vec4 fragmentShadowPosition;
 layout(location = 6) flat out vec4 fragmentShadowParams;
+layout(location = 7) out vec3 fragmentWorldNormal;
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
@@ -59,6 +61,8 @@ void main() {
     fragmentFogDistance = fogDistance;
     fragmentWorldPosition = worldPosition.xyz;
     fragmentMaterial = instanceMaterial;
+    mat3 normalMatrix = transpose(inverse(mat3(model)));
+    fragmentWorldNormal = normalMatrix * inNormal;
     fragmentShadowPosition = mat4(
         shadowColumn0,
         shadowColumn1,

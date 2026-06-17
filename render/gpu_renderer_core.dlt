@@ -51,7 +51,7 @@ fun _frog_mesh_bounds(vertices: i64, vertex_count: i32) -> GpuMeshBounds:
     max_z: f32 = min_z
     i: i32 = 1
     while i < vertex_count:
-        off: i64 = (i as i64) * 32
+        off: i64 = (i as i64) * (FROG_GPU_VERTEX_STRIDE as i64)
         x: f32 = Memory.read_f32(vertices + off)
         y: f32 = Memory.read_f32(vertices + off + 4)
         z: f32 = Memory.read_f32(vertices + off + 8)
@@ -1101,7 +1101,7 @@ attach GpuRendererCore:
             return 0 - 1
         if self.vb_count >= self.vb_capacity:
             self._grow_vb_arrays()
-        data_size: i64 = vertex_count * 32
+        data_size: i64 = (vertex_count as i64) * (FROG_GPU_VERTEX_STRIDE as i64)
         uploaded: GpuBufferUpload = self._upload_buffer(vertices, data_size, 128)
         if uploaded.ok == 0:
             return 0 - 1
@@ -1129,7 +1129,7 @@ attach GpuRendererCore:
             return 0 - 1
         if self.vb_count >= self.vb_capacity:
             self._grow_vb_arrays()
-        vb_size: i64 = (vertex_count as i64) * 32
+        vb_size: i64 = (vertex_count as i64) * (FROG_GPU_VERTEX_STRIDE as i64)
         ib_size: i64 = (index_count as i64) * 4
         uploaded_vb: GpuBufferUpload = self._upload_buffer(vertices, vb_size, 128)
         if uploaded_vb.ok == 0:
@@ -1182,7 +1182,7 @@ attach GpuRendererCore:
                             return 0 - 1
             si = si + 1
 
-        vb_size: i64 = (mesh.vertex_count as i64) * 32
+        vb_size: i64 = (mesh.vertex_count as i64) * (FROG_GPU_VERTEX_STRIDE as i64)
         uploaded_vb: GpuBufferUpload = self._upload_buffer(mesh.vertices, vb_size, 128)
         if uploaded_vb.ok == 0:
             return 0 - 1
@@ -1377,6 +1377,15 @@ attach GpuRendererCore:
         if tid >= self.tex_count:
             return self.white_desc_set
         return Memory.read_ptr(self.tex_desc_sets + tid * 8)
+
+    fun texture_descriptor_set(self, tex_id: i32) -> i64:
+        if self.tex_desc_sets == 0:
+            return self.white_desc_set
+        if tex_id < 0:
+            return self.white_desc_set
+        if tex_id >= self.tex_count:
+            return self.white_desc_set
+        return Memory.read_ptr(self.tex_desc_sets + tex_id * 8)
 
     fun destroy_render_scale_target(self):
         if self.scale_framebuffer != 0:
@@ -1762,6 +1771,89 @@ attach GpuRendererCore:
     fun _sky_draw_moon(self, cmd: i64, att: i64, rect: i64, width: i32, height: i32, sky: Sky, cam_view: i64, cam_proj: i64):
         self._sky_draw_light_disc(cmd, att, rect, width, height, sky, cam_view, cam_proj, sky.moon_light_ptr, sky.moon_enabled, sky.moon_color, sky.moon_size, sky.moon_glow, sky.moon_softness)
 
+    fun _record_sky_texture_object(self, cmd: i64, width: i32, height: i32, sky: Sky, cam_view: i64, cam_proj: i64, light_ptr: i64, has_direction: i32, dir_x: f32, dir_y: f32, dir_z: f32, enabled: i32, texture_id: i32, color: Color, size: f32):
+        if enabled == 0:
+            return
+        if texture_id < 0:
+            return
+        if frog_sky_pass_ready() == 0:
+            return
+        sky_pipeline: i64 = frog_sky_pass_pipeline()
+        sky_layout: i64 = frog_sky_pass_layout()
+        if sky_pipeline == 0 or sky_layout == 0:
+            return
+        if cam_view == 0 or cam_proj == 0:
+            return
+
+        world_x: f32 = dir_x
+        world_y: f32 = dir_y
+        world_z: f32 = dir_z
+        active: i32 = 0
+        if light_ptr != 0:
+            light: DirectionalLight3D = light_ptr as DirectionalLight3D
+            if light.active != 0:
+                active = 1
+                world_x = 0.0 - light.dir_x
+                world_y = 0.0 - light.dir_y
+                world_z = 0.0 - light.dir_z
+        else:
+            if has_direction != 0:
+                active = 1
+        if active == 0:
+            return
+
+        desc: i64 = self.texture_descriptor_set(texture_id)
+        if desc == 0:
+            return
+        viewport: i64 = self.scratch_viewport
+        scissor: i64 = self.scratch_scissor
+        push_data: i64 = self.scratch_push_data
+        if viewport == 0 or scissor == 0 or push_data == 0:
+            return
+
+        vkCmdBindPipeline(cmd, 0, sky_pipeline)
+        Memory.write_ptr(self.scratch_desc_arr, desc)
+        vkCmdBindDescriptorSets(cmd, 0, sky_layout, 0, 1, self.scratch_desc_arr, 0, 0)
+
+        Memory.set(viewport, 0, 24)
+        Memory.write_f32(viewport + 8, width as f32)
+        Memory.write_f32(viewport + 12, height as f32)
+        Memory.write_f32(viewport + 20, 1.0)
+        vkCmdSetViewport(cmd, 0, 1, viewport)
+
+        Memory.set(scissor, 0, 16)
+        Memory.write_i32(scissor + 8, width)
+        Memory.write_i32(scissor + 12, height)
+        vkCmdSetScissor(cmd, 0, 1, scissor)
+
+        Memory.set(push_data, 0, 128)
+        Memory.copy(push_data, cam_view, 64)
+        Memory.write_f32(push_data + 12, world_x)
+        Memory.write_f32(push_data + 28, world_y)
+        Memory.write_f32(push_data + 44, world_z)
+        Memory.write_f32(push_data + 48, color.r)
+        Memory.write_f32(push_data + 52, color.g)
+        Memory.write_f32(push_data + 56, color.b)
+        Memory.write_f32(push_data + 60, 2.0)
+        Memory.write_f32(push_data + 64, sky.zenith_color.r)
+        Memory.write_f32(push_data + 68, sky.zenith_color.g)
+        Memory.write_f32(push_data + 72, sky.zenith_color.b)
+        Memory.write_f32(push_data + 76, size)
+        Memory.write_f32(push_data + 80, sky.horizon_color.r)
+        Memory.write_f32(push_data + 84, sky.horizon_color.g)
+        Memory.write_f32(push_data + 88, sky.horizon_color.b)
+        Memory.write_f32(push_data + 92, frog_sky_texture_size(texture_id))
+        Memory.write_f32(push_data + 96, sky.lower_color.r)
+        Memory.write_f32(push_data + 100, sky.lower_color.g)
+        Memory.write_f32(push_data + 104, sky.lower_color.b)
+        Memory.write_f32(push_data + 108, 0.0)
+        Memory.write_f32(push_data + 112, Memory.read_f32(cam_proj))
+        Memory.write_f32(push_data + 116, Memory.read_f32(cam_proj + 20))
+        Memory.write_f32(push_data + 120, width as f32)
+        Memory.write_f32(push_data + 124, height as f32)
+        vkCmdPushConstants(cmd, sky_layout, 16, 0, 128, push_data)
+        vkCmdDraw(cmd, 3, 1, 0, 0)
+
     fun _record_sky(self, cmd: i64, width: i32, height: i32, sky: Sky, cam_view: i64, cam_proj: i64):
         if sky.enabled() == 0:
             return
@@ -1777,6 +1869,10 @@ attach GpuRendererCore:
             sky_layout: i64 = frog_sky_pass_layout()
             if sky_pipeline != 0 and sky_layout != 0:
                 vkCmdBindPipeline(cmd, 0, sky_pipeline)
+                base_desc: i64 = self.texture_descriptor_set(-1)
+                if base_desc != 0:
+                    Memory.write_ptr(self.scratch_desc_arr, base_desc)
+                    vkCmdBindDescriptorSets(cmd, 0, sky_layout, 0, 1, self.scratch_desc_arr, 0, 0)
                 viewport: i64 = self.scratch_viewport
                 scissor: i64 = self.scratch_scissor
                 push_data: i64 = self.scratch_push_data
@@ -1853,6 +1949,8 @@ attach GpuRendererCore:
 
         self._sky_draw_stars(cmd, att, rect, width, height, sky, cam_view, cam_proj)
         self._sky_draw_moon(cmd, att, rect, width, height, sky, cam_view, cam_proj)
+        self._record_sky_texture_object(cmd, width, height, sky, cam_view, cam_proj, sky.sun_light_ptr, sky.sun_has_direction, sky.sun_dir_x, sky.sun_dir_y, sky.sun_dir_z, sky.sun_enabled, sky.sun_texture_id, sky.sun_color, sky.sun_size)
+        self._record_sky_texture_object(cmd, width, height, sky, cam_view, cam_proj, sky.moon_light_ptr, sky.moon_has_direction, sky.moon_dir_x, sky.moon_dir_y, sky.moon_dir_z, sky.moon_enabled, sky.moon_texture_id, sky.moon_color, sky.moon_size)
     fun render_frame(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32) -> void:
         self.render_frame_scaled_with_environment(rp, sc, device, gfx_queue, present_queue, cam_view, cam_proj, width, height, width, height, Environment.create())
 

@@ -186,7 +186,7 @@ attach ShadowPass:
         Memory.write_ptr(stage + 32, entry)
 
         Memory.write_i32(bindings, 0)
-        Memory.write_i32(bindings + 4, 32)
+        Memory.write_i32(bindings + 4, FROG_GPU_VERTEX_STRIDE)
         Memory.write_i32(bindings + 8, 0)
         Memory.write_i32(bindings + 12, 1)
         Memory.write_i32(bindings + 16, 80)

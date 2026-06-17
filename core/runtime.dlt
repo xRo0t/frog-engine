@@ -60,7 +60,7 @@ attach EngineRuntime:
             ctx.cleanup()
             runtime.app.shutdown()
             return runtime
-        if frog_sky_pass_init(ctx.vk_device, render_pass.vk_render_pass, sky_vert_shader.data, sky_vert_shader.size, sky_frag_shader.data, sky_frag_shader.size) == 0:
+        if frog_sky_pass_init(ctx.vk_device, render_pass.vk_render_pass, render_pass.desc_set_layout, sky_vert_shader.data, sky_vert_shader.size, sky_frag_shader.data, sky_frag_shader.size) == 0:
             print("GPU sky pass init failed")
             render_pass.cleanup(ctx.vk_device)
             swapchain.cleanup(ctx.vk_instance, ctx.vk_device)
@@ -254,7 +254,7 @@ attach EngineRuntime:
             swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
             self.ready_flag = 0
             return 0
-        if frog_sky_pass_init(self.ctx.vk_device, render_pass.vk_render_pass, sky_vert_shader.data, sky_vert_shader.size, sky_frag_shader.data, sky_frag_shader.size) == 0:
+        if frog_sky_pass_init(self.ctx.vk_device, render_pass.vk_render_pass, render_pass.desc_set_layout, sky_vert_shader.data, sky_vert_shader.size, sky_frag_shader.data, sky_frag_shader.size) == 0:
             print("GPU sky pass resize failed")
             render_pass.cleanup(self.ctx.vk_device)
             swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)

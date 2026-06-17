@@ -10,6 +10,7 @@ layout(location = 3) in vec3 fragmentWorldPosition;
 layout(location = 4) flat in vec4 fragmentMaterial;
 layout(location = 5) in vec4 fragmentShadowPosition;
 layout(location = 6) flat in vec4 fragmentShadowParams;
+layout(location = 7) in vec3 fragmentWorldNormal;
 
 layout(location = 0) out vec4 outColor;
 
@@ -160,9 +161,12 @@ void main() {
     float lightIntensity = max(pushConstants.lightDirectionIntensity.w, 0.0);
     if (packedLight > 0.5 && emissive.a < 0.5) {
         vec3 lightDirection = normalize(pushConstants.lightDirectionIntensity.xyz);
-        vec3 dx = dFdx(fragmentWorldPosition);
-        vec3 dy = dFdy(fragmentWorldPosition);
-        vec3 normal = normalize(cross(dx, dy));
+        vec3 normal = normalize(fragmentWorldNormal);
+        if (dot(normal, normal) < 0.0001) {
+            vec3 dx = dFdx(fragmentWorldPosition);
+            vec3 dy = dFdy(fragmentWorldPosition);
+            normal = normalize(cross(dx, dy));
+        }
         if (!gl_FrontFacing) {
             normal = -normal;
         }

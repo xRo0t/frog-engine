@@ -1,0 +1,9 @@
+##############################
+# Frog - GPU Vertex Layout
+##############################
+
+const FROG_GPU_VERTEX_STRIDE: i32 = 44
+const FROG_GPU_VERTEX_POS_OFFSET: i32 = 0
+const FROG_GPU_VERTEX_NORMAL_OFFSET: i32 = 12
+const FROG_GPU_VERTEX_COLOR_OFFSET: i32 = 24
+const FROG_GPU_VERTEX_UV_OFFSET: i32 = 36

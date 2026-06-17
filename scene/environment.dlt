@@ -18,6 +18,37 @@ const SKY_OBJECT_SHAPE_QUAD: i32 = 2
 const SKY_OBJECT_SHAPE_STARS: i32 = 3
 const SKY_MAX_OBJECTS: i32 = 8
 const SKY_OBJECT_STRIDE: i32 = 80
+const SKY_TEXTURE_SIZE_CAPACITY: i32 = 4096
+
+static g_sky_texture_sizes: i64 = 0
+
+fun frog_sky_texture_size_store() -> i64:
+    if g_sky_texture_sizes == 0:
+        g_sky_texture_sizes = Memory.malloc_zeroed(SKY_TEXTURE_SIZE_CAPACITY * 4)
+    return g_sky_texture_sizes
+
+fun frog_sky_set_texture_size(texture_id: i32, size: f32):
+    if texture_id < 0:
+        return
+    if texture_id >= SKY_TEXTURE_SIZE_CAPACITY:
+        return
+    store: i64 = frog_sky_texture_size_store()
+    if store == 0:
+        return
+    Memory.write_f32(store + texture_id * 4, size)
+
+fun frog_sky_texture_size(texture_id: i32) -> f32:
+    if texture_id < 0:
+        return 1.0
+    if texture_id >= SKY_TEXTURE_SIZE_CAPACITY:
+        return 1.0
+    store: i64 = frog_sky_texture_size_store()
+    if store == 0:
+        return 1.0
+    value: f32 = Memory.read_f32(store + texture_id * 4)
+    if value <= 0.0:
+        return 1.0
+    return value
 
 struct FogShape:
     value: i32 = FOG_SHAPE_SPHERICAL
@@ -49,6 +80,7 @@ struct SkyObject:
     opacity: f32 = 1.0
     strength: f32 = 1.0
     count: i32 = 0
+    texture_id: i32 = -1
 
 struct Sky:
     mode: i32 = SKY_MODE_NONE
@@ -69,12 +101,18 @@ struct Sky:
     sun_dir_x: f32 = 0.0
     sun_dir_y: f32 = 1.0
     sun_dir_z: f32 = 0.0
+    sun_texture_id: i32 = -1
     moon_light_ptr: i64 = 0
     moon_color: Color = Color()
     moon_size: f32 = 0.032
     moon_glow: f32 = 0.24
     moon_softness: f32 = 0.70
     moon_enabled: i32 = 0
+    moon_has_direction: i32 = 0
+    moon_dir_x: f32 = 0.0
+    moon_dir_y: f32 = 1.0
+    moon_dir_z: f32 = 0.0
+    moon_texture_id: i32 = -1
     object_count: i32 = 0
     primary_object_index: i32 = -1
     primary_light_ptr: i64 = 0
@@ -132,6 +170,7 @@ attach SkyObject:
         obj.opacity = 1.0
         obj.strength = 1.0
         obj.count = 0
+        obj.texture_id = -1
         return obj
 
     fun set_visible(self, visible: i32) -> SkyObject:
@@ -197,6 +236,17 @@ attach SkyObject:
         self.count = value
         if self.count < 0:
             self.count = 0
+        return self
+
+    fun set_texture(self, texture: Texture2D) -> SkyObject:
+        if texture.ready == 1:
+            self.texture_id = texture.texture_id
+        else:
+            self.texture_id = -1
+        return self
+
+    fun set_texture_size(self, value: f32) -> SkyObject:
+        self.strength = clamp(value, 0.05, 8.0)
         return self
 
 attach Fog:
@@ -276,12 +326,18 @@ attach Sky:
         sky.sun_dir_x = 0.0
         sky.sun_dir_y = 1.0
         sky.sun_dir_z = 0.0
+        sky.sun_texture_id = -1
         sky.moon_light_ptr = 0
         sky.moon_color = Color.rgb(0.78, 0.84, 1.0)
         sky.moon_size = 0.032
         sky.moon_glow = 0.24
         sky.moon_softness = 0.70
         sky.moon_enabled = 0
+        sky.moon_has_direction = 0
+        sky.moon_dir_x = 0.0
+        sky.moon_dir_y = 1.0
+        sky.moon_dir_z = 0.0
+        sky.moon_texture_id = -1
         sky.object_count = 0
         sky.primary_object_index = -1
         sky.primary_light_ptr = 0
@@ -365,6 +421,7 @@ attach Sky:
         obj.opacity = Memory.read_f32(off + 64)
         obj.strength = Memory.read_f32(off + 68)
         obj.count = Memory.read_i32(off + 72)
+        obj.texture_id = Memory.read_i32(off + 76)
         return obj
 
     fun set_object_at(self, index: i32, obj: SkyObject) -> Sky:
@@ -389,6 +446,7 @@ attach Sky:
         Memory.write_f32(off + 64, obj.opacity)
         Memory.write_f32(off + 68, obj.strength)
         Memory.write_i32(off + 72, obj.count)
+        Memory.write_i32(off + 76, obj.texture_id)
         return self
 
     fun sync_primary_object(self) -> Sky:
@@ -439,16 +497,24 @@ attach Sky:
                 self.sun_softness = obj.softness + obj.blur * 0.30
                 if self.sun_softness > 1.0:
                     self.sun_softness = 1.0
+                self.sun_texture_id = obj.texture_id
+                frog_sky_set_texture_size(obj.texture_id, obj.strength)
                 self.sun_enabled = obj.enabled
             else:
                 if self.moon_enabled == 0:
                     self.moon_light_ptr = obj.light_ptr
+                    self.moon_has_direction = obj.has_direction
+                    self.moon_dir_x = obj.dir_x
+                    self.moon_dir_y = obj.dir_y
+                    self.moon_dir_z = obj.dir_z
                     self.moon_color = obj.color
                     self.moon_size = obj.size
                     self.moon_glow = obj.glow
                     self.moon_softness = obj.softness + obj.blur * 0.30
                     if self.moon_softness > 1.0:
                         self.moon_softness = 1.0
+                    self.moon_texture_id = obj.texture_id
+                    frog_sky_set_texture_size(obj.texture_id, obj.strength)
                     self.moon_enabled = obj.enabled
         self.sync_primary_object()
         return self
