@@ -1857,8 +1857,6 @@ attach GpuRendererCore:
     fun _record_sky_texture_object(self, cmd: i64, width: i32, height: i32, sky: Sky, cam_view: i64, cam_proj: i64, light_ptr: i64, has_direction: i32, dir_x: f32, dir_y: f32, dir_z: f32, enabled: i32, texture_id: i32, color: Color, size: f32):
         if enabled == 0:
             return
-        if texture_id < 0:
-            return
         if frog_sky_pass_ready() == 0:
             return
         sky_pipeline: i64 = frog_sky_pass_pipeline()
@@ -1885,7 +1883,19 @@ attach GpuRendererCore:
         if active == 0:
             return
 
-        desc: i64 = self.texture_descriptor_set(texture_id)
+        object_glow: f32 = sky.sun_glow
+        object_softness: f32 = sky.sun_softness
+        if light_ptr == sky.moon_light_ptr:
+            object_glow = sky.moon_glow
+            object_softness = sky.moon_softness
+
+        object_mode: f32 = 2.0
+        desc: i64 = 0
+        if texture_id >= 0:
+            desc = self.texture_descriptor_set(texture_id)
+        else:
+            object_mode = 3.0
+            desc = self.texture_descriptor_set(-1)
         if desc == 0:
             return
         viewport: i64 = self.scratch_viewport
@@ -1917,7 +1927,7 @@ attach GpuRendererCore:
         Memory.write_f32(push_data + 48, color.r)
         Memory.write_f32(push_data + 52, color.g)
         Memory.write_f32(push_data + 56, color.b)
-        Memory.write_f32(push_data + 60, 2.0)
+        Memory.write_f32(push_data + 60, object_mode)
         Memory.write_f32(push_data + 64, sky.zenith_color.r)
         Memory.write_f32(push_data + 68, sky.zenith_color.g)
         Memory.write_f32(push_data + 72, sky.zenith_color.b)
@@ -1925,11 +1935,17 @@ attach GpuRendererCore:
         Memory.write_f32(push_data + 80, sky.horizon_color.r)
         Memory.write_f32(push_data + 84, sky.horizon_color.g)
         Memory.write_f32(push_data + 88, sky.horizon_color.b)
-        Memory.write_f32(push_data + 92, frog_sky_texture_size(texture_id))
+        if texture_id >= 0:
+            Memory.write_f32(push_data + 92, frog_sky_texture_size(texture_id))
+        else:
+            Memory.write_f32(push_data + 92, object_glow)
         Memory.write_f32(push_data + 96, sky.lower_color.r)
         Memory.write_f32(push_data + 100, sky.lower_color.g)
         Memory.write_f32(push_data + 104, sky.lower_color.b)
-        Memory.write_f32(push_data + 108, 0.0)
+        if texture_id >= 0:
+            Memory.write_f32(push_data + 108, 0.0)
+        else:
+            Memory.write_f32(push_data + 108, object_softness)
         Memory.write_f32(push_data + 112, Memory.read_f32(cam_proj))
         Memory.write_f32(push_data + 116, Memory.read_f32(cam_proj + 20))
         Memory.write_f32(push_data + 120, width as f32)
@@ -2001,7 +2017,7 @@ attach GpuRendererCore:
                     Memory.write_f32(push_data + 48, sky.sun_color.r)
                     Memory.write_f32(push_data + 52, sky.sun_color.g)
                     Memory.write_f32(push_data + 56, sky.sun_color.b)
-                    Memory.write_f32(push_data + 60, sun_enabled as f32)
+                    Memory.write_f32(push_data + 60, 0.0)
                     Memory.write_f32(push_data + 64, sky.zenith_color.r)
                     Memory.write_f32(push_data + 68, sky.zenith_color.g)
                     Memory.write_f32(push_data + 72, sky.zenith_color.b)
@@ -2031,7 +2047,6 @@ attach GpuRendererCore:
         Memory.set(rect, 0, 24)
 
         self._sky_draw_stars(cmd, att, rect, width, height, sky, cam_view, cam_proj)
-        self._sky_draw_moon(cmd, att, rect, width, height, sky, cam_view, cam_proj)
         self._record_sky_texture_object(cmd, width, height, sky, cam_view, cam_proj, sky.sun_light_ptr, sky.sun_has_direction, sky.sun_dir_x, sky.sun_dir_y, sky.sun_dir_z, sky.sun_enabled, sky.sun_texture_id, sky.sun_color, sky.sun_size)
         self._record_sky_texture_object(cmd, width, height, sky, cam_view, cam_proj, sky.moon_light_ptr, sky.moon_has_direction, sky.moon_dir_x, sky.moon_dir_y, sky.moon_dir_z, sky.moon_enabled, sky.moon_texture_id, sky.moon_color, sky.moon_size)
     fun render_frame(self, rp: RenderPass, sc: Swapchain, device: i64, gfx_queue: i64, present_queue: i64, cam_view: i64, cam_proj: i64, width: i32, height: i32) -> void:

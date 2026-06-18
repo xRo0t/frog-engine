@@ -49,6 +49,29 @@ void main() {
     }
 
     float objectMode = sky.view[3][3];
+    if (objectMode > 2.5) {
+        vec3 objectDirection = normalize(vec3(sky.view[0][3], sky.view[1][3], sky.view[2][3]));
+        vec3 objectColor = sky.view[3].xyz;
+        float cosAngle = clamp(dot(worldDirection, objectDirection), -1.0, 1.0);
+        float angle = acos(cosAngle);
+        float radius = max(sky.zenithColor.a, 0.001);
+        float glow = clamp(sky.horizonColor.a, 0.0, 1.0);
+        float softness = clamp(sky.lowerColor.a, 0.0, 1.0);
+        float aa = max(fwidth(angle), 0.0006);
+        float glowRadius = max(radius + aa * 2.0, radius * (2.0 + glow * 4.0));
+        float edgeSoftness = mix(aa * 1.5, max(radius * 0.45, aa * 2.5), softness);
+
+        float disc = 1.0 - smoothstep(radius - edgeSoftness, radius + edgeSoftness, angle);
+        float halo = 1.0 - smoothstep(radius, glowRadius, angle);
+        halo = halo * halo * glow;
+        float alpha = max(disc, halo * 0.35);
+        if (alpha <= 0.002) {
+            discard;
+        }
+        outColor = vec4(clamp(objectColor, 0.0, 1.0), clamp(alpha, 0.0, 1.0));
+        return;
+    }
+
     if (objectMode > 1.5) {
         vec3 objectDirection = normalize(vec3(sky.view[0][3], sky.view[1][3], sky.view[2][3]));
         float radius = max(sky.zenithColor.a, 0.001);
