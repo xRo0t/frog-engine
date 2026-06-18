@@ -228,7 +228,7 @@ struct GpuRendererCore:
     # Compact render state block:
     # 0 directional light, 8/16/24 shadow instance arrays, 32 capacity,
     # 40/48/56 global arrays, 64/68/72 camera position, 76/80 pitch/yaw.
-    # Shadow globals are 160 bytes: two cascade matrices, params, splits.
+    # Shadow globals are 176 bytes: two cascade matrices, params, splits, filter controls.
     render_state: i64 = 0
 
 attach GpuRendererCore:
@@ -825,19 +825,19 @@ attach GpuRendererCore:
         if ok_all == 1:
             return 1
 
-        zeros: i64 = Memory.malloc_zeroed(160)
+        zeros: i64 = Memory.malloc_zeroed(176)
         if zeros == 0:
             return 0
         slot: i32 = 0
         while slot < 2:
-            uploaded: GpuBufferUpload = self._upload_buffer(zeros, 160, 128)
+            uploaded: GpuBufferUpload = self._upload_buffer(zeros, 176, 128)
             if uploaded.ok == 0:
                 Memory.free(zeros)
                 return 0
             Memory.write_ptr(global_buffers + slot * 8, uploaded.handle)
             Memory.write_ptr(global_memories + slot * 8, uploaded.memory)
             Memory.write_ptr(self.scratch_map_pp, 0)
-            map_result: i32 = vkMapMemory(self.device, uploaded.memory, 0, 160, 0, self.scratch_map_pp)
+            map_result: i32 = vkMapMemory(self.device, uploaded.memory, 0, 176, 0, self.scratch_map_pp)
             mapped: i64 = Memory.read_ptr(self.scratch_map_pp)
             if map_result != 0 or mapped == 0:
                 vkDestroyBuffer(self.device, uploaded.handle, 0)
@@ -885,7 +885,7 @@ attach GpuRendererCore:
     fun _write_shadow_data(self, out: i64) -> i32:
         if out == 0:
             return 0
-        Memory.set(out, 0, 160)
+        Memory.set(out, 0, 176)
         identity: Mat4 = Mat4.identity()
         identity.write_to_ptr(out)
         identity.write_to_ptr(out + 64)
@@ -1044,6 +1044,9 @@ attach GpuRendererCore:
         Memory.write_f32(out + 148, split0)
         Memory.write_f32(out + 152, normalized_bias1)
         Memory.write_f32(out + 156, normalized_normal_bias1)
+        Memory.write_f32(out + 160, light.shadow.filter_quality as f32)
+        Memory.write_f32(out + 164, light.shadow.filter_samples as f32)
+        Memory.write_f32(out + 168, light.shadow.filter_radius)
         return 1
 
     fun _init_retire_queue(self):
@@ -2311,7 +2314,7 @@ attach GpuRendererCore:
         shadow_global_mapped: i64 = Memory.read_ptr(shadow_global_mapped_ptrs + frame_slot * 8)
         if shadow_global_mapped == 0:
             return
-        Memory.copy(shadow_global_mapped, shadow_data, 160)
+        Memory.copy(shadow_global_mapped, shadow_data, 176)
         if rp.shadow.map_size <= 1:
             shadow_enabled = 0
             Memory.write_f32(shadow_global_mapped + 128, 0.0)
@@ -2447,19 +2450,20 @@ attach GpuRendererCore:
                         Memory.write_f32(pc_data + 64, env.fog.color.r)
                         Memory.write_f32(pc_data + 68, env.fog.color.g)
                         Memory.write_f32(pc_data + 72, env.fog.color.b)
-                        Memory.write_f32(pc_data + 76, env.fog.color.a)
+                        Memory.write_f32(pc_data + 76, 0.0)
                         Memory.write_f32(pc_data + 80, env.fog.mode as f32)
                         Memory.write_f32(pc_data + 84, env.fog.start_distance)
                         Memory.write_f32(pc_data + 88, env.fog.end_distance)
                         Memory.write_f32(pc_data + 92, env.fog.density)
                         Memory.write_f32(pc_data + 96, env.fog.shape as f32)
-                        if cam_proj != 0:
-                            Memory.write_f32(pc_data + 100, Memory.read_f32(cam_proj))
-                            Memory.write_f32(pc_data + 104, Memory.read_f32(cam_proj + 20))
+                        if self.render_state != 0:
+                            Memory.write_f32(pc_data + 100, Memory.read_f32(self.render_state + 64))
+                            Memory.write_f32(pc_data + 104, Memory.read_f32(self.render_state + 68))
+                            Memory.write_f32(pc_data + 108, Memory.read_f32(self.render_state + 72))
                         else:
-                            Memory.write_f32(pc_data + 100, 1.0)
-                            Memory.write_f32(pc_data + 104, 1.0)
-                        Memory.write_f32(pc_data + 108, 0.0)
+                            Memory.write_f32(pc_data + 100, 0.0)
+                            Memory.write_f32(pc_data + 104, 0.0)
+                            Memory.write_f32(pc_data + 108, 0.0)
 
                         light_ptr: i64 = 0
                         if self.render_state != 0:
@@ -2470,7 +2474,7 @@ attach GpuRendererCore:
                                 dx: f32 = light.dir_x
                                 dy: f32 = light.dir_y
                                 dz: f32 = light.dir_z
-                                Memory.write_f32(pc_data + 108, _frog_pack_light(light.color, light.ambient))
+                                Memory.write_f32(pc_data + 76, _frog_pack_light(light.color, light.ambient))
                                 Memory.write_f32(pc_data + 112, dx)
                                 Memory.write_f32(pc_data + 116, dy)
                                 Memory.write_f32(pc_data + 120, dz)

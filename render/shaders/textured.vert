@@ -19,6 +19,7 @@ layout(location = 15) in vec4 shadowColumn6;
 layout(location = 16) in vec4 shadowColumn7;
 layout(location = 17) in vec4 shadowParams;
 layout(location = 18) in vec4 shadowSplits;
+layout(location = 19) in vec4 shadowFilter;
 
 layout(location = 0) out vec3 fragmentColor;
 layout(location = 1) out vec2 fragmentUv;
@@ -29,7 +30,8 @@ layout(location = 5) out vec4 fragmentShadowPosition0;
 layout(location = 6) out vec4 fragmentShadowPosition1;
 layout(location = 7) flat out vec4 fragmentShadowParams;
 layout(location = 8) flat out vec4 fragmentShadowSplits;
-layout(location = 9) out vec3 fragmentWorldNormal;
+layout(location = 9) flat out vec4 fragmentShadowFilter;
+layout(location = 10) out vec3 fragmentWorldNormal;
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
@@ -49,23 +51,10 @@ void main() {
     vec4 worldPosition = model * vec4(inPosition, 1.0);
     vec4 clipPosition = pushConstants.viewProjection * worldPosition;
 
-    float projectionX = max(abs(pushConstants.fogShapeProjectionLight.y), 0.0001);
-    float projectionY = max(abs(pushConstants.fogShapeProjectionLight.z), 0.0001);
-    vec3 viewPosition = vec3(
-        clipPosition.x / projectionX,
-        clipPosition.y / projectionY,
-        -clipPosition.w
-    );
-
-    float fogDistance = abs(clipPosition.w);
-    if (pushConstants.fogShapeProjectionLight.x > 0.5) {
-        fogDistance = length(viewPosition);
-    }
-
     gl_Position = clipPosition;
     fragmentColor = inColor;
     fragmentUv = inUv;
-    fragmentFogDistance = fogDistance;
+    fragmentFogDistance = abs(clipPosition.w);
     fragmentWorldPosition = worldPosition.xyz;
     fragmentMaterial = instanceMaterial;
     mat3 normalMatrix = transpose(inverse(mat3(model)));
@@ -84,4 +73,5 @@ void main() {
     ) * worldPosition;
     fragmentShadowParams = shadowParams;
     fragmentShadowSplits = shadowSplits;
+    fragmentShadowFilter = shadowFilter;
 }

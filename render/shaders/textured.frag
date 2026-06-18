@@ -12,7 +12,8 @@ layout(location = 5) in vec4 fragmentShadowPosition0;
 layout(location = 6) in vec4 fragmentShadowPosition1;
 layout(location = 7) flat in vec4 fragmentShadowParams;
 layout(location = 8) flat in vec4 fragmentShadowSplits;
-layout(location = 9) in vec3 fragmentWorldNormal;
+layout(location = 9) flat in vec4 fragmentShadowFilter;
+layout(location = 10) in vec3 fragmentWorldNormal;
 
 layout(location = 0) out vec4 outColor;
 
@@ -25,7 +26,7 @@ layout(push_constant) uniform PushConstants {
 } pushConstants;
 
 vec4 unpackLight() {
-    float packed = max(floor(pushConstants.fogShapeProjectionLight.w + 0.5), 0.0);
+    float packed = max(floor(pushConstants.fogColor.a + 0.5), 0.0);
     float red = mod(packed, 64.0);
     packed = floor(packed / 64.0);
     float green = mod(packed, 64.0);
@@ -34,6 +35,18 @@ vec4 unpackLight() {
     packed = floor(packed / 64.0);
     float ambient = mod(packed, 64.0);
     return vec4(red, green, blue, ambient) / 63.0;
+}
+
+float fogDistanceForFragment() {
+    if (pushConstants.fogShapeProjectionLight.x > 0.5) {
+        vec3 cameraPosition = vec3(
+            pushConstants.fogShapeProjectionLight.y,
+            pushConstants.fogShapeProjectionLight.z,
+            pushConstants.fogShapeProjectionLight.w
+        );
+        return length(fragmentWorldPosition - cameraPosition);
+    }
+    return fragmentFogDistance;
 }
 
 vec4 unpackEmissive() {
@@ -80,7 +93,8 @@ float sampleShadowCascade(
     vec3 lightDirection,
     float bias,
     float normalBias,
-    float softness
+    float softness,
+    float filterQuality
 ) {
     if (shadowPosition.w <= 0.0) {
         return -1.0;
@@ -167,18 +181,53 @@ float sampleShadowCascade(
         vec2( 0.830640, -0.180240)
     );
 
-    int sampleCount = 8;
-    if (clampedSoftness > 0.34) {
+    int qualityLevel = int(clamp(floor(filterQuality + 0.5), 0.0, 3.0));
+    int requestedSamples = int(clamp(floor(fragmentShadowFilter.y + 0.5), 0.0, 40.0));
+    float requestedRadius = clamp(fragmentShadowFilter.z, 0.0, 16.0);
+    int sampleCount = 4;
+    if (qualityLevel == 0) {
+        if (clampedSoftness > 0.67) {
+            sampleCount = 6;
+        }
+    } else if (qualityLevel == 1) {
+        sampleCount = 6;
+        if (clampedSoftness > 0.34) {
+            sampleCount = 8;
+        }
+        if (clampedSoftness > 0.67) {
+            sampleCount = 12;
+        }
+    } else if (qualityLevel == 2) {
+        sampleCount = 8;
+        if (clampedSoftness > 0.34) {
+            sampleCount = 12;
+        }
+        if (clampedSoftness > 0.67) {
+            sampleCount = 16;
+        }
+        if (clampedSoftness > 0.92) {
+            sampleCount = 28;
+        }
+    } else {
         sampleCount = 12;
+        if (clampedSoftness > 0.34) {
+            sampleCount = 20;
+        }
+        if (clampedSoftness > 0.67) {
+            sampleCount = 28;
+        }
+        if (clampedSoftness > 0.92) {
+            sampleCount = 40;
+        }
     }
-    if (clampedSoftness > 0.67) {
-        sampleCount = 16;
-    }
-    if (clampedSoftness > 0.92) {
-        sampleCount = 28;
+    if (requestedSamples > 0) {
+        sampleCount = requestedSamples;
     }
 
     float radius = 0.90 + clampedSoftness * 3.40;
+    if (requestedRadius > 0.0) {
+        radius = requestedRadius;
+    }
     float visibility = 0.0;
     float totalWeight = 0.0;
     for (int index = 0; index < sampleCount; ++index) {
@@ -208,6 +257,7 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
 
     int cascadeCount = int(clamp(floor(fragmentShadowSplits.x + 0.5), 1.0, 2.0));
     float softness = fragmentShadowParams.w;
+    float filterQuality = fragmentShadowFilter.x;
     if (cascadeCount <= 1) {
         float single = sampleShadowCascade(
             fragmentShadowPosition0,
@@ -217,7 +267,8 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
             lightDirection,
             fragmentShadowParams.y,
             fragmentShadowParams.z,
-            softness
+            softness,
+            filterQuality
         );
         if (single < 0.0) {
             return 1.0;
@@ -225,8 +276,9 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
         return single;
     }
 
+    float cascadeDistance = fogDistanceForFragment();
     int cascadeIndex = 0;
-    if (fragmentFogDistance > fragmentShadowSplits.y) {
+    if (cascadeDistance > fragmentShadowSplits.y) {
         cascadeIndex = 1;
     }
 
@@ -237,11 +289,12 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
             vec2(0.0, 0.0),
             vec2(0.5, 0.5),
             normal,
-            lightDirection,
-            fragmentShadowParams.y,
-            fragmentShadowParams.z,
-            softness
-        );
+                lightDirection,
+                fragmentShadowParams.y,
+                fragmentShadowParams.z,
+                softness,
+                filterQuality
+            );
         if (selected < 0.0) {
             selected = sampleShadowCascade(
                 fragmentShadowPosition1,
@@ -251,7 +304,8 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
                 lightDirection,
                 fragmentShadowSplits.z,
                 fragmentShadowSplits.w,
-                softness
+                softness,
+                filterQuality
             );
         }
     } else {
@@ -263,7 +317,8 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
             lightDirection,
             fragmentShadowSplits.z,
             fragmentShadowSplits.w,
-            softness
+            softness,
+            filterQuality
         );
     }
 
@@ -278,7 +333,7 @@ void main() {
     vec4 surfaceColor = vec4(fragmentColor * textureColor.rgb, textureColor.a);
 
     vec4 emissive = unpackEmissive();
-    float packedLight = max(pushConstants.fogShapeProjectionLight.w, 0.0);
+    float packedLight = max(pushConstants.fogColor.a, 0.0);
     float lightIntensity = max(pushConstants.lightDirectionIntensity.w, 0.0);
     if (packedLight > 0.5 && emissive.a < 0.5) {
         vec3 lightDirection = normalize(pushConstants.lightDirectionIntensity.xyz);
@@ -307,13 +362,15 @@ void main() {
     float fogEnd = pushConstants.fogParams.z;
     float fogDensity = max(pushConstants.fogParams.w, 0.0);
 
+    float fogDistance = fogDistanceForFragment();
+
     if (fogMode == 1) {
         float fogRange = max(fogEnd - fogStart, 0.0001);
-        fogFactor = clamp((fragmentFogDistance - fogStart) / fogRange, 0.0, 1.0);
+        fogFactor = clamp((fogDistance - fogStart) / fogRange, 0.0, 1.0);
     } else if (fogMode == 2) {
-        fogFactor = 1.0 - exp(-fogDensity * fragmentFogDistance);
+        fogFactor = 1.0 - exp(-fogDensity * fogDistance);
     } else if (fogMode == 3) {
-        float scaledDistance = fogDensity * fragmentFogDistance;
+        float scaledDistance = fogDensity * fogDistance;
         fogFactor = 1.0 - exp(-(scaledDistance * scaledDistance));
     }
 
