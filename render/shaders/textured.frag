@@ -8,9 +8,11 @@ layout(location = 1) in vec2 fragmentUv;
 layout(location = 2) in float fragmentFogDistance;
 layout(location = 3) in vec3 fragmentWorldPosition;
 layout(location = 4) flat in vec4 fragmentMaterial;
-layout(location = 5) in vec4 fragmentShadowPosition;
-layout(location = 6) flat in vec4 fragmentShadowParams;
-layout(location = 7) in vec3 fragmentWorldNormal;
+layout(location = 5) in vec4 fragmentShadowPosition0;
+layout(location = 6) in vec4 fragmentShadowPosition1;
+layout(location = 7) flat in vec4 fragmentShadowParams;
+layout(location = 8) flat in vec4 fragmentShadowSplits;
+layout(location = 9) in vec3 fragmentWorldNormal;
 
 layout(location = 0) out vec4 outColor;
 
@@ -66,21 +68,31 @@ vec2 receiverPlaneDepthGradient(vec2 uv, float depth) {
     );
 }
 
-float sampleShadow(vec3 normal, vec3 lightDirection) {
-    if (fragmentShadowParams.x < 0.5 || receivesShadow() < 0.5) {
-        return 1.0;
-    }
-    if (fragmentShadowPosition.w <= 0.0) {
-        return 1.0;
+float shadowNoise(vec2 position) {
+    return fract(52.9829189 * fract(dot(position, vec2(0.06711056, 0.00583715))));
+}
+
+float sampleShadowCascade(
+    vec4 shadowPosition,
+    vec2 atlasOffset,
+    vec2 atlasScale,
+    vec3 normal,
+    vec3 lightDirection,
+    float bias,
+    float normalBias,
+    float softness
+) {
+    if (shadowPosition.w <= 0.0) {
+        return -1.0;
     }
 
-    vec3 projected = fragmentShadowPosition.xyz / fragmentShadowPosition.w;
-    vec2 uv = projected.xy * 0.5 + 0.5;
-    if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0) {
-        return 1.0;
+    vec3 projected = shadowPosition.xyz / shadowPosition.w;
+    vec2 localUv = projected.xy * 0.5 + 0.5;
+    if (localUv.x <= 0.0 || localUv.x >= 1.0 || localUv.y <= 0.0 || localUv.y >= 1.0) {
+        return -1.0;
     }
     if (projected.z <= 0.0 || projected.z >= 1.0) {
-        return 1.0;
+        return -1.0;
     }
 
     float normalLight = max(dot(normal, -lightDirection), 0.0);
@@ -90,66 +102,175 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
 
     float sine = sqrt(max(1.0 - normalLight * normalLight, 0.0));
     float slope = min(sine / max(normalLight, 0.08), 6.0);
+    vec2 atlasUv = atlasOffset + localUv * atlasScale;
     vec2 texel = 1.0 / vec2(textureSize(shadowSampler, 0));
-    vec2 receiverGradient = receiverPlaneDepthGradient(uv, projected.z);
-    float receiverFootprint = abs(receiverGradient.x) * texel.x
-        + abs(receiverGradient.y) * texel.y;
-    float receiverBiasLimit = fragmentShadowParams.y * 2.0
-        + fragmentShadowParams.z * 4.0;
+    vec2 localTexel = texel / max(atlasScale, vec2(0.0001));
+    vec2 receiverGradient = receiverPlaneDepthGradient(localUv, projected.z);
+    float receiverFootprint = abs(receiverGradient.x) * localTexel.x
+        + abs(receiverGradient.y) * localTexel.y;
+    float receiverBiasLimit = bias * 2.0 + normalBias * 4.0;
     float receiverBias = min(receiverFootprint * 0.75, receiverBiasLimit);
-    float depthBias = fragmentShadowParams.y
-        + fragmentShadowParams.z * slope
-        + receiverBias;
+    float depthBias = bias + normalBias * slope + receiverBias;
 
-    float softness = clamp(fragmentShadowParams.w, 0.0, 1.0);
-    if (softness <= 0.01) {
-        float visibility = texture(
-            shadowSampler,
-            vec3(uv, projected.z - depthBias)
-        );
-        float grazingWeight = smoothstep(0.025, 0.16, normalLight);
-        return mix(1.0, visibility, grazingWeight);
+    float clampedSoftness = clamp(softness, 0.0, 1.0);
+    float grazingWeight = smoothstep(0.025, 0.16, normalLight);
+    float edgeFade = smoothstep(0.0, 0.035, localUv.x)
+        * smoothstep(0.0, 0.035, localUv.y)
+        * smoothstep(0.0, 0.035, 1.0 - localUv.x)
+        * smoothstep(0.0, 0.035, 1.0 - localUv.y);
+
+    if (clampedSoftness <= 0.01) {
+        float visibility = texture(shadowSampler, vec3(atlasUv, projected.z - depthBias));
+        return mix(1.0, mix(1.0, visibility, grazingWeight), edgeFade);
     }
 
-    const vec2 poissonDisk[12] = vec2[](
-        vec2(-0.326212, -0.405810),
-        vec2(-0.840144, -0.073580),
-        vec2(-0.695914,  0.457137),
-        vec2(-0.203345,  0.620716),
-        vec2( 0.962340, -0.194983),
-        vec2( 0.473434, -0.480026),
-        vec2( 0.519456,  0.767022),
-        vec2( 0.185461, -0.893124),
-        vec2( 0.507431,  0.064425),
-        vec2( 0.896420,  0.412458),
-        vec2(-0.321940, -0.932615),
-        vec2(-0.791559, -0.597710)
+    const vec2 diskSamples[40] = vec2[](
+        vec2( 0.000000,  0.000000),
+        vec2( 0.350000,  0.000000),
+        vec2( 0.247487,  0.247487),
+        vec2( 0.000000,  0.350000),
+        vec2(-0.247487,  0.247487),
+        vec2(-0.350000,  0.000000),
+        vec2(-0.247487, -0.247487),
+        vec2( 0.000000, -0.350000),
+        vec2( 0.247487, -0.247487),
+        vec2( 0.650000,  0.000000),
+        vec2( 0.562917,  0.325000),
+        vec2( 0.325000,  0.562917),
+        vec2( 0.000000,  0.650000),
+        vec2(-0.325000,  0.562917),
+        vec2(-0.562917,  0.325000),
+        vec2(-0.650000,  0.000000),
+        vec2(-0.562917, -0.325000),
+        vec2(-0.325000, -0.562917),
+        vec2( 0.000000, -0.650000),
+        vec2( 0.325000, -0.562917),
+        vec2( 0.562917, -0.325000),
+        vec2( 1.000000,  0.000000),
+        vec2( 0.923880,  0.382683),
+        vec2( 0.707107,  0.707107),
+        vec2( 0.382683,  0.923880),
+        vec2( 0.000000,  1.000000),
+        vec2(-0.382683,  0.923880),
+        vec2(-0.707107,  0.707107),
+        vec2(-0.923880,  0.382683),
+        vec2(-1.000000,  0.000000),
+        vec2(-0.923880, -0.382683),
+        vec2(-0.707107, -0.707107),
+        vec2(-0.382683, -0.923880),
+        vec2( 0.000000, -1.000000),
+        vec2( 0.382683, -0.923880),
+        vec2( 0.707107, -0.707107),
+        vec2( 0.923880, -0.382683),
+        vec2( 0.180240,  0.830640),
+        vec2(-0.830640,  0.180240),
+        vec2( 0.830640, -0.180240)
     );
 
-    int sampleCount = 4;
-    if (softness > 0.34) {
-        sampleCount = 8;
-    }
-    if (softness > 0.67) {
+    int sampleCount = 8;
+    if (clampedSoftness > 0.34) {
         sampleCount = 12;
     }
-
-    float radius = 0.70 + softness * 1.80;
-    float visibility = 0.0;
-    for (int index = 0; index < sampleCount; ++index) {
-        vec2 offset = poissonDisk[index] * texel * radius;
-        float sampleDepth = projected.z
-            + dot(receiverGradient, offset)
-            - depthBias;
-        visibility += texture(shadowSampler, vec3(uv + offset, sampleDepth));
+    if (clampedSoftness > 0.67) {
+        sampleCount = 16;
     }
-    visibility /= float(sampleCount);
+    if (clampedSoftness > 0.92) {
+        sampleCount = 28;
+    }
 
-    // Directional shadow maps lose useful precision when a receiver is
-    // almost parallel to the light. Fade only that unreliable contribution;
-    // direct lighting is already close to zero at the same angle.
-    float grazingWeight = smoothstep(0.025, 0.16, normalLight);
-    return mix(1.0, visibility, grazingWeight);
+    float radius = 0.90 + clampedSoftness * 3.40;
+    float visibility = 0.0;
+    float totalWeight = 0.0;
+    for (int index = 0; index < sampleCount; ++index) {
+        vec2 disk = diskSamples[index];
+        float weight = 1.15 - length(disk) * 0.35;
+        vec2 atlasOffsetSample = disk * texel * radius;
+        vec2 localOffsetSample = atlasOffsetSample / max(atlasScale, vec2(0.0001));
+        float sampleDepth = projected.z
+            + dot(receiverGradient, localOffsetSample)
+            - depthBias;
+        visibility += texture(shadowSampler, vec3(atlasUv + atlasOffsetSample, sampleDepth)) * weight;
+        totalWeight += weight;
+    }
+    if (totalWeight > 0.0) {
+        visibility /= totalWeight;
+    } else {
+        visibility = texture(shadowSampler, vec3(atlasUv, projected.z - depthBias));
+    }
+
+    return mix(1.0, mix(1.0, visibility, grazingWeight), edgeFade);
+}
+
+float sampleShadow(vec3 normal, vec3 lightDirection) {
+    if (fragmentShadowParams.x < 0.5 || receivesShadow() < 0.5) {
+        return 1.0;
+    }
+
+    int cascadeCount = int(clamp(floor(fragmentShadowSplits.x + 0.5), 1.0, 2.0));
+    float softness = fragmentShadowParams.w;
+    if (cascadeCount <= 1) {
+        float single = sampleShadowCascade(
+            fragmentShadowPosition0,
+            vec2(0.0, 0.0),
+            vec2(1.0, 1.0),
+            normal,
+            lightDirection,
+            fragmentShadowParams.y,
+            fragmentShadowParams.z,
+            softness
+        );
+        if (single < 0.0) {
+            return 1.0;
+        }
+        return single;
+    }
+
+    int cascadeIndex = 0;
+    if (fragmentFogDistance > fragmentShadowSplits.y) {
+        cascadeIndex = 1;
+    }
+
+    float selected = -1.0;
+    if (cascadeIndex == 0) {
+        selected = sampleShadowCascade(
+            fragmentShadowPosition0,
+            vec2(0.0, 0.0),
+            vec2(0.5, 0.5),
+            normal,
+            lightDirection,
+            fragmentShadowParams.y,
+            fragmentShadowParams.z,
+            softness
+        );
+        if (selected < 0.0) {
+            selected = sampleShadowCascade(
+                fragmentShadowPosition1,
+                vec2(0.5, 0.0),
+                vec2(0.5, 0.5),
+                normal,
+                lightDirection,
+                fragmentShadowSplits.z,
+                fragmentShadowSplits.w,
+                softness
+            );
+        }
+    } else {
+        selected = sampleShadowCascade(
+            fragmentShadowPosition1,
+            vec2(0.5, 0.0),
+            vec2(0.5, 0.5),
+            normal,
+            lightDirection,
+            fragmentShadowSplits.z,
+            fragmentShadowSplits.w,
+            softness
+        );
+    }
+
+    if (selected < 0.0) {
+        return 1.0;
+    }
+    return selected;
 }
 
 void main() {

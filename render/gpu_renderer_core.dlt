@@ -228,6 +228,7 @@ struct GpuRendererCore:
     # Compact render state block:
     # 0 directional light, 8/16/24 shadow instance arrays, 32 capacity,
     # 40/48/56 global arrays, 64/68/72 camera position, 76/80 pitch/yaw.
+    # Shadow globals are 160 bytes: two cascade matrices, params, splits.
     render_state: i64 = 0
 
 attach GpuRendererCore:
@@ -292,7 +293,7 @@ attach GpuRendererCore:
         self.scratch_sky_att = Memory.malloc_zeroed(24)
         self.scratch_sky_rect = Memory.malloc_zeroed(24)
         self.scratch_vp_matrix = Memory.malloc_zeroed(64)
-        self.scratch_push_data = Memory.malloc_zeroed(128)
+        self.scratch_push_data = Memory.malloc_zeroed(256)
         self.scratch_camera_view = Memory.malloc_zeroed(64)
         self.scratch_camera_proj = Memory.malloc_zeroed(64)
         self.render_state = Memory.malloc_zeroed(88)
@@ -824,19 +825,19 @@ attach GpuRendererCore:
         if ok_all == 1:
             return 1
 
-        zeros: i64 = Memory.malloc_zeroed(80)
+        zeros: i64 = Memory.malloc_zeroed(160)
         if zeros == 0:
             return 0
         slot: i32 = 0
         while slot < 2:
-            uploaded: GpuBufferUpload = self._upload_buffer(zeros, 80, 128)
+            uploaded: GpuBufferUpload = self._upload_buffer(zeros, 160, 128)
             if uploaded.ok == 0:
                 Memory.free(zeros)
                 return 0
             Memory.write_ptr(global_buffers + slot * 8, uploaded.handle)
             Memory.write_ptr(global_memories + slot * 8, uploaded.memory)
             Memory.write_ptr(self.scratch_map_pp, 0)
-            map_result: i32 = vkMapMemory(self.device, uploaded.memory, 0, 80, 0, self.scratch_map_pp)
+            map_result: i32 = vkMapMemory(self.device, uploaded.memory, 0, 160, 0, self.scratch_map_pp)
             mapped: i64 = Memory.read_ptr(self.scratch_map_pp)
             if map_result != 0 or mapped == 0:
                 vkDestroyBuffer(self.device, uploaded.handle, 0)
@@ -868,6 +869,11 @@ attach GpuRendererCore:
             if light.active == 1:
                 if light.shadow.enabled == 1:
                     requested = light.shadow.map_size
+                    if light.shadow.cascades > 1:
+                        if requested < 8192:
+                            requested = requested * 2
+                            if requested > 8192:
+                                requested = 8192
         if requested < 1:
             requested = 1
         if requested == rp.shadow.map_size:
@@ -879,9 +885,10 @@ attach GpuRendererCore:
     fun _write_shadow_data(self, out: i64) -> i32:
         if out == 0:
             return 0
-        Memory.set(out, 0, 80)
+        Memory.set(out, 0, 160)
         identity: Mat4 = Mat4.identity()
         identity.write_to_ptr(out)
+        identity.write_to_ptr(out + 64)
         if self.render_state == 0:
             return 0
         light_ptr: i64 = Memory.read_ptr(self.render_state)
@@ -907,14 +914,15 @@ attach GpuRendererCore:
         forward_x: f32 = (0.0 - @sin(yaw)) * cp
         forward_y: f32 = @sin(pitch)
         forward_z: f32 = (0.0 - @cos(yaw)) * cp
-        focus_distance: f32 = distance * 0.28
-        center_x: f32 = Memory.read_f32(self.render_state + 64) + forward_x * focus_distance
-        center_y: f32 = Memory.read_f32(self.render_state + 68) + forward_y * focus_distance
-        center_z: f32 = Memory.read_f32(self.render_state + 72) + forward_z * focus_distance
+        cascade_count: i32 = light.shadow.cascades
+        if cascade_count < 1:
+            cascade_count = 1
+        if cascade_count > 2:
+            cascade_count = 2
 
-        eye_x: f32 = center_x - light.dir_x * distance
-        eye_y: f32 = center_y - light.dir_y * distance
-        eye_z: f32 = center_z - light.dir_z * distance
+        cam_x: f32 = Memory.read_f32(self.render_state + 64)
+        cam_y: f32 = Memory.read_f32(self.render_state + 68)
+        cam_z: f32 = Memory.read_f32(self.render_state + 72)
         up_x: f32 = 0.0
         up_y: f32 = 1.0
         up_z: f32 = 0.0
@@ -922,22 +930,53 @@ attach GpuRendererCore:
             up_y = 0.0
             up_z = 1.0
 
-        view: Mat4 = Mat4.look_at(eye_x, eye_y, eye_z, center_x, center_y, center_z, up_x, up_y, up_z)
-        half_extent: f32 = distance * 0.68
         shadow_near: f32 = 1.0
-        shadow_far: f32 = distance * 2.5
-        projection: Mat4 = Mat4.orthographic(0.0 - half_extent, half_extent, 0.0 - half_extent, half_extent, shadow_near, shadow_far)
-        light_vp: Mat4 = projection.mul(view)
-
-        # Stabilize the directional projection on the shadow-map texel grid.
-        # Without this, sub-texel camera movement shifts the entire map and
-        # produces crawling stripes on large flat receivers.
         shadow_map_size: i32 = light.shadow.map_size
         if shadow_map_size < 1:
             shadow_map_size = 1
-        half_map: f32 = (shadow_map_size as f32) * 0.5
-        origin_texel_x: f32 = light_vp.m12 * half_map
-        origin_texel_y: f32 = light_vp.m13 * half_map
+        atlas_map_size: i32 = shadow_map_size
+        if cascade_count > 1:
+            if atlas_map_size < 8192:
+                atlas_map_size = atlas_map_size * 2
+                if atlas_map_size > 8192:
+                    atlas_map_size = 8192
+        tile_map_size: i32 = atlas_map_size
+        if cascade_count > 1:
+            tile_map_size = atlas_map_size / 2
+            if tile_map_size < 1:
+                tile_map_size = 1
+        half_map: f32 = (tile_map_size as f32) * 0.5
+
+        split0: f32 = distance
+        if cascade_count > 1:
+            split0 = distance * 0.32
+            if split0 < 12.0:
+                split0 = 12.0
+            if split0 > distance * 0.60:
+                split0 = distance * 0.60
+
+        focus0: f32 = distance * 0.28
+        extent0: f32 = distance * 0.68
+        far0: f32 = distance * 2.15
+        if cascade_count > 1:
+            focus0 = split0 * 0.55
+            extent0 = split0 * 0.85
+            far0 = split0 * 3.0
+
+        center0_x: f32 = cam_x + forward_x * focus0
+        center0_y: f32 = cam_y + forward_y * focus0
+        center0_z: f32 = cam_z + forward_z * focus0
+        half_depth0: f32 = far0 * 0.5
+        eye0_x: f32 = center0_x - light.dir_x * half_depth0
+        eye0_y: f32 = center0_y - light.dir_y * half_depth0
+        eye0_z: f32 = center0_z - light.dir_z * half_depth0
+        view0: Mat4 = Mat4.look_at(eye0_x, eye0_y, eye0_z, center0_x, center0_y, center0_z, up_x, up_y, up_z)
+        projection0: Mat4 = Mat4.orthographic(0.0 - extent0, extent0, 0.0 - extent0, extent0, shadow_near, far0)
+        light_vp0: Mat4 = projection0.mul(view0)
+
+        # Stabilize each directional projection on the shadow-map texel grid.
+        origin_texel_x: f32 = light_vp0.m12 * half_map
+        origin_texel_y: f32 = light_vp0.m13 * half_map
         rounded_texel_x: i32 = 0
         rounded_texel_y: i32 = 0
         if origin_texel_x >= 0.0:
@@ -948,22 +987,63 @@ attach GpuRendererCore:
             rounded_texel_y = (origin_texel_y + 0.5) as i32
         else:
             rounded_texel_y = (origin_texel_y - 0.5) as i32
-        projection.m12 = projection.m12 + (((rounded_texel_x as f32) - origin_texel_x) / half_map)
-        projection.m13 = projection.m13 + (((rounded_texel_y as f32) - origin_texel_y) / half_map)
-        light_vp = projection.mul(view)
+        projection0.m12 = projection0.m12 + (((rounded_texel_x as f32) - origin_texel_x) / half_map)
+        projection0.m13 = projection0.m13 + (((rounded_texel_y as f32) - origin_texel_y) / half_map)
+        light_vp0 = projection0.mul(view0)
+        light_vp0.write_to_ptr(out)
 
-        light_vp.write_to_ptr(out)
-        Memory.write_f32(out + 64, 1.0)
+        focus1: f32 = distance * 0.40
+        extent1: f32 = distance * 0.70
+        far1: f32 = distance * 2.15
+        if cascade_count <= 1:
+            focus1 = focus0
+            extent1 = extent0
+            far1 = far0
+        center1_x: f32 = cam_x + forward_x * focus1
+        center1_y: f32 = cam_y + forward_y * focus1
+        center1_z: f32 = cam_z + forward_z * focus1
+        half_depth1: f32 = far1 * 0.5
+        eye1_x: f32 = center1_x - light.dir_x * half_depth1
+        eye1_y: f32 = center1_y - light.dir_y * half_depth1
+        eye1_z: f32 = center1_z - light.dir_z * half_depth1
+        view1: Mat4 = Mat4.look_at(eye1_x, eye1_y, eye1_z, center1_x, center1_y, center1_z, up_x, up_y, up_z)
+        projection1: Mat4 = Mat4.orthographic(0.0 - extent1, extent1, 0.0 - extent1, extent1, shadow_near, far1)
+        light_vp1: Mat4 = projection1.mul(view1)
+        origin_texel_x = light_vp1.m12 * half_map
+        origin_texel_y = light_vp1.m13 * half_map
+        rounded_texel_x = 0
+        rounded_texel_y = 0
+        if origin_texel_x >= 0.0:
+            rounded_texel_x = (origin_texel_x + 0.5) as i32
+        else:
+            rounded_texel_x = (origin_texel_x - 0.5) as i32
+        if origin_texel_y >= 0.0:
+            rounded_texel_y = (origin_texel_y + 0.5) as i32
+        else:
+            rounded_texel_y = (origin_texel_y - 0.5) as i32
+        projection1.m12 = projection1.m12 + (((rounded_texel_x as f32) - origin_texel_x) / half_map)
+        projection1.m13 = projection1.m13 + (((rounded_texel_y as f32) - origin_texel_y) / half_map)
+        light_vp1 = projection1.mul(view1)
+        light_vp1.write_to_ptr(out + 64)
+
+        Memory.write_f32(out + 128, 1.0)
         # Public bias values use world units. The comparison shader works in
         # normalized depth, so convert both using the light depth range.
         # Applying either world value directly erases nearby shadows when the
         # directional shadow camera covers a large distance.
-        shadow_depth_range: f32 = shadow_far - shadow_near
-        normalized_bias: f32 = light.shadow.bias / shadow_depth_range
-        normalized_normal_bias: f32 = light.shadow.normal_bias / shadow_depth_range
-        Memory.write_f32(out + 68, normalized_bias)
-        Memory.write_f32(out + 72, normalized_normal_bias)
-        Memory.write_f32(out + 76, light.shadow.softness)
+        shadow_depth_range0: f32 = far0 - shadow_near
+        shadow_depth_range1: f32 = far1 - shadow_near
+        normalized_bias0: f32 = light.shadow.bias / shadow_depth_range0
+        normalized_normal_bias0: f32 = light.shadow.normal_bias / shadow_depth_range0
+        normalized_bias1: f32 = light.shadow.bias / shadow_depth_range1
+        normalized_normal_bias1: f32 = light.shadow.normal_bias / shadow_depth_range1
+        Memory.write_f32(out + 132, normalized_bias0)
+        Memory.write_f32(out + 136, normalized_normal_bias0)
+        Memory.write_f32(out + 140, light.shadow.softness)
+        Memory.write_f32(out + 144, cascade_count as f32)
+        Memory.write_f32(out + 148, split0)
+        Memory.write_f32(out + 152, normalized_bias1)
+        Memory.write_f32(out + 156, normalized_normal_bias1)
         return 1
 
     fun _init_retire_queue(self):
@@ -2056,7 +2136,7 @@ attach GpuRendererCore:
         self._release_retired_buffers()
         self._debug_record_frame()
 
-    fun _record_shadow_pass(self, cmd: i64, rp: RenderPass, frame_slot: i32, light_vp: i64):
+    fun _record_shadow_pass(self, cmd: i64, rp: RenderPass, frame_slot: i32, light_vp: i64, cascade_count: i32):
         if rp.shadow.initialized == 0:
             return
         if rp.shadow.framebuffer == 0:
@@ -2065,6 +2145,11 @@ attach GpuRendererCore:
             return
         if light_vp == 0:
             return
+        active_cascade_count: i32 = cascade_count
+        if active_cascade_count < 1:
+            active_cascade_count = 1
+        if active_cascade_count > 2:
+            active_cascade_count = 2
         if self.render_state == 0:
             return
         shadow_instance_mapped_ptrs: i64 = Memory.read_ptr(self.render_state + 24)
@@ -2080,6 +2165,7 @@ attach GpuRendererCore:
         clear_value: i64 = self.scratch_clear_values
         if rpi == 0 or clear_value == 0:
             return
+
         Memory.set(rpi, 0, 96)
         Memory.set(clear_value, 0, 8)
         Memory.write_i32(rpi, 43)
@@ -2095,98 +2181,117 @@ attach GpuRendererCore:
 
         viewport: i64 = self.scratch_viewport
         scissor: i64 = self.scratch_scissor
-        if viewport != 0:
-            map_size_f: f32 = rp.shadow.map_size
-            Memory.set(viewport, 0, 24)
-            Memory.write_f32(viewport + 8, map_size_f)
-            Memory.write_f32(viewport + 12, map_size_f)
-            Memory.write_f32(viewport + 20, 1.0)
-            vkCmdSetViewport(cmd, 0, 1, viewport)
-        if scissor != 0:
-            Memory.set(scissor, 0, 16)
-            Memory.write_i32(scissor + 8, rp.shadow.map_size)
-            Memory.write_i32(scissor + 12, rp.shadow.map_size)
-            vkCmdSetScissor(cmd, 0, 1, scissor)
+        cascade_index: i32 = 0
+        while cascade_index < active_cascade_count:
+            cascade_matrix: i64 = light_vp + (cascade_index as i64) * 64
+            tile_size: i32 = rp.shadow.map_size
+            tile_x: i32 = 0
+            tile_y: i32 = 0
+            if active_cascade_count > 1:
+                tile_size = rp.shadow.map_size / 2
+                if tile_size < 1:
+                    tile_size = 1
+                if cascade_index == 1:
+                    tile_x = tile_size
 
-        vkCmdPushConstants(cmd, rp.shadow.vk_pipeline_layout, 1, 0, 64, light_vp)
+            if viewport != 0:
+                map_size_f: f32 = tile_size
+                Memory.set(viewport, 0, 24)
+                Memory.write_f32(viewport, tile_x as f32)
+                Memory.write_f32(viewport + 4, tile_y as f32)
+                Memory.write_f32(viewport + 8, map_size_f)
+                Memory.write_f32(viewport + 12, map_size_f)
+                Memory.write_f32(viewport + 20, 1.0)
+                vkCmdSetViewport(cmd, 0, 1, viewport)
+            if scissor != 0:
+                Memory.set(scissor, 0, 16)
+                Memory.write_i32(scissor, tile_x)
+                Memory.write_i32(scissor + 4, tile_y)
+                Memory.write_i32(scissor + 8, tile_size)
+                Memory.write_i32(scissor + 12, tile_size)
+                vkCmdSetScissor(cmd, 0, 1, scissor)
 
-        instance_write: i32 = 0
-        last_bound: i64 = 0
-        last_index_bound: i64 = 0
-        mi: i32 = 0
-        while mi < self.vb_count:
-            vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
-            vc: i32 = Memory.read_i32(self.vb_vert_counts + mi * 4)
-            ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
-            ic: i32 = Memory.read_i32(self.ib_index_counts + mi * 4)
-            model_ptr: i64 = Memory.read_ptr(self.model_matrices + mi * 8)
-            if vb_handle == 0 or vc <= 0 or model_ptr == 0:
-                mi = mi + 1
-            else:
-                group_start: i32 = instance_write
-                group_count: i32 = 0
-                gi: i32 = mi
-                while gi < self.vb_count:
-                    g_vb: i64 = Memory.read_ptr(self.vb_handles + gi * 8)
-                    g_vc: i32 = Memory.read_i32(self.vb_vert_counts + gi * 4)
-                    g_ib: i64 = Memory.read_ptr(self.ib_handles + gi * 8)
-                    g_ic: i32 = Memory.read_i32(self.ib_index_counts + gi * 4)
-                    g_model: i64 = Memory.read_ptr(self.model_matrices + gi * 8)
-                    if g_vb != vb_handle:
-                        break
-                    elif g_vc != vc:
-                        break
-                    elif g_ib != ib_handle:
-                        break
-                    elif g_ic != ic:
-                        break
-                    elif g_model == 0:
-                        break
-                    else:
-                        visible: i32 = 1
-                        if self.vb_visible != 0:
-                            if Memory.read_i32(self.vb_visible + gi * 4) == 0:
-                                visible = 0
-                        cast_shadow: i32 = 1
-                        if self.mesh_shadow_flags != 0:
-                            flags: i32 = Memory.read_i32(self.mesh_shadow_flags + gi * 4)
-                            cast_shadow = flags - (flags / 2) * 2
-                        if visible == 1:
-                            if cast_shadow == 1:
-                                bound_x: f32 = Memory.read_f32(self.mesh_bound_xs + gi * 4)
-                                bound_y: f32 = Memory.read_f32(self.mesh_bound_ys + gi * 4)
-                                bound_z: f32 = Memory.read_f32(self.mesh_bound_zs + gi * 4)
-                                bound_r: f32 = Memory.read_f32(self.mesh_bound_rs + gi * 4)
-                                visible = _frog_instance_visible(light_vp, g_model, bound_x, bound_y, bound_z, bound_r)
+            vkCmdPushConstants(cmd, rp.shadow.vk_pipeline_layout, 1, 0, 64, cascade_matrix)
+
+            instance_base: i32 = cascade_index * self.vb_count
+            instance_write: i32 = 0
+            last_bound: i64 = 0
+            last_index_bound: i64 = 0
+            mi: i32 = 0
+            while mi < self.vb_count:
+                vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
+                vc: i32 = Memory.read_i32(self.vb_vert_counts + mi * 4)
+                ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
+                ic: i32 = Memory.read_i32(self.ib_index_counts + mi * 4)
+                model_ptr: i64 = Memory.read_ptr(self.model_matrices + mi * 8)
+                if vb_handle == 0 or vc <= 0 or model_ptr == 0:
+                    mi = mi + 1
+                else:
+                    group_start: i32 = instance_write
+                    group_count: i32 = 0
+                    gi: i32 = mi
+                    while gi < self.vb_count:
+                        g_vb: i64 = Memory.read_ptr(self.vb_handles + gi * 8)
+                        g_vc: i32 = Memory.read_i32(self.vb_vert_counts + gi * 4)
+                        g_ib: i64 = Memory.read_ptr(self.ib_handles + gi * 8)
+                        g_ic: i32 = Memory.read_i32(self.ib_index_counts + gi * 4)
+                        g_model: i64 = Memory.read_ptr(self.model_matrices + gi * 8)
+                        if g_vb != vb_handle:
+                            break
+                        elif g_vc != vc:
+                            break
+                        elif g_ib != ib_handle:
+                            break
+                        elif g_ic != ic:
+                            break
+                        elif g_model == 0:
+                            break
+                        else:
+                            visible: i32 = 1
+                            if self.vb_visible != 0:
+                                if Memory.read_i32(self.vb_visible + gi * 4) == 0:
+                                    visible = 0
+                            cast_shadow: i32 = 1
+                            if self.mesh_shadow_flags != 0:
+                                flags: i32 = Memory.read_i32(self.mesh_shadow_flags + gi * 4)
+                                cast_shadow = flags - (flags / 2) * 2
+                            if visible == 1:
+                                if cast_shadow == 1:
+                                    bound_x: f32 = Memory.read_f32(self.mesh_bound_xs + gi * 4)
+                                    bound_y: f32 = Memory.read_f32(self.mesh_bound_ys + gi * 4)
+                                    bound_z: f32 = Memory.read_f32(self.mesh_bound_zs + gi * 4)
+                                    bound_r: f32 = Memory.read_f32(self.mesh_bound_rs + gi * 4)
+                                    visible = _frog_instance_visible(cascade_matrix, g_model, bound_x, bound_y, bound_z, bound_r)
+                                else:
+                                    visible = 0
+                            if visible == 1:
+                                dst: i64 = mapped + ((instance_base + instance_write) as i64) * 80
+                                Memory.copy(dst, g_model, 64)
+                                Memory.set(dst + 64, 0, 16)
+                                instance_write = instance_write + 1
+                                group_count = group_count + 1
+                            gi = gi + 1
+
+                    if group_count > 0:
+                        if vb_handle != last_bound:
+                            Memory.write_ptr(self.scratch_vb_arr, vb_handle)
+                            vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
+                            last_bound = vb_handle
+                        Memory.write_ptr(self.scratch_inst_vb_arr, shadow_instance_buffer)
+                        Memory.write_i64(self.scratch_inst_off_arr, ((instance_base + group_start) as i64) * 80)
+                        vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
+                        if ib_handle != 0:
+                            if ic > 0:
+                                if ib_handle != last_index_bound:
+                                    vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
+                                    last_index_bound = ib_handle
+                                vkCmdDrawIndexed(cmd, ic, group_count, 0, 0, 0)
                             else:
-                                visible = 0
-                        if visible == 1:
-                            dst: i64 = mapped + (instance_write as i64) * 80
-                            Memory.copy(dst, g_model, 64)
-                            Memory.set(dst + 64, 0, 16)
-                            instance_write = instance_write + 1
-                            group_count = group_count + 1
-                        gi = gi + 1
-
-                if group_count > 0:
-                    if vb_handle != last_bound:
-                        Memory.write_ptr(self.scratch_vb_arr, vb_handle)
-                        vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
-                        last_bound = vb_handle
-                    Memory.write_ptr(self.scratch_inst_vb_arr, shadow_instance_buffer)
-                    Memory.write_i64(self.scratch_inst_off_arr, (group_start as i64) * 80)
-                    vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
-                    if ib_handle != 0:
-                        if ic > 0:
-                            if ib_handle != last_index_bound:
-                                vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
-                                last_index_bound = ib_handle
-                            vkCmdDrawIndexed(cmd, ic, group_count, 0, 0, 0)
+                                vkCmdDraw(cmd, vc, group_count, 0, 0)
                         else:
                             vkCmdDraw(cmd, vc, group_count, 0, 0)
-                    else:
-                        vkCmdDraw(cmd, vc, group_count, 0, 0)
-                mi = gi
+                    mi = gi
+            cascade_index = cascade_index + 1
         vkCmdEndRenderPass(cmd)
 
     fun _record_commands(self, cmd: i64, framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32, env: Environment, use_scaled: i32, scale_color_image: i64, swap_image: i64, swap_old_layout: i32, swap_width: i32, swap_height: i32) -> void:
@@ -2206,13 +2311,18 @@ attach GpuRendererCore:
         shadow_global_mapped: i64 = Memory.read_ptr(shadow_global_mapped_ptrs + frame_slot * 8)
         if shadow_global_mapped == 0:
             return
-        Memory.copy(shadow_global_mapped, shadow_data, 80)
+        Memory.copy(shadow_global_mapped, shadow_data, 160)
         if rp.shadow.map_size <= 1:
             shadow_enabled = 0
-            Memory.write_f32(shadow_global_mapped + 64, 0.0)
+            Memory.write_f32(shadow_global_mapped + 128, 0.0)
         shadow_instances_ready: i32 = 0
         if shadow_enabled == 1:
-            shadow_instances_ready = self._ensure_shadow_instance_capacity(self.vb_count)
+            cascade_count_for_instances: i32 = Memory.read_f32(shadow_data + 144) as i32
+            if cascade_count_for_instances < 1:
+                cascade_count_for_instances = 1
+            if cascade_count_for_instances > 2:
+                cascade_count_for_instances = 2
+            shadow_instances_ready = self._ensure_shadow_instance_capacity(self.vb_count * cascade_count_for_instances)
 
         # Begin command buffer
         begin_info: i64 = self.scratch_begin_info
@@ -2229,7 +2339,12 @@ attach GpuRendererCore:
 
         if shadow_enabled == 1:
             if shadow_instances_ready == 1:
-                self._record_shadow_pass(cmd, rp, frame_slot, shadow_data)
+                cascade_count_for_pass: i32 = Memory.read_f32(shadow_data + 144) as i32
+                if cascade_count_for_pass < 1:
+                    cascade_count_for_pass = 1
+                if cascade_count_for_pass > 2:
+                    cascade_count_for_pass = 2
+                self._record_shadow_pass(cmd, rp, frame_slot, shadow_data, cascade_count_for_pass)
 
         # Begin render pass
         rpi: i64 = self.scratch_render_info

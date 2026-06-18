@@ -13,16 +13,23 @@ layout(location = 9) in vec4 shadowColumn0;
 layout(location = 10) in vec4 shadowColumn1;
 layout(location = 11) in vec4 shadowColumn2;
 layout(location = 12) in vec4 shadowColumn3;
-layout(location = 13) in vec4 shadowParams;
+layout(location = 13) in vec4 shadowColumn4;
+layout(location = 14) in vec4 shadowColumn5;
+layout(location = 15) in vec4 shadowColumn6;
+layout(location = 16) in vec4 shadowColumn7;
+layout(location = 17) in vec4 shadowParams;
+layout(location = 18) in vec4 shadowSplits;
 
 layout(location = 0) out vec3 fragmentColor;
 layout(location = 1) out vec2 fragmentUv;
 layout(location = 2) out float fragmentFogDistance;
 layout(location = 3) out vec3 fragmentWorldPosition;
 layout(location = 4) flat out vec4 fragmentMaterial;
-layout(location = 5) out vec4 fragmentShadowPosition;
-layout(location = 6) flat out vec4 fragmentShadowParams;
-layout(location = 7) out vec3 fragmentWorldNormal;
+layout(location = 5) out vec4 fragmentShadowPosition0;
+layout(location = 6) out vec4 fragmentShadowPosition1;
+layout(location = 7) flat out vec4 fragmentShadowParams;
+layout(location = 8) flat out vec4 fragmentShadowSplits;
+layout(location = 9) out vec3 fragmentWorldNormal;
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
@@ -63,11 +70,18 @@ void main() {
     fragmentMaterial = instanceMaterial;
     mat3 normalMatrix = transpose(inverse(mat3(model)));
     fragmentWorldNormal = normalMatrix * inNormal;
-    fragmentShadowPosition = mat4(
+    fragmentShadowPosition0 = mat4(
         shadowColumn0,
         shadowColumn1,
         shadowColumn2,
         shadowColumn3
     ) * worldPosition;
+    fragmentShadowPosition1 = mat4(
+        shadowColumn4,
+        shadowColumn5,
+        shadowColumn6,
+        shadowColumn7
+    ) * worldPosition;
     fragmentShadowParams = shadowParams;
+    fragmentShadowSplits = shadowSplits;
 }

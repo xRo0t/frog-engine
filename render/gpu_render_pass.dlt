@@ -498,7 +498,7 @@ attach RenderPass:
         # Vertex input:
         # binding 0: pos(3f) + normal(3f) + color(3f) + uv(2f), per vertex
         # binding 1: model matrix + material vec4, per instance, stride 80
-        # binding 2: global light matrix + shadow params, stride 0
+        # binding 2: global shadow cascades, stride 0
         bind: i64 = Memory.malloc_zeroed(36)
         if bind == 0:
             Memory.free(stages)
@@ -513,7 +513,7 @@ attach RenderPass:
         Memory.write_i32(bind + 28, 0)
         Memory.write_i32(bind + 32, 1)
 
-        attrs: i64 = Memory.malloc_zeroed(224)
+        attrs: i64 = Memory.malloc_zeroed(304)
         if attrs == 0:
             Memory.free(stages)
             Memory.free(bind)
@@ -560,9 +560,10 @@ attach RenderPass:
         Memory.write_i32(attrs + 132, 1)
         Memory.write_i32(attrs + 136, 109)
         Memory.write_i32(attrs + 140, 64)
-        # Light VP columns (loc=9..12) and shadow params (loc=13), binding 2.
+        # Shadow cascade 0 columns (loc=9..12), cascade 1 columns
+        # (loc=13..16), params (loc=17), and splits (loc=18), binding 2.
         sai: i32 = 0
-        while sai < 5:
+        while sai < 10:
             soff: i64 = 144 + (sai as i64) * 16
             Memory.write_i32(attrs + soff, 9 + sai)
             Memory.write_i32(attrs + soff + 4, 2)
@@ -581,7 +582,7 @@ attach RenderPass:
         Memory.write_i32(vi_ci + 16, 0)
         Memory.write_i32(vi_ci + 20, 3)
         Memory.write_ptr(vi_ci + 24, bind)
-        Memory.write_i32(vi_ci + 32, 14)
+        Memory.write_i32(vi_ci + 32, 19)
         Memory.write_ptr(vi_ci + 40, attrs)
 
         # Input assembly
