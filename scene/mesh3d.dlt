@@ -7,6 +7,7 @@
 const MESH3D_SHAPE_NONE: i32 = 0
 const MESH3D_SHAPE_CUBE: i32 = 1
 const MESH3D_SHAPE_PLANE: i32 = 2
+const MESH3D_SHAPE_MODEL: i32 = 3
 
 struct Mesh3DShape:
     _placeholder: i32 = 0
@@ -118,6 +119,10 @@ attach Mesh3D:
             self.sync_transform()
             self.apply_material_bindings()
             return self
+        if self.primitive_kind == MESH3D_SHAPE_MODEL:
+            self.sync_transform()
+            self.apply_material_bindings()
+            return self
         self.replace_mesh_id(-1)
         return self
 
@@ -125,6 +130,38 @@ attach Mesh3D:
         if self.mesh_id >= 0:
             Engine.set_transform(self.mesh_id, self.pos_x, self.pos_y, self.pos_z, self.rot_x, self.rot_y, self.rot_z, self.scale_x, self.scale_y, self.scale_z)
         return self
+
+    fun set_model(self, model: Model3D) -> Mesh3D:
+        if model.found == 0:
+            return self
+        if model.parsed == 0:
+            return self
+        source_mesh: i32 = Engine.upload_model(model.path)
+        if source_mesh < 0:
+            source_mesh = Engine.upload_model_mesh(model)
+        if source_mesh < 0:
+            return self
+        model_instance: i32 = Engine.register_instance(source_mesh)
+        if model_instance < 0:
+            return self
+        Engine.set_instance_visible(source_mesh, 0)
+        self.primitive_kind = MESH3D_SHAPE_MODEL
+        self.replace_mesh_id(model_instance)
+        self.sync_transform()
+        self.apply_material_bindings()
+        return self
+
+    static fun model(path: str) -> Mesh3D:
+        node: Mesh3D = Mesh3D.create("Model")
+        loaded: Model3D = Assets.models.load(path)
+        node.set_model(loaded)
+        return node
+
+    static fun model(name: str, path: str) -> Mesh3D:
+        node: Mesh3D = Mesh3D.create(name)
+        loaded: Model3D = Assets.models.load(path)
+        node.set_model(loaded)
+        return node
 
     fun set_mesh(self, shape: i32) -> Mesh3D:
         self.primitive_kind = shape

@@ -134,6 +134,11 @@ attach Node3D:
     static fun create(name: str) -> Node3D:
         return node3d_create(name)
 
+    fun sync_transform(self) -> Node3D:
+        if self.mesh_id >= 0:
+            Engine.set_transform(self.mesh_id, self.pos_x, self.pos_y, self.pos_z, self.rot_x, self.rot_y, self.rot_z, self.scale_x, self.scale_y, self.scale_z)
+        return self
+
     fun add_child(self, child: Node3D):
         if (child as i64) == 0:
             return
@@ -152,19 +157,19 @@ attach Node3D:
         self.pos_x = x
         self.pos_y = y
         self.pos_z = z
-        return self
+        return self.sync_transform()
 
     fun rotation(self, x: f32, y: f32, z: f32) -> Node3D:
         self.rot_x = x
         self.rot_y = y
         self.rot_z = z
-        return self
+        return self.sync_transform()
 
     fun scale(self, x: f32, y: f32, z: f32) -> Node3D:
         self.scale_x = x
         self.scale_y = y
         self.scale_z = z
-        return self
+        return self.sync_transform()
 
     fun velocity(self, x: f32, y: f32, z: f32) -> Node3D:
         self.velocity_x = x
@@ -176,13 +181,13 @@ attach Node3D:
         self.pos_x = self.pos_x + x
         self.pos_y = self.pos_y + y
         self.pos_z = self.pos_z + z
-        return self
+        return self.sync_transform()
 
     fun rotate(self, x: f32, y: f32, z: f32) -> Node3D:
         self.rot_x = self.rot_x + x
         self.rot_y = self.rot_y + y
         self.rot_z = self.rot_z + z
-        return self
+        return self.sync_transform()
 
     fun as_static(self) -> Node3D:
         self.body_type = 1
@@ -219,9 +224,15 @@ attach Node3D:
 
     fun set_model(self, model: Model3D) -> Node3D:
         old_mid: i32 = self.mesh_id
-        mid: i32 = model.mesh_id
-        if mid < 0:
-            mid = Engine.upload_model_mesh(model)
+        mid: i32 = -1
+        if model.found == 1:
+            if model.parsed == 1:
+                source_mesh: i32 = Engine.upload_model(model.path)
+                if source_mesh < 0:
+                    source_mesh = Engine.upload_model_mesh(model)
+                if source_mesh >= 0:
+                    mid = Engine.register_instance(source_mesh)
+                    Engine.set_instance_visible(source_mesh, 0)
         if old_mid >= 0:
             if old_mid != mid:
                 Engine.set_instance_visible(old_mid, 0)
@@ -234,6 +245,7 @@ attach Node3D:
         if self.mesh_id >= 0:
             Engine.set_shadow_flags(self.mesh_id, self.cast_shadows, self.receive_shadows)
             Engine.set_instance_visible(self.mesh_id, self.visible)
+            self.sync_transform()
         return self
 
     # Dress this node with an uploaded texture. Mirrors set_model: the node

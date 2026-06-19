@@ -831,6 +831,12 @@ cube.scale(<span class="tok-num">1.5</span>, <span class="tok-num">1.5</span>, <
 cube.collision_box(<span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>)
 scene.add_child(cube)</code></pre>
 
+      <pre><code>building: <span class="tok-type">Mesh3D</span> = Mesh3D.model(<span class="tok-str">"Backlot Building"</span>, <span class="tok-str">"models/backlot/scene.gltf"</span>)
+building.position(<span class="tok-num">8.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">22.0</span>)
+building.rotation(<span class="tok-num">-90.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>)
+building.scale(<span class="tok-num">0.035</span>, <span class="tok-num">0.035</span>, <span class="tok-num">0.035</span>)
+scene.add_child(building)</code></pre>
+
       <div class="note"><strong>Shadow defaults.</strong> Renderable nodes cast and receive shadows by default. Only write <code>set_cast_shadows(0)</code> or <code>set_receive_shadows(0)</code> for exceptions such as effects, sky geometry, viewmodels, or special materials. Unlit materials never receive shadows effectively.</div>
       <div class="note"><strong>Shadow culling.</strong> If no shadow caster survives the current light distance and cascade culling, Frog skips the shadow pass for that frame and disables receiver sampling automatically. When adaptive shadows are enabled and <code>set_filter_samples(0)</code> is in use, frames with only a few casters use cheaper PCF sampling.</div>
       <div class="note"><strong>Visibility is render-only.</strong> <code>set_visible(0)</code> removes the mesh from color rendering and shadow rendering, but the node, transform, raycast target, and collision box remain active. Use <code>without_collision()</code> or your own gameplay state when collision should disappear too.</div>
@@ -839,8 +845,11 @@ scene.add_child(cube)</code></pre>
         <tr><th>Method</th><th>Description</th></tr>
         <tr><td><code>Mesh3D.create()</code></td><td>Creates an unnamed renderable node using the default name <code>Mesh3D</code>.</td></tr>
         <tr><td><code>Mesh3D.create(name)</code></td><td>Creates a renderable node with a debug/tooling name.</td></tr>
+        <tr><td><code>Mesh3D.model(path)</code></td><td>Loads a glTF model and creates a renderable mesh instance.</td></tr>
+        <tr><td><code>Mesh3D.model(name, path)</code></td><td>Loads a glTF model with a debug/tooling name.</td></tr>
         <tr><td><code>set_mesh(Mesh3D.shape.cube())</code></td><td>Uses the built-in cube mesh.</td></tr>
         <tr><td><code>set_mesh(Mesh3D.shape.plane())</code></td><td>Uses the built-in plane mesh.</td></tr>
+        <tr><td><code>set_model(model)</code></td><td>Binds a loaded <code>Model3D</code> as an independent render instance and syncs the current transform.</td></tr>
         <tr><td><code>set_material(material)</code></td><td>Applies a <code>Material3D</code>.</td></tr>
         <tr><td><code>set_color(color)</code></td><td>Convenience shortcut for simple colored primitives.</td></tr>
         <tr><td><code>set_texture(texture)</code></td><td>Convenience shortcut that edits this mesh's material texture.</td></tr>
@@ -1244,11 +1253,11 @@ debug_cube.set_color(Color.rgb(<span class="tok-num">0.95</span>, <span class="t
 actor_model: <span class="tok-type">Model3D</span> = Assets.models.load(<span class="tok-str">"models/actor.gltf"</span>)
 actor_tex:   <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/actor.png"</span>, TextureSpec.smooth())
 
-<span class="tok-com"># The node wears both — no manual mesh/texture ids</span>
-actor: <span class="tok-type">Node3D</span> = Node3D.create(<span class="tok-str">"Actor"</span>)
+<span class="tok-com"># The mesh wears both — no manual mesh/texture ids</span>
+actor: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Actor"</span>)
 actor.set_model(actor_model)
 actor.set_texture(actor_tex)</code></pre>
-      <p>Calling <code>set_model</code> and <code>set_texture</code> in either order is safe &mdash; the node binds the texture as soon as it has both. Each mesh keeps its own descriptor set, and meshes with no texture fall back to a 1×1 white pixel so geometry still renders.</p>
+      <p>Calling <code>set_model</code> and <code>set_texture</code> in either order is safe &mdash; the mesh binds the texture as soon as it has both. Each mesh keeps its own descriptor set, and meshes with no texture fall back to a 1×1 white pixel so geometry still renders.</p>
 
       <h3>TextureSpec — controlling appearance</h3>
       <p>A <code>TextureSpec</code> sets filtering, wrapping, and color space. Presets cover the common cases:</p>
