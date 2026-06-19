@@ -124,16 +124,16 @@ float sampleShadowCascade(
     }
 
     float sine = sqrt(max(1.0 - normalLight * normalLight, 0.0));
-    float slope = min(sine / max(normalLight, 0.08), 6.0);
+    float slope = min(sine / max(normalLight, 0.16), 3.0);
     vec2 atlasUv = atlasOffset + localUv * atlasScale;
     vec2 texel = 1.0 / vec2(textureSize(shadowSampler, 0));
     vec2 localTexel = texel / max(atlasScale, vec2(0.0001));
     vec2 receiverGradient = receiverPlaneDepthGradient(localUv, projected.z);
     float receiverFootprint = abs(receiverGradient.x) * localTexel.x
         + abs(receiverGradient.y) * localTexel.y;
-    float receiverBiasLimit = bias * 2.0 + normalBias * 4.0;
-    float receiverBias = min(receiverFootprint * 0.75, receiverBiasLimit);
-    float depthBias = bias + normalBias * slope + receiverBias;
+    float receiverBiasLimit = bias + normalBias * 1.25;
+    float receiverBias = min(receiverFootprint * 0.35, receiverBiasLimit);
+    float depthBias = max(bias, bias + normalBias * slope * 0.55 + receiverBias);
 
     float clampedSoftness = clamp(softness, 0.0, 1.0);
     float grazingWeight = smoothstep(0.025, 0.16, normalLight);

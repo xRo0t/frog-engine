@@ -224,8 +224,8 @@ attach ShadowPass:
         Memory.write_i32(raster + 32, 0)
         Memory.write_i32(raster + 36, 0)
         Memory.write_i32(raster + 40, 1) # depthBiasEnable
-        Memory.write_f32(raster + 44, 1.25)
-        Memory.write_f32(raster + 52, 1.75)
+        Memory.write_f32(raster + 44, 0.25)
+        Memory.write_f32(raster + 52, 0.60)
         Memory.write_f32(raster + 56, 1.0)
 
         Memory.write_i32(multisample, 24)

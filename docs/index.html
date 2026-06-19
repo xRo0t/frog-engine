@@ -806,8 +806,8 @@ scene.add_child(sun)</code></pre>
         <tr><td><code>set_cascades(count)</code></td><td>Clamps cascade count to 1..4.</td></tr>
         <tr><td><code>set_distance(value)</code></td><td>Sets shadow draw distance. Shadow casters outside this range are skipped by the shadow pass.</td></tr>
         <tr><td><code>set_fade_distance(value)</code></td><td>Fades shadows out over the last part of the draw distance. Use <code>0.0</code> to disable the fade.</td></tr>
-        <tr><td><code>set_bias(value)</code></td><td>Sets the constant shadow bias in world units.</td></tr>
-        <tr><td><code>set_normal_bias(value)</code></td><td>Sets the slope-sensitive shadow bias in world units. The renderer converts both bias values to the active shadow depth range.</td></tr>
+        <tr><td><code>set_bias(value)</code></td><td>Sets the constant shadow bias in world units. Lower values keep contact shadows attached; higher values fight acne.</td></tr>
+        <tr><td><code>set_normal_bias(value)</code></td><td>Sets the slope-sensitive shadow bias in world units. Keep this conservative to avoid peter-panning at object corners.</td></tr>
         <tr><td><code>set_softness(value)</code></td><td>Stores softness 0..1.</td></tr>
         <tr><td><code>set_filter_quality(quality)</code></td><td>Sets the PCF quality preset.</td></tr>
         <tr><td><code>set_filter_samples(count)</code></td><td>Sets an explicit PCF sample count. Use <code>0</code> for automatic samples.</td></tr>
