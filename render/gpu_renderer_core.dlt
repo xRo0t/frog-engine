@@ -122,6 +122,60 @@ fun _frog_instance_visible(vp: i64, model: i64, bound_x: f32, bound_y: f32, boun
         return 0
     return 1
 
+fun _frog_shadow_instance_visible(vp: i64, model: i64, bound_x: f32, bound_y: f32, bound_z: f32, bound_radius: f32, cam_x: f32, cam_y: f32, cam_z: f32, max_distance: f32) -> i32:
+    if vp == 0:
+        return 1
+    if model == 0:
+        return 0
+
+    x: f32 = Memory.read_f32(model + 0) * bound_x + Memory.read_f32(model + 16) * bound_y + Memory.read_f32(model + 32) * bound_z + Memory.read_f32(model + 48)
+    y: f32 = Memory.read_f32(model + 4) * bound_x + Memory.read_f32(model + 20) * bound_y + Memory.read_f32(model + 36) * bound_z + Memory.read_f32(model + 52)
+    z: f32 = Memory.read_f32(model + 8) * bound_x + Memory.read_f32(model + 24) * bound_y + Memory.read_f32(model + 40) * bound_z + Memory.read_f32(model + 56)
+
+    sx: f32 = @sqrt(Memory.read_f32(model + 0) * Memory.read_f32(model + 0) + Memory.read_f32(model + 4) * Memory.read_f32(model + 4) + Memory.read_f32(model + 8) * Memory.read_f32(model + 8))
+    sy: f32 = @sqrt(Memory.read_f32(model + 16) * Memory.read_f32(model + 16) + Memory.read_f32(model + 20) * Memory.read_f32(model + 20) + Memory.read_f32(model + 24) * Memory.read_f32(model + 24))
+    sz: f32 = @sqrt(Memory.read_f32(model + 32) * Memory.read_f32(model + 32) + Memory.read_f32(model + 36) * Memory.read_f32(model + 36) + Memory.read_f32(model + 40) * Memory.read_f32(model + 40))
+    max_scale: f32 = sx
+    if sy > max_scale:
+        max_scale = sy
+    if sz > max_scale:
+        max_scale = sz
+    if max_scale < 0.001:
+        max_scale = 1.0
+
+    if max_distance > 0.0:
+        radius: f32 = bound_radius * max_scale + 2.0
+        distance_limit: f32 = max_distance + radius
+        dx: f32 = x - cam_x
+        dy: f32 = y - cam_y
+        dz: f32 = z - cam_z
+        if dx * dx + dy * dy + dz * dz > distance_limit * distance_limit:
+            return 0
+
+    cx: f32 = Memory.read_f32(vp + 0) * x + Memory.read_f32(vp + 16) * y + Memory.read_f32(vp + 32) * z + Memory.read_f32(vp + 48)
+    cy: f32 = Memory.read_f32(vp + 4) * x + Memory.read_f32(vp + 20) * y + Memory.read_f32(vp + 36) * z + Memory.read_f32(vp + 52)
+    cz: f32 = Memory.read_f32(vp + 8) * x + Memory.read_f32(vp + 24) * y + Memory.read_f32(vp + 40) * z + Memory.read_f32(vp + 56)
+    cw: f32 = Memory.read_f32(vp + 12) * x + Memory.read_f32(vp + 28) * y + Memory.read_f32(vp + 44) * z + Memory.read_f32(vp + 60)
+
+    bounds: f32 = bound_radius * max_scale * 2.25 + 2.0
+    limit: f32 = _frog_abs_f32(cw) * 1.08 + bounds
+
+    if cw < 0.0 - bounds:
+        return 0
+    if cx < 0.0 - limit:
+        return 0
+    if cx > limit:
+        return 0
+    if cy < 0.0 - limit:
+        return 0
+    if cy > limit:
+        return 0
+    if cz < 0.0 - bounds:
+        return 0
+    if cz > _frog_abs_f32(cw) + bounds:
+        return 0
+    return 1
+
 struct GpuRendererCore:
     device:            i64 = 0
     phys_device:       i64 = 0
@@ -228,7 +282,8 @@ struct GpuRendererCore:
     # Compact render state block:
     # 0 directional light, 8/16/24 shadow instance arrays, 32 capacity,
     # 40/48/56 global arrays, 64/68/72 camera position, 76/80 pitch/yaw.
-    # Shadow globals are 176 bytes: two cascade matrices, params, splits, filter controls.
+    # Shadow globals are 176 bytes: two cascade matrices, params, splits,
+    # filter controls, and fade distance.
     render_state: i64 = 0
 
 attach GpuRendererCore:
@@ -1037,6 +1092,11 @@ attach GpuRendererCore:
         normalized_normal_bias0: f32 = light.shadow.normal_bias / shadow_depth_range0
         normalized_bias1: f32 = light.shadow.bias / shadow_depth_range1
         normalized_normal_bias1: f32 = light.shadow.normal_bias / shadow_depth_range1
+        fade_distance: f32 = light.shadow.fade_distance
+        if fade_distance < 0.0:
+            fade_distance = 0.0
+        if fade_distance > distance:
+            fade_distance = distance
         Memory.write_f32(out + 132, normalized_bias0)
         Memory.write_f32(out + 136, normalized_normal_bias0)
         Memory.write_f32(out + 140, light.shadow.softness)
@@ -1047,6 +1107,7 @@ attach GpuRendererCore:
         Memory.write_f32(out + 160, light.shadow.filter_quality as f32)
         Memory.write_f32(out + 164, light.shadow.filter_samples as f32)
         Memory.write_f32(out + 168, light.shadow.filter_radius)
+        Memory.write_f32(out + 172, fade_distance)
         return 1
 
     fun _init_retire_queue(self):
@@ -2154,35 +2215,52 @@ attach GpuRendererCore:
         self._release_retired_buffers()
         self._debug_record_frame()
 
-    fun _record_shadow_pass(self, cmd: i64, rp: RenderPass, frame_slot: i32, light_vp: i64, cascade_count: i32):
+    fun _record_shadow_pass(self, cmd: i64, rp: RenderPass, frame_slot: i32, light_vp: i64, cascade_count: i32) -> i32:
         if rp.shadow.initialized == 0:
-            return
+            return 0
         if rp.shadow.framebuffer == 0:
-            return
+            return 0
         if rp.shadow.vk_pipeline == 0:
-            return
+            return 0
         if light_vp == 0:
-            return
+            return 0
         active_cascade_count: i32 = cascade_count
         if active_cascade_count < 1:
             active_cascade_count = 1
         if active_cascade_count > 2:
             active_cascade_count = 2
         if self.render_state == 0:
-            return
+            return 0
         shadow_instance_mapped_ptrs: i64 = Memory.read_ptr(self.render_state + 24)
         shadow_instance_buffers: i64 = Memory.read_ptr(self.render_state + 8)
         if shadow_instance_mapped_ptrs == 0 or shadow_instance_buffers == 0:
-            return
+            return 0
         mapped: i64 = Memory.read_ptr(shadow_instance_mapped_ptrs + frame_slot * 8)
         shadow_instance_buffer: i64 = Memory.read_ptr(shadow_instance_buffers + frame_slot * 8)
         if mapped == 0 or shadow_instance_buffer == 0:
-            return
+            return 0
+
+        cam_x: f32 = 0.0
+        cam_y: f32 = 0.0
+        cam_z: f32 = 0.0
+        shadow_max_distance: f32 = 0.0
+        if self.render_state != 0:
+            cam_x = Memory.read_f32(self.render_state + 64)
+            cam_y = Memory.read_f32(self.render_state + 68)
+            cam_z = Memory.read_f32(self.render_state + 72)
+            light_ptr: i64 = Memory.read_ptr(self.render_state)
+            if light_ptr != 0:
+                light: DirectionalLight3D = light_ptr as DirectionalLight3D
+                shadow_max_distance = light.shadow.distance
+                if shadow_max_distance < 10.0:
+                    shadow_max_distance = 10.0
+                if shadow_max_distance > 1000.0:
+                    shadow_max_distance = 1000.0
 
         rpi: i64 = self.scratch_render_info
         clear_value: i64 = self.scratch_clear_values
         if rpi == 0 or clear_value == 0:
-            return
+            return 0
 
         Memory.set(rpi, 0, 96)
         Memory.set(clear_value, 0, 8)
@@ -2194,11 +2272,10 @@ attach GpuRendererCore:
         Memory.write_f32(clear_value, 1.0)
         Memory.write_i32(rpi + 48, 1)
         Memory.write_ptr(rpi + 56, clear_value)
-        vkCmdBeginRenderPass(cmd, rpi, 0)
-        vkCmdBindPipeline(cmd, 0, rp.shadow.vk_pipeline)
 
         viewport: i64 = self.scratch_viewport
         scissor: i64 = self.scratch_scissor
+        render_begun: i32 = 0
         cascade_index: i32 = 0
         while cascade_index < active_cascade_count:
             cascade_matrix: i64 = light_vp + (cascade_index as i64) * 64
@@ -2212,29 +2289,11 @@ attach GpuRendererCore:
                 if cascade_index == 1:
                     tile_x = tile_size
 
-            if viewport != 0:
-                map_size_f: f32 = tile_size
-                Memory.set(viewport, 0, 24)
-                Memory.write_f32(viewport, tile_x as f32)
-                Memory.write_f32(viewport + 4, tile_y as f32)
-                Memory.write_f32(viewport + 8, map_size_f)
-                Memory.write_f32(viewport + 12, map_size_f)
-                Memory.write_f32(viewport + 20, 1.0)
-                vkCmdSetViewport(cmd, 0, 1, viewport)
-            if scissor != 0:
-                Memory.set(scissor, 0, 16)
-                Memory.write_i32(scissor, tile_x)
-                Memory.write_i32(scissor + 4, tile_y)
-                Memory.write_i32(scissor + 8, tile_size)
-                Memory.write_i32(scissor + 12, tile_size)
-                vkCmdSetScissor(cmd, 0, 1, scissor)
-
-            vkCmdPushConstants(cmd, rp.shadow.vk_pipeline_layout, 1, 0, 64, cascade_matrix)
-
             instance_base: i32 = cascade_index * self.vb_count
             instance_write: i32 = 0
             last_bound: i64 = 0
             last_index_bound: i64 = 0
+            cascade_bound: i32 = 0
             mi: i32 = 0
             while mi < self.vb_count:
                 vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
@@ -2279,7 +2338,7 @@ attach GpuRendererCore:
                                     bound_y: f32 = Memory.read_f32(self.mesh_bound_ys + gi * 4)
                                     bound_z: f32 = Memory.read_f32(self.mesh_bound_zs + gi * 4)
                                     bound_r: f32 = Memory.read_f32(self.mesh_bound_rs + gi * 4)
-                                    visible = _frog_instance_visible(cascade_matrix, g_model, bound_x, bound_y, bound_z, bound_r)
+                                    visible = _frog_shadow_instance_visible(cascade_matrix, g_model, bound_x, bound_y, bound_z, bound_r, cam_x, cam_y, cam_z, shadow_max_distance)
                                 else:
                                     visible = 0
                             if visible == 1:
@@ -2291,6 +2350,29 @@ attach GpuRendererCore:
                             gi = gi + 1
 
                     if group_count > 0:
+                        if render_begun == 0:
+                            vkCmdBeginRenderPass(cmd, rpi, 0)
+                            vkCmdBindPipeline(cmd, 0, rp.shadow.vk_pipeline)
+                            render_begun = 1
+                        if cascade_bound == 0:
+                            if viewport != 0:
+                                map_size_f: f32 = tile_size
+                                Memory.set(viewport, 0, 24)
+                                Memory.write_f32(viewport, tile_x as f32)
+                                Memory.write_f32(viewport + 4, tile_y as f32)
+                                Memory.write_f32(viewport + 8, map_size_f)
+                                Memory.write_f32(viewport + 12, map_size_f)
+                                Memory.write_f32(viewport + 20, 1.0)
+                                vkCmdSetViewport(cmd, 0, 1, viewport)
+                            if scissor != 0:
+                                Memory.set(scissor, 0, 16)
+                                Memory.write_i32(scissor, tile_x)
+                                Memory.write_i32(scissor + 4, tile_y)
+                                Memory.write_i32(scissor + 8, tile_size)
+                                Memory.write_i32(scissor + 12, tile_size)
+                                vkCmdSetScissor(cmd, 0, 1, scissor)
+                            vkCmdPushConstants(cmd, rp.shadow.vk_pipeline_layout, 1, 0, 64, cascade_matrix)
+                            cascade_bound = 1
                         if vb_handle != last_bound:
                             Memory.write_ptr(self.scratch_vb_arr, vb_handle)
                             vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
@@ -2310,7 +2392,9 @@ attach GpuRendererCore:
                             vkCmdDraw(cmd, vc, group_count, 0, 0)
                     mi = gi
             cascade_index = cascade_index + 1
-        vkCmdEndRenderPass(cmd)
+        if render_begun == 1:
+            vkCmdEndRenderPass(cmd)
+        return render_begun
 
     fun _record_commands(self, cmd: i64, framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32, env: Environment, use_scaled: i32, scale_color_image: i64, swap_image: i64, swap_old_layout: i32, swap_width: i32, swap_height: i32) -> void:
         if self._ensure_shadow_globals() == 0:
@@ -2362,7 +2446,13 @@ attach GpuRendererCore:
                     cascade_count_for_pass = 1
                 if cascade_count_for_pass > 2:
                     cascade_count_for_pass = 2
-                self._record_shadow_pass(cmd, rp, frame_slot, shadow_data, cascade_count_for_pass)
+                shadow_rendered: i32 = self._record_shadow_pass(cmd, rp, frame_slot, shadow_data, cascade_count_for_pass)
+                if shadow_rendered == 0:
+                    shadow_enabled = 0
+                    Memory.write_f32(shadow_global_mapped + 128, 0.0)
+            else:
+                shadow_enabled = 0
+                Memory.write_f32(shadow_global_mapped + 128, 0.0)
 
         # Begin render pass
         rpi: i64 = self.scratch_render_info

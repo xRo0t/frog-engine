@@ -801,10 +801,11 @@ scene.add_child(sun)</code></pre>
       <table>
         <tr><th>Method</th><th>Description</th></tr>
         <tr><td><code>ShadowSettings.off()</code></td><td>No shadows.</td></tr>
-        <tr><td><code>low()</code> / <code>medium()</code> / <code>high()</code> / <code>ultra()</code></td><td>Preset quality levels for map size, distance, bias, and PCF softness. Cascade counts are stored for future CSM support; the current renderer uses one directional map.</td></tr>
+        <tr><td><code>low()</code> / <code>medium()</code> / <code>high()</code> / <code>ultra()</code></td><td>Preset quality levels for map size, distance, bias, PCF softness, and up to two directional shadow cascades.</td></tr>
         <tr><td><code>set_map_size(size)</code></td><td>Sets the desired shadow map resolution.</td></tr>
         <tr><td><code>set_cascades(count)</code></td><td>Clamps cascade count to 1..4.</td></tr>
-        <tr><td><code>set_distance(value)</code></td><td>Sets shadow draw distance.</td></tr>
+        <tr><td><code>set_distance(value)</code></td><td>Sets shadow draw distance. Shadow casters outside this range are skipped by the shadow pass.</td></tr>
+        <tr><td><code>set_fade_distance(value)</code></td><td>Fades shadows out over the last part of the draw distance. Use <code>0.0</code> to disable the fade.</td></tr>
         <tr><td><code>set_bias(value)</code></td><td>Sets the constant shadow bias in world units.</td></tr>
         <tr><td><code>set_normal_bias(value)</code></td><td>Sets the slope-sensitive shadow bias in world units. The renderer converts both bias values to the active shadow depth range.</td></tr>
         <tr><td><code>set_softness(value)</code></td><td>Stores softness 0..1.</td></tr>
@@ -827,6 +828,7 @@ cube.collision_box(<span class="tok-num">1.0</span>, <span class="tok-num">1.0</
 scene.add_child(cube)</code></pre>
 
       <div class="note"><strong>Shadow defaults.</strong> Renderable nodes cast and receive shadows by default. Only write <code>set_cast_shadows(0)</code> or <code>set_receive_shadows(0)</code> for exceptions such as effects, sky geometry, viewmodels, or special materials. Unlit materials never receive shadows effectively.</div>
+      <div class="note"><strong>Shadow culling.</strong> If no shadow caster survives the current light distance and cascade culling, Frog skips the shadow pass for that frame and disables receiver sampling automatically.</div>
       <div class="note"><strong>Visibility is render-only.</strong> <code>set_visible(0)</code> removes the mesh from color rendering and shadow rendering, but the node, transform, raycast target, and collision box remain active. Use <code>without_collision()</code> or your own gameplay state when collision should disappear too.</div>
 
       <table>

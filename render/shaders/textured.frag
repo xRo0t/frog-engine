@@ -85,6 +85,15 @@ float shadowNoise(vec2 position) {
     return fract(52.9829189 * fract(dot(position, vec2(0.06711056, 0.00583715))));
 }
 
+float shadowDistanceFade(float distanceFromCamera, float maxDistance, float fadeDistance) {
+    if (fadeDistance <= 0.0001 || maxDistance <= 0.0001) {
+        return 1.0;
+    }
+    float clampedFade = min(fadeDistance, maxDistance);
+    float fadeStart = max(maxDistance - clampedFade, 0.0);
+    return 1.0 - smoothstep(fadeStart, maxDistance, distanceFromCamera);
+}
+
 float sampleShadowCascade(
     vec4 shadowPosition,
     vec2 atlasOffset,
@@ -258,6 +267,16 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
     int cascadeCount = int(clamp(floor(fragmentShadowSplits.x + 0.5), 1.0, 2.0));
     float softness = fragmentShadowParams.w;
     float filterQuality = fragmentShadowFilter.x;
+    float fadeDistance = fragmentShadowFilter.w;
+    float cascadeDistance = fogDistanceForFragment();
+    float maxShadowDistance = fragmentShadowSplits.y;
+    if (cascadeCount > 1) {
+        maxShadowDistance = max(fragmentShadowSplits.y / 0.32, fragmentShadowSplits.y);
+    }
+    float distanceFade = shadowDistanceFade(cascadeDistance, maxShadowDistance, fadeDistance);
+    if (distanceFade <= 0.0001) {
+        return 1.0;
+    }
     if (cascadeCount <= 1) {
         float single = sampleShadowCascade(
             fragmentShadowPosition0,
@@ -273,10 +292,9 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
         if (single < 0.0) {
             return 1.0;
         }
-        return single;
+        return mix(1.0, single, distanceFade);
     }
 
-    float cascadeDistance = fogDistanceForFragment();
     int cascadeIndex = 0;
     if (cascadeDistance > fragmentShadowSplits.y) {
         cascadeIndex = 1;
@@ -325,7 +343,7 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
     if (selected < 0.0) {
         return 1.0;
     }
-    return selected;
+    return mix(1.0, selected, distanceFade);
 }
 
 void main() {
