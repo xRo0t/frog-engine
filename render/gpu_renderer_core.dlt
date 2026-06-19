@@ -2215,6 +2215,43 @@ attach GpuRendererCore:
         self._release_retired_buffers()
         self._debug_record_frame()
 
+    fun _apply_adaptive_shadow_filter(self, shadow_global_mapped: i64, caster_count: i32):
+        if shadow_global_mapped == 0:
+            return
+        if caster_count <= 0:
+            return
+        if self.render_state == 0:
+            return
+        light_ptr: i64 = Memory.read_ptr(self.render_state)
+        if light_ptr == 0:
+            return
+        light: DirectionalLight3D = light_ptr as DirectionalLight3D
+        if light.shadow.adaptive == 0:
+            return
+        if light.shadow.filter_samples > 0:
+            return
+
+        quality: i32 = light.shadow.filter_quality
+        if quality <= 0:
+            return
+        samples: i32 = 0
+        if caster_count <= 2:
+            if quality > 1:
+                quality = 1
+            samples = 8
+        elif caster_count <= 8:
+            if quality > 1:
+                quality = 1
+            samples = 12
+        elif caster_count <= 32:
+            if quality > 2:
+                quality = 2
+            samples = 16
+
+        if samples > 0:
+            Memory.write_f32(shadow_global_mapped + 160, quality as f32)
+            Memory.write_f32(shadow_global_mapped + 164, samples as f32)
+
     fun _record_shadow_pass(self, cmd: i64, rp: RenderPass, frame_slot: i32, light_vp: i64, cascade_count: i32) -> i32:
         if rp.shadow.initialized == 0:
             return 0
@@ -2276,6 +2313,7 @@ attach GpuRendererCore:
         viewport: i64 = self.scratch_viewport
         scissor: i64 = self.scratch_scissor
         render_begun: i32 = 0
+        shadow_instance_total: i32 = 0
         cascade_index: i32 = 0
         while cascade_index < active_cascade_count:
             cascade_matrix: i64 = light_vp + (cascade_index as i64) * 64
@@ -2350,6 +2388,7 @@ attach GpuRendererCore:
                             gi = gi + 1
 
                     if group_count > 0:
+                        shadow_instance_total = shadow_instance_total + group_count
                         if render_begun == 0:
                             vkCmdBeginRenderPass(cmd, rpi, 0)
                             vkCmdBindPipeline(cmd, 0, rp.shadow.vk_pipeline)
@@ -2394,7 +2433,7 @@ attach GpuRendererCore:
             cascade_index = cascade_index + 1
         if render_begun == 1:
             vkCmdEndRenderPass(cmd)
-        return render_begun
+        return shadow_instance_total
 
     fun _record_commands(self, cmd: i64, framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32, env: Environment, use_scaled: i32, scale_color_image: i64, swap_image: i64, swap_old_layout: i32, swap_width: i32, swap_height: i32) -> void:
         if self._ensure_shadow_globals() == 0:
@@ -2446,10 +2485,12 @@ attach GpuRendererCore:
                     cascade_count_for_pass = 1
                 if cascade_count_for_pass > 2:
                     cascade_count_for_pass = 2
-                shadow_rendered: i32 = self._record_shadow_pass(cmd, rp, frame_slot, shadow_data, cascade_count_for_pass)
-                if shadow_rendered == 0:
+                shadow_casters: i32 = self._record_shadow_pass(cmd, rp, frame_slot, shadow_data, cascade_count_for_pass)
+                if shadow_casters == 0:
                     shadow_enabled = 0
                     Memory.write_f32(shadow_global_mapped + 128, 0.0)
+                else:
+                    self._apply_adaptive_shadow_filter(shadow_global_mapped, shadow_casters)
             else:
                 shadow_enabled = 0
                 Memory.write_f32(shadow_global_mapped + 128, 0.0)

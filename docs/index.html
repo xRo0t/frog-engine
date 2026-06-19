@@ -809,6 +809,10 @@ scene.add_child(sun)</code></pre>
         <tr><td><code>set_bias(value)</code></td><td>Sets the constant shadow bias in world units.</td></tr>
         <tr><td><code>set_normal_bias(value)</code></td><td>Sets the slope-sensitive shadow bias in world units. The renderer converts both bias values to the active shadow depth range.</td></tr>
         <tr><td><code>set_softness(value)</code></td><td>Stores softness 0..1.</td></tr>
+        <tr><td><code>set_filter_quality(quality)</code></td><td>Sets the PCF quality preset.</td></tr>
+        <tr><td><code>set_filter_samples(count)</code></td><td>Sets an explicit PCF sample count. Use <code>0</code> for automatic samples.</td></tr>
+        <tr><td><code>set_filter_radius(radius)</code></td><td>Overrides the PCF radius. Use <code>0.0</code> for automatic radius from softness.</td></tr>
+        <tr><td><code>set_adaptive(enabled)</code></td><td>Lets the renderer reduce automatic shadow filtering cost when only a few casters survive culling. Enabled by default for presets.</td></tr>
       </table>
     </section>
 
@@ -828,7 +832,7 @@ cube.collision_box(<span class="tok-num">1.0</span>, <span class="tok-num">1.0</
 scene.add_child(cube)</code></pre>
 
       <div class="note"><strong>Shadow defaults.</strong> Renderable nodes cast and receive shadows by default. Only write <code>set_cast_shadows(0)</code> or <code>set_receive_shadows(0)</code> for exceptions such as effects, sky geometry, viewmodels, or special materials. Unlit materials never receive shadows effectively.</div>
-      <div class="note"><strong>Shadow culling.</strong> If no shadow caster survives the current light distance and cascade culling, Frog skips the shadow pass for that frame and disables receiver sampling automatically.</div>
+      <div class="note"><strong>Shadow culling.</strong> If no shadow caster survives the current light distance and cascade culling, Frog skips the shadow pass for that frame and disables receiver sampling automatically. When adaptive shadows are enabled and <code>set_filter_samples(0)</code> is in use, frames with only a few casters use cheaper PCF sampling.</div>
       <div class="note"><strong>Visibility is render-only.</strong> <code>set_visible(0)</code> removes the mesh from color rendering and shadow rendering, but the node, transform, raycast target, and collision box remain active. Use <code>without_collision()</code> or your own gameplay state when collision should disappear too.</div>
 
       <table>

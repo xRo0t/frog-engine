@@ -18,6 +18,7 @@ struct ShadowSettings:
     filter_quality: i32 = 2
     filter_samples: i32 = 0
     filter_radius: f32 = 0.0
+    adaptive: i32 = 1
 
 @heap struct DirectionalLight3D extends Node3D:
     color: Color = Color()
@@ -45,19 +46,19 @@ attach ShadowQuality:
 attach ShadowSettings:
 
     static fun off() -> ShadowSettings:
-        return ShadowSettings(enabled=0, map_size=0, cascades=0, distance=0.0, fade_distance=0.0, bias=0.0, normal_bias=0.0, softness=0.0, filter_quality=0, filter_samples=0, filter_radius=0.0)
+        return ShadowSettings(enabled=0, map_size=0, cascades=0, distance=0.0, fade_distance=0.0, bias=0.0, normal_bias=0.0, softness=0.0, filter_quality=0, filter_samples=0, filter_radius=0.0, adaptive=0)
 
     static fun low() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=1024, cascades=1, distance=80.0, fade_distance=12.0, bias=0.08, normal_bias=0.20, softness=0.25, filter_quality=0, filter_samples=0, filter_radius=0.0)
+        return ShadowSettings(enabled=1, map_size=1024, cascades=1, distance=80.0, fade_distance=12.0, bias=0.08, normal_bias=0.20, softness=0.25, filter_quality=0, filter_samples=0, filter_radius=0.0, adaptive=1)
 
     static fun medium() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=2048, cascades=1, distance=140.0, fade_distance=24.0, bias=0.06, normal_bias=0.15, softness=0.50, filter_quality=1, filter_samples=0, filter_radius=0.0)
+        return ShadowSettings(enabled=1, map_size=2048, cascades=1, distance=140.0, fade_distance=24.0, bias=0.06, normal_bias=0.15, softness=0.50, filter_quality=1, filter_samples=0, filter_radius=0.0, adaptive=1)
 
     static fun high() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=4096, cascades=1, distance=220.0, fade_distance=40.0, bias=0.04, normal_bias=0.10, softness=0.70, filter_quality=2, filter_samples=0, filter_radius=0.0)
+        return ShadowSettings(enabled=1, map_size=4096, cascades=1, distance=220.0, fade_distance=40.0, bias=0.04, normal_bias=0.10, softness=0.70, filter_quality=2, filter_samples=0, filter_radius=0.0, adaptive=1)
 
     static fun ultra() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=8192, cascades=2, distance=320.0, fade_distance=64.0, bias=0.03, normal_bias=0.08, softness=0.95, filter_quality=3, filter_samples=0, filter_radius=0.0)
+        return ShadowSettings(enabled=1, map_size=8192, cascades=2, distance=320.0, fade_distance=64.0, bias=0.03, normal_bias=0.08, softness=0.95, filter_quality=3, filter_samples=0, filter_radius=0.0, adaptive=1)
 
     fun set_map_size(self, size: i32) -> ShadowSettings:
         if size <= 0:
@@ -138,6 +139,13 @@ attach ShadowSettings:
             self.filter_radius = 16.0
             return self
         self.filter_radius = radius
+        return self
+
+    fun set_adaptive(self, enabled: i32) -> ShadowSettings:
+        if enabled == 0:
+            self.adaptive = 0
+            return self
+        self.adaptive = 1
         return self
 
 fun directional_light3d_create(name: str) -> DirectionalLight3D:
