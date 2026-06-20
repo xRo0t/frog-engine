@@ -613,14 +613,17 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
         <tr><td><code>Assets.shaders.load(path)</code></td><td>Shader3D</td><td>Loads a shader descriptor. Runtime compilation and pipeline binding are reserved for the advanced shader pipeline.</td></tr>
       </table>
 
-      <h4>Model Import Cache</h4>
-      <p>Large source glTF files should be imported once before shipping. The importer keeps the source path stable for game code, but writes a runtime cache with flattened geometry and material-grouped primitives while preserving the original visual topology.</p>
-      <pre><code>node packages/frog/tools/import_model.mjs assets/models/car/scene.gltf</code></pre>
-      <p>After that, game code remains explicit and clean:</p>
-      <pre><code>car: <span class="tok-type">Mesh3D</span> = Mesh3D.model(<span class="tok-str">"Car"</span>, <span class="tok-str">"models/car/scene.gltf"</span>)</code></pre>
+      <h4>Model Import Cache And LODs</h4>
+      <p>Large source glTF files should be imported once before shipping. The importer keeps the source path stable for game code, writes a flattened runtime cache, and can generate optimized LOD geometry before the game starts.</p>
+      <pre><code>cd packages/frog
+npm install
+npm run import-model -- assets/models/car/scene.gltf --preserve-materials --lods</code></pre>
+      <p>After that, game code names only the source model. Frog finds the adjacent runtime cache and preloads its generated LODs:</p>
+      <pre><code>car: <span class="tok-type">Mesh3D</span> = Mesh3D.model(<span class="tok-str">"Car"</span>, <span class="tok-str">"models/car/scene.gltf"</span>)
+car.set_lods(ModelLods.auto(<span class="tok-num">32.0</span>, <span class="tok-num">72.0</span>))</code></pre>
       <div class="note"><strong>Runtime rule.</strong> If <code>models/car/scene.frog.gltf</code> exists beside <code>scene.gltf</code>, the loader uses the cache. If it does not exist, Frog loads the source file directly for development.</div>
       <div class="note"><strong>Material mode.</strong> The importer merges many source materials into a small runtime set by default for fast startup and fewer JSON primitive walks. Use <code>--preserve-materials</code> when exact source material slots are more important than startup cost.</div>
-      <div class="note"><strong>LOD rule.</strong> Triangle dropping is not used by default because naive reduction can leave holes in models. <code>--unsafe-drop-triangles --target-triangles N</code> is only for temporary far LOD/debug assets until Frog has a real mesh simplifier.</div>
+      <div class="note"><strong>LOD rule.</strong> <code>--lods</code> generates <code>scene.frog.lod1.gltf</code>, <code>scene.frog.lod2.gltf</code>, and a manifest using meshoptimizer offline. Current runtime mode preloads these GPU meshes, so switching has no file I/O, parsing, or upload hitch. It trades GPU memory for stable frame time.</div>
 
       <h3>Asset Types</h3>
       <p>Each loader returns a small struct describing the resource. Common fields:</p>
@@ -896,11 +899,13 @@ scene.add_child(building)</code></pre>
         <tr><td><code>set_cast_shadows(enabled)</code></td><td>Overrides the default cast state for this mesh.</td></tr>
         <tr><td><code>set_receive_shadows(enabled)</code></td><td>Overrides the default receive state for this mesh. An unlit material still forces effective receiving off.</td></tr>
         <tr><td><code>set_shadow_distance(distance)</code></td><td>Sets a per-object shadow caster cutoff. <code>0.0</code> inherits the active light's shadow distance.</td></tr>
-        <tr><td><code>set_lod(index, path, distance)</code> / <code>update_lod(camera)</code></td><td>Registers model LOD levels and switches to the highest level whose distance threshold is reached.</td></tr>
+        <tr><td><code>set_lods(ModelLods.auto(lod1, lod2))</code></td><td>Preloads generated LOD1 and LOD2 beside the runtime model cache. The developer supplies only distance thresholds, never extra model paths.</td></tr>
+        <tr><td><code>update_lod(camera)</code></td><td>Chooses the prepared level from camera distance. The switch changes visibility only; it does not parse files or upload geometry.</td></tr>
+        <tr><td><code>set_lod_level(level)</code> / <code>set_lod_auto(enabled)</code></td><td>Optional manual override for debugging, photo modes, or controlled transitions.</td></tr>
         <tr><td><code>position(x,y,z)</code> / <code>rotation(x,y,z)</code> / <code>scale(x,y,z)</code></td><td>Updates the node transform and renderer transform together.</td></tr>
         <tr><td><code>collision_box(x,y,z)</code></td><td>Enables box collision in local units.</td></tr>
       </table>
-      <div class="note"><strong>LOD update rule.</strong> LOD levels are explicit render assets. Call <code>update_lod(camera)</code> during your frame update for now; scene-wide automatic LOD traversal is planned later.</div>
+      <div class="note"><strong>LOD update rule.</strong> Call <code>update_lod(camera)</code> during your frame update for now; scene-wide automatic LOD traversal is planned later. LOD files are generated at import time, never while a frame is running.</div>
     </section>
 
     <section id="camera">

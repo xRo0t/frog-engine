@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { MeshoptSimplifier } from "meshoptimizer";
 
 const USAGE = `
 Usage:
   node tools/import_model.mjs <model.gltf> [--out <model.frog.gltf>] [--preserve-materials]
-  node tools/import_model.mjs <model.gltf> --unsafe-drop-triangles --target-triangles 12000
+  node tools/import_model.mjs <model.gltf> --lods
+  node tools/import_model.mjs <model.gltf> --lod 0.45 --lod 0.22
 
 Creates a runtime glTF cache next to the source by default:
   scene.gltf -> scene.frog.gltf + scene.frog.bin
@@ -13,8 +15,9 @@ Creates a runtime glTF cache next to the source by default:
 The generated file is still glTF so the current Frog runtime can load it,
 but geometry is pre-flattened and optionally material-merged offline.
 
-Triangle dropping is intentionally not enabled by default. Use it only for
-throwaway far LOD/debug assets because it can break visual topology.
+--lods writes two optimized runtime LODs plus a sibling .lods.json manifest.
+--lod accepts a target triangle ratio from 0.01 through 0.99 and can repeat.
+LOD reduction uses meshoptimizer offline; it never runs while the game is live.
 `;
 
 function fail(message) {
@@ -29,6 +32,8 @@ function parseArgs(argv) {
     targetTriangles: 0,
     preserveMaterials: false,
     unsafeDropTriangles: false,
+    lodRatios: [],
+    useDefaultLods: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
     const a = argv[i];
@@ -48,6 +53,19 @@ function parseArgs(argv) {
     }
     if (a === "--preserve-materials") {
       args.preserveMaterials = true;
+      continue;
+    }
+    if (a === "--lods") {
+      args.useDefaultLods = true;
+      continue;
+    }
+    if (a === "--lod") {
+      i += 1;
+      const ratio = Number.parseFloat(argv[i] ?? "");
+      if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) {
+        fail("--lod must be a ratio greater than 0 and less than 1");
+      }
+      args.lodRatios.push(ratio);
       continue;
     }
     if (a === "--unsafe-drop-triangles") {
@@ -73,6 +91,9 @@ function parseArgs(argv) {
   if (args.targetTriangles > 0 && !args.unsafeDropTriangles) {
     console.warn("frog import_model: ignoring --target-triangles without --unsafe-drop-triangles");
     args.targetTriangles = 0;
+  }
+  if (args.useDefaultLods && args.lodRatios.length === 0) {
+    args.lodRatios = [0.45, 0.22];
   }
   return args;
 }
@@ -349,6 +370,86 @@ function sampleTriangles(triangles, globalStep, groupTargetMin) {
   return picked;
 }
 
+function makeVertexKey(position, normal, uv) {
+  return `${position[0]}|${position[1]}|${position[2]}|${normal[0]}|${normal[1]}|${normal[2]}|${uv[0]}|${uv[1]}`;
+}
+
+function simplifyGroup(group, ratio) {
+  if (ratio >= 0.999 || group.triangles.length <= 16) {
+    return group;
+  }
+
+  const vertexMap = new Map();
+  const positions = [];
+  const attributes = [];
+  const indices = [];
+
+  for (const triangle of group.triangles) {
+    for (let corner = 0; corner < 3; corner += 1) {
+      const position = triangle.positions[corner];
+      const normal = triangle.normals[corner];
+      const uv = triangle.uvs[corner];
+      const key = makeVertexKey(position, normal, uv);
+      let index = vertexMap.get(key);
+      if (index === undefined) {
+        index = positions.length / 3;
+        vertexMap.set(key, index);
+        positions.push(position[0], position[1], position[2]);
+        attributes.push(normal[0], normal[1], normal[2], uv[0], uv[1]);
+      }
+      indices.push(index);
+    }
+  }
+
+  const inputIndices = Uint32Array.from(indices);
+  const targetIndexCount = Math.max(3, Math.floor((inputIndices.length * ratio) / 3) * 3);
+  if (targetIndexCount >= inputIndices.length) {
+    return group;
+  }
+
+  const [simplifiedIndices] = MeshoptSimplifier.simplifyWithAttributes(
+    inputIndices,
+    Float32Array.from(positions),
+    3,
+    Float32Array.from(attributes),
+    5,
+    [1.0, 1.0],
+    null,
+    targetIndexCount,
+    0.02,
+    ["Prune"],
+  );
+
+  const triangles = [];
+  for (let offset = 0; offset < simplifiedIndices.length; offset += 3) {
+    const triangle = { positions: [], normals: [], uvs: [] };
+    for (let corner = 0; corner < 3; corner += 1) {
+      const index = simplifiedIndices[offset + corner];
+      triangle.positions.push([
+        positions[index * 3],
+        positions[index * 3 + 1],
+        positions[index * 3 + 2],
+      ]);
+      triangle.normals.push([
+        attributes[index * 5],
+        attributes[index * 5 + 1],
+        attributes[index * 5 + 2],
+      ]);
+      triangle.uvs.push([
+        attributes[index * 5 + 3],
+        attributes[index * 5 + 4],
+      ]);
+    }
+    triangles.push(triangle);
+  }
+
+  return { ...group, triangles };
+}
+
+function simplifyGroups(groups, ratio) {
+  return groups.map((group) => simplifyGroup(group, ratio));
+}
+
 function pushAligned(chunks, cursor) {
   const aligned = align4(cursor.value);
   if (aligned > cursor.value) {
@@ -552,7 +653,21 @@ function defaultOutPath(source) {
   return path.join(path.dirname(source), `${path.basename(source, ext)}.frog${ext}`);
 }
 
-function main() {
+function lodOutPath(out, level) {
+  return out.replace(/\.gltf$/i, `.lod${level}.gltf`);
+}
+
+function lodManifestPath(out) {
+  return out.replace(/\.gltf$/i, ".lods.json");
+}
+
+function writeRuntimeGltf(out, runtime, bin) {
+  const outBin = out.replace(/\.gltf$/i, ".bin");
+  fs.writeFileSync(outBin, bin);
+  fs.writeFileSync(out, `${JSON.stringify(runtime, null, 2)}\n`);
+}
+
+async function main() {
   const args = parseArgs(process.argv);
   const source = path.resolve(args.source);
   if (!fs.existsSync(source)) {
@@ -563,7 +678,6 @@ function main() {
   }
 
   const out = path.resolve(args.out || defaultOutPath(source));
-  const outBin = out.replace(/\.gltf$/i, ".bin");
   const gltf = JSON.parse(fs.readFileSync(source, "utf8"));
   const buffers = loadBuffers(gltf, source);
   const { groups, totalTriangles } = collectTriangles(gltf, buffers, args.preserveMaterials);
@@ -571,6 +685,7 @@ function main() {
     fail("no triangle primitives found");
   }
 
+  const outBin = out.replace(/\.gltf$/i, ".bin");
   const { runtime, bin, runtimeTriangles, step } = buildRuntimeGltf(
     gltf,
     groups,
@@ -582,8 +697,47 @@ function main() {
   );
 
   fs.mkdirSync(path.dirname(out), { recursive: true });
-  fs.writeFileSync(outBin, bin);
-  fs.writeFileSync(out, `${JSON.stringify(runtime, null, 2)}\n`);
+  writeRuntimeGltf(out, runtime, bin);
+
+  const lodLevels = [{ path: path.basename(out), ratio: 1.0, triangles: runtimeTriangles }];
+  if (args.lodRatios.length > 0) {
+    await MeshoptSimplifier.ready;
+    for (let index = 0; index < args.lodRatios.length; index += 1) {
+      const ratio = args.lodRatios[index];
+      const lodGroups = simplifyGroups(groups, ratio);
+      const lodTotalTriangles = lodGroups.reduce((total, group) => total + group.triangles.length, 0);
+      const lodOut = lodOutPath(out, index + 1);
+      const lodBin = lodOut.replace(/\.gltf$/i, ".bin");
+      const lodBuild = buildRuntimeGltf(
+        gltf,
+        lodGroups,
+        lodTotalTriangles,
+        0,
+        path.basename(lodBin),
+        args.preserveMaterials,
+        false,
+      );
+      writeRuntimeGltf(lodOut, lodBuild.runtime, lodBuild.bin);
+      lodLevels.push({
+        path: path.basename(lodOut),
+        ratio,
+        triangles: lodBuild.runtimeTriangles,
+      });
+    }
+
+    const manifest = {
+      version: 1,
+      generator: "Frog import_model",
+      source: path.basename(source),
+      levels: lodLevels,
+    };
+    fs.writeFileSync(lodManifestPath(out), `${JSON.stringify(manifest, null, 2)}\n`);
+    console.log(`lod manifest: ${lodManifestPath(out)}`);
+    for (let index = 1; index < lodLevels.length; index += 1) {
+      const lod = lodLevels[index];
+      console.log(`lod${index}: ${lod.path} (${lod.triangles} triangles, ${Math.round(lod.ratio * 100)}%)`);
+    }
+  }
 
   console.log(`source: ${source}`);
   console.log(`output: ${out}`);
@@ -593,4 +747,4 @@ function main() {
   console.log(`materials/primitives: ${runtime.materials?.length ?? 0}/${runtime.meshes[0].primitives.length}`);
 }
 
-main();
+main().catch((error) => fail(error instanceof Error ? error.message : String(error)));

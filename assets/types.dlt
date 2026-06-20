@@ -35,6 +35,11 @@ struct Model3D:
     ready: i32 = 0
     error: str = ""
 
+struct ModelLods:
+    lod1_distance: f32 = 32.0
+    lod2_distance: f32 = 72.0
+    enabled: i32 = 1
+
 struct Texture2D:
     path: str = ""
     resolved_path: str = ""

@@ -40,6 +40,8 @@ attach Mesh3DShape:
     lod_count: i32 = 0
     lod_capacity: i32 = 0
     lod_active: i32 = 0 - 1
+    lod_manual: i32 = 0
+    lod_nodes: i64 = 0
 
 fun mesh3d_create(name: str) -> Mesh3D:
     node: Mesh3D = Mesh3D()
@@ -94,6 +96,8 @@ fun mesh3d_create(name: str) -> Mesh3D:
     node.lod_count = 0
     node.lod_capacity = 0
     node.lod_active = 0 - 1
+    node.lod_manual = 0
+    node.lod_nodes = 0
     return node
 
 attach Mesh3D:
@@ -218,16 +222,9 @@ attach Mesh3D:
         return self
 
     fun apply_visibility(self) -> Mesh3D:
-        if self.model_part_count > 0:
-            i: i32 = 0
-            while i < self.model_part_count:
-                part_id: i32 = self._part_mesh_id(i)
-                if part_id >= 0:
-                    Engine.set_instance_visible(part_id, self.visible)
-                i = i + 1
-            return self
-        if self.mesh_id >= 0:
-            Engine.set_instance_visible(self.mesh_id, self.visible)
+        if self.lod_nodes != 0:
+            return self._apply_lod_visibility()
+        self._apply_own_visibility(self.visible)
         return self
 
     fun _apply_material_to_mesh(self, mesh_id: i32, material: Material3D) -> Mesh3D:
@@ -276,9 +273,13 @@ attach Mesh3D:
                         part_material = self.model_materials.resolve(part_name, part_material_index, self.material)
                     self._apply_material_to_mesh(part_id, part_material)
                 i = i + 1
+            self._apply_preloaded_lod_materials()
+            self._apply_lod_visibility()
             return self
         if self.mesh_id >= 0:
             self._apply_material_to_mesh(self.mesh_id, self.material)
+        self._apply_preloaded_lod_materials()
+        self._apply_lod_visibility()
         return self
 
     fun rebuild_mesh(self) -> Mesh3D:
@@ -317,25 +318,21 @@ attach Mesh3D:
                 if part_id >= 0:
                     Engine.set_transform(part_id, self.pos_x, self.pos_y, self.pos_z, self.rot_x, self.rot_y, self.rot_z, self.scale_x, self.scale_y, self.scale_z)
                 i = i + 1
+            self._sync_preloaded_lod_transforms()
             return self
         if self.mesh_id >= 0:
             Engine.set_transform(self.mesh_id, self.pos_x, self.pos_y, self.pos_z, self.rot_x, self.rot_y, self.rot_z, self.scale_x, self.scale_y, self.scale_z)
+        self._sync_preloaded_lod_transforms()
         return self
 
     fun set_model_materials(self, materials: ModelMaterials) -> Mesh3D:
         self.model_materials = materials
         self.has_model_materials = 1
-        if self.primitive_kind == MESH3D_SHAPE_MODEL:
-            if self.has_model_source == 1:
-                return self.set_model(self.model_source)
         return self.apply_material_bindings()
 
     fun clear_model_materials(self) -> Mesh3D:
         self.has_model_materials = 0
         self.model_materials = ModelMaterials()
-        if self.primitive_kind == MESH3D_SHAPE_MODEL:
-            if self.has_model_source == 1:
-                return self.set_model(self.model_source)
         return self.apply_material_bindings()
 
     fun _ensure_lod_capacity(self, index: i32) -> Mesh3D:
@@ -347,6 +344,19 @@ attach Mesh3D:
                 capacity = capacity * 2
             self.lod_paths = Memory.malloc_zeroed((capacity as i64) * 8)
             self.lod_distances = Memory.malloc_zeroed((capacity as i64) * 4)
+            self.lod_nodes = Memory.malloc_zeroed((capacity as i64) * 8)
+            if self.lod_paths == 0:
+                return self
+            if self.lod_distances == 0:
+                Memory.free(self.lod_paths)
+                self.lod_paths = 0
+                return self
+            if self.lod_nodes == 0:
+                Memory.free(self.lod_paths)
+                Memory.free(self.lod_distances)
+                self.lod_paths = 0
+                self.lod_distances = 0
+                return self
             self.lod_capacity = capacity
             return self
         if index < self.lod_capacity:
@@ -356,10 +366,15 @@ attach Mesh3D:
             new_capacity = new_capacity * 2
         new_paths: i64 = Memory.malloc_zeroed((new_capacity as i64) * 8)
         new_distances: i64 = Memory.malloc_zeroed((new_capacity as i64) * 4)
+        new_nodes: i64 = Memory.malloc_zeroed((new_capacity as i64) * 8)
         if new_paths == 0:
             return self
         if new_distances == 0:
             Memory.free(new_paths)
+            return self
+        if new_nodes == 0:
+            Memory.free(new_paths)
+            Memory.free(new_distances)
             return self
         if self.lod_paths != 0:
             Memory.copy(new_paths, self.lod_paths, (self.lod_capacity as i64) * 8)
@@ -367,9 +382,146 @@ attach Mesh3D:
         if self.lod_distances != 0:
             Memory.copy(new_distances, self.lod_distances, (self.lod_capacity as i64) * 4)
             Memory.free(self.lod_distances)
+        if self.lod_nodes != 0:
+            Memory.copy(new_nodes, self.lod_nodes, (self.lod_capacity as i64) * 8)
+            Memory.free(self.lod_nodes)
         self.lod_paths = new_paths
         self.lod_distances = new_distances
+        self.lod_nodes = new_nodes
         self.lod_capacity = new_capacity
+        return self
+
+    fun _lod_node(self, index: i32) -> Mesh3D:
+        if self.lod_nodes == 0:
+            return null as Mesh3D
+        if index < 0:
+            return null as Mesh3D
+        if index >= self.lod_capacity:
+            return null as Mesh3D
+        node_ptr: i64 = Memory.read_ptr(self.lod_nodes + ((index as i64) * 8))
+        return node_ptr as Mesh3D
+
+    fun _set_lod_node(self, index: i32, node: Mesh3D) -> Mesh3D:
+        if self.lod_nodes == 0:
+            return self
+        if index < 0:
+            return self
+        if index >= self.lod_capacity:
+            return self
+        Memory.write_ptr(self.lod_nodes + ((index as i64) * 8), node as i64)
+        return self
+
+    fun _clear_preloaded_lod_nodes(self) -> Mesh3D:
+        if self.lod_nodes == 0:
+            return self
+        i: i32 = 1
+        while i < self.lod_capacity:
+            node_ptr: i64 = Memory.read_ptr(self.lod_nodes + ((i as i64) * 8))
+            if node_ptr != 0:
+                lod_node: Mesh3D = node_ptr as Mesh3D
+                lod_node._clear_model_parts()
+                node_destroy(node_ptr)
+            i = i + 1
+        return self
+
+    fun _apply_own_visibility(self, on: i32) -> Mesh3D:
+        if self.model_part_count > 0:
+            i: i32 = 0
+            while i < self.model_part_count:
+                part_id: i32 = self._part_mesh_id(i)
+                if part_id >= 0:
+                    Engine.set_instance_visible(part_id, on)
+                i = i + 1
+            return self
+        if self.mesh_id >= 0:
+            Engine.set_instance_visible(self.mesh_id, on)
+        return self
+
+    fun _apply_lod_visibility(self) -> Mesh3D:
+        own_visible: i32 = self.visible
+        if self.lod_active > 0:
+            own_visible = 0
+        self._apply_own_visibility(own_visible)
+        if self.lod_nodes == 0:
+            return self
+        i: i32 = 1
+        while i < self.lod_count:
+            lod_node: Mesh3D = self._lod_node(i)
+            if (lod_node as i64) != 0:
+                node_visible: i32 = 0
+                if i == self.lod_active:
+                    node_visible = self.visible
+                lod_node._apply_own_visibility(node_visible)
+            i = i + 1
+        return self
+
+    fun _sync_preloaded_lod_transforms(self) -> Mesh3D:
+        if self.lod_nodes == 0:
+            return self
+        i: i32 = 1
+        while i < self.lod_count:
+            lod_node: Mesh3D = self._lod_node(i)
+            if (lod_node as i64) != 0:
+                lod_node.pos_x = self.pos_x
+                lod_node.pos_y = self.pos_y
+                lod_node.pos_z = self.pos_z
+                lod_node.rot_x = self.rot_x
+                lod_node.rot_y = self.rot_y
+                lod_node.rot_z = self.rot_z
+                lod_node.scale_x = self.scale_x
+                lod_node.scale_y = self.scale_y
+                lod_node.scale_z = self.scale_z
+                lod_node.sync_transform()
+            i = i + 1
+        return self
+
+    fun _apply_preloaded_lod_materials(self) -> Mesh3D:
+        if self.lod_nodes == 0:
+            return self
+        i: i32 = 1
+        while i < self.lod_count:
+            lod_node: Mesh3D = self._lod_node(i)
+            if (lod_node as i64) != 0:
+                lod_node.material = self.material
+                lod_node.model_materials = self.model_materials
+                lod_node.has_model_materials = self.has_model_materials
+                lod_node.cast_shadows = self.cast_shadows
+                lod_node.receive_shadows = self.receive_shadows
+                lod_node.shadow_distance = self.shadow_distance
+                lod_node.apply_material_bindings()
+            i = i + 1
+        return self
+
+    fun _preload_lod(self, index: i32, path: str) -> Mesh3D:
+        if index <= 0:
+            return self
+        self._ensure_lod_capacity(index)
+        if self.lod_nodes == 0:
+            return self
+        model: Model3D = Assets.models.load(path)
+        if model.found == 0:
+            return self
+        if model.parsed == 0:
+            return self
+        lod_node: Mesh3D = Mesh3D.create(self.name)
+        lod_node.visible = 0
+        lod_node.material = self.material
+        lod_node.model_materials = self.model_materials
+        lod_node.has_model_materials = self.has_model_materials
+        lod_node.cast_shadows = self.cast_shadows
+        lod_node.receive_shadows = self.receive_shadows
+        lod_node.shadow_distance = self.shadow_distance
+        lod_node.pos_x = self.pos_x
+        lod_node.pos_y = self.pos_y
+        lod_node.pos_z = self.pos_z
+        lod_node.rot_x = self.rot_x
+        lod_node.rot_y = self.rot_y
+        lod_node.rot_z = self.rot_z
+        lod_node.scale_x = self.scale_x
+        lod_node.scale_y = self.scale_y
+        lod_node.scale_z = self.scale_z
+        lod_node.set_model(model)
+        self._set_lod_node(index, lod_node)
         return self
 
     fun set_lod(self, index: i32, path: str, distance: f32) -> Mesh3D:
@@ -395,7 +547,32 @@ attach Mesh3D:
             self.lod_count = index + 1
         return self
 
+    fun set_lods(self, lods: ModelLods) -> Mesh3D:
+        if self.has_model_source == 0:
+            return self
+        if self.primitive_kind != MESH3D_SHAPE_MODEL:
+            return self
+        self.clear_lods()
+        self.set_lod(0, self.model_source.path, 0.0)
+        self.lod_active = 0
+        self.lod_manual = 0
+        if lods.enabled == 0:
+            return self
+        lod1_path: str = AssetModels.runtime_lod1_path(self.model_source.path)
+        if Memory.strlen(lod1_path) > 0:
+            self.set_lod(1, lod1_path, lods.lod1_distance)
+            self._preload_lod(1, lod1_path)
+        lod2_path: str = AssetModels.runtime_lod2_path(self.model_source.path)
+        if Memory.strlen(lod2_path) > 0:
+            self.set_lod(2, lod2_path, lods.lod2_distance)
+            self._preload_lod(2, lod2_path)
+        self._sync_preloaded_lod_transforms()
+        self._apply_preloaded_lod_materials()
+        self._apply_lod_visibility()
+        return self
+
     fun clear_lods(self) -> Mesh3D:
+        self._clear_preloaded_lod_nodes()
         if self.lod_paths != 0:
             i: i32 = 0
             while i < self.lod_count:
@@ -406,11 +583,38 @@ attach Mesh3D:
             Memory.free(self.lod_paths)
         if self.lod_distances != 0:
             Memory.free(self.lod_distances)
+        if self.lod_nodes != 0:
+            Memory.free(self.lod_nodes)
         self.lod_paths = 0
         self.lod_distances = 0
+        self.lod_nodes = 0
         self.lod_count = 0
         self.lod_capacity = 0
         self.lod_active = 0 - 1
+        self.lod_manual = 0
+        return self
+
+    fun set_lod_level(self, level: i32) -> Mesh3D:
+        if self.lod_count <= 0:
+            return self
+        selected: i32 = level
+        if selected < 0:
+            selected = 0
+        if selected >= self.lod_count:
+            selected = self.lod_count - 1
+        if selected > 0:
+            selected_node: Mesh3D = self._lod_node(selected)
+            if (selected_node as i64) == 0:
+                return self
+        self.lod_manual = 1
+        self.lod_active = selected
+        self._apply_lod_visibility()
+        return self
+
+    fun set_lod_auto(self, enabled: i32) -> Mesh3D:
+        self.lod_manual = 1
+        if enabled != 0:
+            self.lod_manual = 0
         return self
 
     fun update_lod(self, camera: Camera3D) -> Mesh3D:
@@ -419,6 +623,8 @@ attach Mesh3D:
         if self.lod_paths == 0:
             return self
         if self.lod_distances == 0:
+            return self
+        if self.lod_manual == 1:
             return self
         if (camera as i64) == 0:
             return self
@@ -447,6 +653,16 @@ attach Mesh3D:
             return self
         if selected == self.lod_active:
             return self
+        if self.lod_nodes != 0:
+            if selected == 0:
+                self.lod_active = selected
+                self._apply_lod_visibility()
+                return self
+            selected_node: Mesh3D = self._lod_node(selected)
+            if (selected_node as i64) != 0:
+                self.lod_active = selected
+                self._apply_lod_visibility()
+            return self
         selected_path_ptr: i64 = Memory.read_ptr(self.lod_paths + ((selected as i64) * 8))
         if selected_path_ptr == 0:
             return self
@@ -461,6 +677,7 @@ attach Mesh3D:
         return self
 
     fun set_model(self, model: Model3D) -> Mesh3D:
+        self.clear_lods()
         old_id: i32 = self.mesh_id
         if self.model_part_count > 0:
             self._clear_model_parts()

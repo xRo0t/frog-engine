@@ -74,7 +74,7 @@ export KEY_LEFT, KEY_UP, KEY_RIGHT, KEY_DOWN
 export KEY_ESCAPE, KEY_SPACE, KEY_SHIFT, KEY_CTRL
 export MOUSE_LEFT, MOUSE_RIGHT
 export Assets, AssetModels, AssetTextures, AssetAudio, AssetShaders
-export Model3D, Texture2D, AudioClip, Shader, Shader3D
+export Model3D, ModelLods, Texture2D, AudioClip, Shader, Shader3D
 export GpuTexture, TextureSpec, GpuMeshData
 export Environment, Fog, Sky, SkyShape, SkyObject, DayCycle
 export Node, Node3D, Mesh3D, Mesh3DShape, Material3D, ModelMaterials, Camera3D, DirectionalLight3D, ShadowSettings, RootNode

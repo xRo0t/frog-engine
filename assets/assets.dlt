@@ -30,6 +30,17 @@ attach Assets:
         joined: str = PathOps.join_path(g_assets_root, path)
         return PathOps.resolve_path(joined)
 
+attach ModelLods:
+
+    static fun auto(lod1_distance: f32, lod2_distance: f32) -> ModelLods:
+        lod1: f32 = lod1_distance
+        lod2: f32 = lod2_distance
+        if lod1 < 0.0:
+            lod1 = 0.0
+        if lod2 < lod1:
+            lod2 = lod1
+        return ModelLods(lod1_distance=lod1, lod2_distance=lod2, enabled=1)
+
 attach AssetModels:
 
     static fun runtime_cache_path(path: str) -> str:
@@ -40,6 +51,24 @@ attach AssetModels:
             return ""
         base: str = Str.substring(path, 0, path_len - 5)
         return base + ".frog.gltf"
+
+    static fun runtime_lod1_path(path: str) -> str:
+        if Str.ends_with(path, ".frog.gltf") == false:
+            return ""
+        path_len: i64 = Memory.strlen(path)
+        if path_len <= 10:
+            return ""
+        base: str = Str.substring(path, 0, path_len - 5)
+        return base + ".lod1.gltf"
+
+    static fun runtime_lod2_path(path: str) -> str:
+        if Str.ends_with(path, ".frog.gltf") == false:
+            return ""
+        path_len: i64 = Memory.strlen(path)
+        if path_len <= 10:
+            return ""
+        base: str = Str.substring(path, 0, path_len - 5)
+        return base + ".lod2.gltf"
 
     static fun load(path: str) -> Model3D:
         resolved: str = Assets.resolve(path)
