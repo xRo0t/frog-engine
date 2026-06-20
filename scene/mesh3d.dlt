@@ -25,6 +25,15 @@ attach Mesh3DShape:
     primitive_kind: i32 = 0
     color: Color = Color()
     material: Material3D = Material3D()
+    model_part_mesh_ids: i64 = 0
+    model_part_material_names: i64 = 0
+    model_part_material_indices: i64 = 0
+    model_part_count: i32 = 0
+    model_part_capacity: i32 = 0
+    model_materials: ModelMaterials = ModelMaterials()
+    has_model_materials: i32 = 0
+    model_source: Model3D = Model3D()
+    has_model_source: i32 = 0
 
 fun mesh3d_create(name: str) -> Mesh3D:
     node: Mesh3D = Mesh3D()
@@ -64,13 +73,163 @@ fun mesh3d_create(name: str) -> Mesh3D:
     node.primitive_kind = 0
     node.color = Color.white()
     node.material = Material3D.create()
+    node.model_part_mesh_ids = 0
+    node.model_part_material_names = 0
+    node.model_part_material_indices = 0
+    node.model_part_count = 0
+    node.model_part_capacity = 0
+    node.model_materials = ModelMaterials()
+    node.has_model_materials = 0
+    node.model_source = Model3D()
+    node.has_model_source = 0
     return node
 
 attach Mesh3D:
 
+    fun _ensure_model_part_capacity(self) -> Mesh3D:
+        if self.model_part_capacity <= 0:
+            self.model_part_capacity = 8
+            self.model_part_count = 0
+            self.model_part_mesh_ids = Memory.malloc_zeroed((self.model_part_capacity as i64) * 4)
+            self.model_part_material_names = Memory.malloc_zeroed((self.model_part_capacity as i64) * 8)
+            self.model_part_material_indices = Memory.malloc_zeroed((self.model_part_capacity as i64) * 4)
+            return self
+        if self.model_part_mesh_ids == 0:
+            self.model_part_mesh_ids = Memory.malloc_zeroed((self.model_part_capacity as i64) * 4)
+        if self.model_part_material_names == 0:
+            self.model_part_material_names = Memory.malloc_zeroed((self.model_part_capacity as i64) * 8)
+        if self.model_part_material_indices == 0:
+            self.model_part_material_indices = Memory.malloc_zeroed((self.model_part_capacity as i64) * 4)
+        if self.model_part_count < self.model_part_capacity:
+            return self
+        new_capacity: i32 = self.model_part_capacity * 2
+        new_mesh_ids: i64 = Memory.malloc_zeroed((new_capacity as i64) * 4)
+        new_names: i64 = Memory.malloc_zeroed((new_capacity as i64) * 8)
+        new_indices: i64 = Memory.malloc_zeroed((new_capacity as i64) * 4)
+        if new_mesh_ids == 0:
+            return self
+        if new_names == 0:
+            Memory.free(new_mesh_ids)
+            return self
+        if new_indices == 0:
+            Memory.free(new_mesh_ids)
+            Memory.free(new_names)
+            return self
+        Memory.copy(new_mesh_ids, self.model_part_mesh_ids, (self.model_part_capacity as i64) * 4)
+        Memory.copy(new_names, self.model_part_material_names, (self.model_part_capacity as i64) * 8)
+        Memory.copy(new_indices, self.model_part_material_indices, (self.model_part_capacity as i64) * 4)
+        Memory.free(self.model_part_mesh_ids)
+        Memory.free(self.model_part_material_names)
+        Memory.free(self.model_part_material_indices)
+        self.model_part_mesh_ids = new_mesh_ids
+        self.model_part_material_names = new_names
+        self.model_part_material_indices = new_indices
+        self.model_part_capacity = new_capacity
+        return self
+
+    fun _part_mesh_id(self, index: i32) -> i32:
+        if self.model_part_mesh_ids == 0:
+            return -1
+        if index < 0:
+            return -1
+        if index >= self.model_part_count:
+            return -1
+        return Memory.read_i32(self.model_part_mesh_ids + ((index as i64) * 4))
+
+    fun _part_material_name(self, index: i32) -> str:
+        if self.model_part_material_names == 0:
+            return ""
+        if index < 0:
+            return ""
+        if index >= self.model_part_count:
+            return ""
+        return Memory.read_ptr(self.model_part_material_names + ((index as i64) * 8)) as str
+
+    fun _part_material_index(self, index: i32) -> i32:
+        if self.model_part_material_indices == 0:
+            return -1
+        if index < 0:
+            return -1
+        if index >= self.model_part_count:
+            return -1
+        return Memory.read_i32(self.model_part_material_indices + ((index as i64) * 4))
+
+    fun _clear_model_parts(self) -> Mesh3D:
+        i: i32 = 0
+        while i < self.model_part_count:
+            part_id: i32 = self._part_mesh_id(i)
+            if part_id >= 0:
+                Engine.set_instance_visible(part_id, 0)
+            name_ptr: i64 = 0
+            if self.model_part_material_names != 0:
+                name_ptr = Memory.read_ptr(self.model_part_material_names + ((i as i64) * 8))
+                if name_ptr != 0:
+                    if Memory.strlen(name_ptr as str) > 0:
+                        Memory.free(name_ptr)
+            i = i + 1
+        if self.model_part_mesh_ids != 0:
+            Memory.free(self.model_part_mesh_ids)
+        if self.model_part_material_names != 0:
+            Memory.free(self.model_part_material_names)
+        if self.model_part_material_indices != 0:
+            Memory.free(self.model_part_material_indices)
+        self.model_part_mesh_ids = 0
+        self.model_part_material_names = 0
+        self.model_part_material_indices = 0
+        self.model_part_count = 0
+        self.model_part_capacity = 0
+        self.mesh_id = -1
+        return self
+
+    fun _append_model_part(self, mesh_id: i32, material_name: str, material_index: i32) -> Mesh3D:
+        if mesh_id < 0:
+            return self
+        self._ensure_model_part_capacity()
+        if self.model_part_mesh_ids == 0:
+            return self
+        if self.model_part_material_names == 0:
+            return self
+        if self.model_part_material_indices == 0:
+            return self
+        if self.model_part_count >= self.model_part_capacity:
+            return self
+        slot: i32 = self.model_part_count
+        Memory.write_i32(self.model_part_mesh_ids + ((slot as i64) * 4), mesh_id)
+        stored_name: str = ""
+        if Memory.strlen(material_name) > 0:
+            stored_name = Str.strcpy(material_name)
+        Memory.write_ptr(self.model_part_material_names + ((slot as i64) * 8), stored_name as i64)
+        Memory.write_i32(self.model_part_material_indices + ((slot as i64) * 4), material_index)
+        self.model_part_count = slot + 1
+        if self.mesh_id < 0:
+            self.mesh_id = mesh_id
+        return self
+
     fun apply_visibility(self) -> Mesh3D:
+        if self.model_part_count > 0:
+            i: i32 = 0
+            while i < self.model_part_count:
+                part_id: i32 = self._part_mesh_id(i)
+                if part_id >= 0:
+                    Engine.set_instance_visible(part_id, self.visible)
+                i = i + 1
+            return self
         if self.mesh_id >= 0:
             Engine.set_instance_visible(self.mesh_id, self.visible)
+        return self
+
+    fun _apply_material_to_mesh(self, mesh_id: i32, material: Material3D) -> Mesh3D:
+        if mesh_id >= 0:
+            tex_id: i32 = -1
+            if material.has_albedo == 1:
+                tex_id = material.albedo.texture_id
+            Engine.bind_texture(mesh_id, tex_id)
+            Engine.bind_material(mesh_id, material)
+            effective_receive: i32 = self.receive_shadows
+            if material.unlit != 0:
+                effective_receive = 0
+            Engine.set_shadow_flags(mesh_id, self.cast_shadows, effective_receive)
+            Engine.set_instance_visible(mesh_id, self.visible)
         return self
 
     fun replace_mesh_id(self, mesh_id: i32) -> Mesh3D:
@@ -92,18 +251,27 @@ attach Mesh3D:
         self.texture_id = -1
         if self.material.has_albedo == 1:
             self.texture_id = self.material.albedo.texture_id
+        if self.model_part_count > 0:
+            i: i32 = 0
+            while i < self.model_part_count:
+                part_id: i32 = self._part_mesh_id(i)
+                if part_id >= 0:
+                    part_material: Material3D = self.material
+                    if self.has_model_materials == 1:
+                        part_name: str = self._part_material_name(i)
+                        part_material_index: i32 = self._part_material_index(i)
+                        part_material = self.model_materials.resolve(part_name, part_material_index, self.material)
+                    self._apply_material_to_mesh(part_id, part_material)
+                i = i + 1
+            return self
         if self.mesh_id >= 0:
-            Engine.bind_texture(self.mesh_id, self.texture_id)
-            Engine.bind_material(self.mesh_id, self.material)
-            effective_receive: i32 = self.receive_shadows
-            if self.material.unlit != 0:
-                effective_receive = 0
-            Engine.set_shadow_flags(self.mesh_id, self.cast_shadows, effective_receive)
-            Engine.set_instance_visible(self.mesh_id, self.visible)
+            self._apply_material_to_mesh(self.mesh_id, self.material)
         return self
 
     fun rebuild_mesh(self) -> Mesh3D:
         if self.primitive_kind == MESH3D_SHAPE_CUBE:
+            if self.model_part_count > 0:
+                self._clear_model_parts()
             new_mesh_id: i32 = Engine.upload_colored_cube_mesh(self.material.color)
             if new_mesh_id < 0:
                 return self
@@ -112,6 +280,8 @@ attach Mesh3D:
             self.apply_material_bindings()
             return self
         if self.primitive_kind == MESH3D_SHAPE_PLANE:
+            if self.model_part_count > 0:
+                self._clear_model_parts()
             new_mesh_id: i32 = Engine.upload_colored_plane_mesh(self.material.color)
             if new_mesh_id < 0:
                 return self
@@ -127,26 +297,93 @@ attach Mesh3D:
         return self
 
     fun sync_transform(self) -> Mesh3D:
+        if self.model_part_count > 0:
+            i: i32 = 0
+            while i < self.model_part_count:
+                part_id: i32 = self._part_mesh_id(i)
+                if part_id >= 0:
+                    Engine.set_transform(part_id, self.pos_x, self.pos_y, self.pos_z, self.rot_x, self.rot_y, self.rot_z, self.scale_x, self.scale_y, self.scale_z)
+                i = i + 1
+            return self
         if self.mesh_id >= 0:
             Engine.set_transform(self.mesh_id, self.pos_x, self.pos_y, self.pos_z, self.rot_x, self.rot_y, self.rot_z, self.scale_x, self.scale_y, self.scale_z)
         return self
 
+    fun set_model_materials(self, materials: ModelMaterials) -> Mesh3D:
+        self.model_materials = materials
+        self.has_model_materials = 1
+        if self.primitive_kind == MESH3D_SHAPE_MODEL:
+            if self.has_model_source == 1:
+                return self.set_model(self.model_source)
+        return self.apply_material_bindings()
+
+    fun clear_model_materials(self) -> Mesh3D:
+        self.has_model_materials = 0
+        self.model_materials = ModelMaterials()
+        if self.primitive_kind == MESH3D_SHAPE_MODEL:
+            if self.has_model_source == 1:
+                return self.set_model(self.model_source)
+        return self.apply_material_bindings()
+
     fun set_model(self, model: Model3D) -> Mesh3D:
+        old_id: i32 = self.mesh_id
+        if self.model_part_count > 0:
+            self._clear_model_parts()
+        if self.mesh_id >= 0:
+            Engine.set_instance_visible(self.mesh_id, 0)
+        elif old_id >= 0:
+            Engine.set_instance_visible(old_id, 0)
+        self.mesh_id = -1
+        self.model_source = model
+        self.has_model_source = 1
         if model.found == 0:
             return self
         if model.parsed == 0:
             return self
-        source_mesh: i32 = Engine.upload_model(model.path)
-        if source_mesh < 0:
-            source_mesh = Engine.upload_model_mesh(model)
-        if source_mesh < 0:
-            return self
-        model_instance: i32 = Engine.register_instance(source_mesh)
-        if model_instance < 0:
-            return self
-        Engine.set_instance_visible(source_mesh, 0)
         self.primitive_kind = MESH3D_SHAPE_MODEL
-        self.replace_mesh_id(model_instance)
+
+        if self.has_model_materials == 0:
+            source_mesh: i32 = Engine.upload_model_mesh(model)
+            if source_mesh < 0:
+                return self
+            model_instance: i32 = Engine.register_instance(source_mesh)
+            if model_instance < 0:
+                return self
+            Engine.set_instance_visible(source_mesh, 0)
+            self.replace_mesh_id(model_instance)
+            self.sync_transform()
+            self.apply_material_bindings()
+            return self
+
+        mesh_index: i32 = 0
+        part_count: i32 = 0
+        while mesh_index < model.mesh_count:
+            primitive_count: i32 = model.mesh_primitive_count(mesh_index)
+            primitive_index: i32 = 0
+            while primitive_index < primitive_count:
+                source_mesh: i32 = Engine.upload_model_part(model, mesh_index, primitive_index)
+                if source_mesh >= 0:
+                    model_instance: i32 = Engine.register_instance(source_mesh)
+                    if model_instance >= 0:
+                        Engine.set_instance_visible(source_mesh, 0)
+                        material_index: i32 = model.primitive_material_index(mesh_index, primitive_index)
+                        material_name: str = model.material_name(material_index)
+                        before_append: i32 = self.model_part_count
+                        self._append_model_part(model_instance, material_name, material_index)
+                        if self.model_part_count > before_append:
+                            part_count = part_count + 1
+                primitive_index = primitive_index + 1
+            mesh_index = mesh_index + 1
+
+        if part_count <= 0:
+            source_mesh2: i32 = Engine.upload_model_mesh(model)
+            if source_mesh2 < 0:
+                return self
+            model_instance2: i32 = Engine.register_instance(source_mesh2)
+            if model_instance2 < 0:
+                return self
+            Engine.set_instance_visible(source_mesh2, 0)
+            self.replace_mesh_id(model_instance2)
         self.sync_transform()
         self.apply_material_bindings()
         return self

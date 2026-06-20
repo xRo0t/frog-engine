@@ -6,6 +6,78 @@
 struct GltfLoader:
     _placeholder: i32 = 0
 
+attach Model3D:
+
+    fun primitive_count(self) -> i32:
+        if self.parsed == 0:
+            return 0
+        if self.doc.valid() == 0:
+            return 0
+        root: JsonValue = self.doc.root
+        meshes: JsonValue = root.get("meshes")
+        total: i32 = 0
+        mi: i32 = 0
+        mesh_count: i32 = meshes.size()
+        while mi < mesh_count:
+            mesh: JsonValue = meshes.at(mi)
+            prims: JsonValue = mesh.get("primitives")
+            total = total + prims.size()
+            mi = mi + 1
+        return total
+
+    fun mesh_primitive_count(self, mesh_index: i32) -> i32:
+        if self.parsed == 0:
+            return 0
+        if self.doc.valid() == 0:
+            return 0
+        if mesh_index < 0:
+            return 0
+        root: JsonValue = self.doc.root
+        meshes: JsonValue = root.get("meshes")
+        if mesh_index >= meshes.size():
+            return 0
+        mesh: JsonValue = meshes.at(mesh_index)
+        prims: JsonValue = mesh.get("primitives")
+        return prims.size()
+
+    fun primitive_material_index(self, mesh_index: i32, primitive_index: i32) -> i32:
+        if self.parsed == 0:
+            return -1
+        if self.doc.valid() == 0:
+            return -1
+        if mesh_index < 0:
+            return -1
+        if primitive_index < 0:
+            return -1
+        root: JsonValue = self.doc.root
+        meshes: JsonValue = root.get("meshes")
+        if mesh_index >= meshes.size():
+            return -1
+        mesh: JsonValue = meshes.at(mesh_index)
+        prims: JsonValue = mesh.get("primitives")
+        if primitive_index >= prims.size():
+            return -1
+        prim: JsonValue = prims.at(primitive_index)
+        return prim.get_i32("material")
+
+    fun material_name(self, material_index: i32) -> str:
+        if self.parsed == 0:
+            return ""
+        if self.doc.valid() == 0:
+            return ""
+        if material_index < 0:
+            return ""
+        root: JsonValue = self.doc.root
+        materials: JsonValue = root.get("materials")
+        if material_index >= materials.size():
+            return ""
+        material: JsonValue = materials.at(material_index)
+        return material.get_str("name")
+
+    fun primitive_material_name(self, mesh_index: i32, primitive_index: i32) -> str:
+        material_index: i32 = self.primitive_material_index(mesh_index, primitive_index)
+        return self.material_name(material_index)
+
 attach GltfLoader:
 
     static fun load(path: str, resolved_path: str, format: str) -> Model3D:

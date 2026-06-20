@@ -23,6 +23,16 @@ struct Material3D:
     unlit: i32 = 0
     double_sided: i32 = 0
 
+@heap struct ModelMaterialEntry:
+    name: str = ""
+    material_index: i32 = -1
+    material: Material3D = Material3D()
+
+struct ModelMaterials:
+    entries: i64 = 0
+    count: i32 = 0
+    capacity: i32 = 0
+
 attach Material3D:
 
     static fun create() -> Material3D:
@@ -134,3 +144,140 @@ attach Material3D:
     fun set_double_sided(self, enabled: i32) -> Material3D:
         self.double_sided = enabled
         return self
+
+attach ModelMaterials:
+
+    static fun create() -> ModelMaterials:
+        mats: ModelMaterials = ModelMaterials()
+        mats.capacity = 16
+        mats.count = 0
+        mats.entries = Memory.malloc_zeroed((mats.capacity as i64) * 8)
+        return mats
+
+    fun _ensure(self) -> ModelMaterials:
+        if self.capacity <= 0:
+            self.capacity = 16
+            self.count = 0
+            self.entries = Memory.malloc_zeroed((self.capacity as i64) * 8)
+            return self
+        if self.entries == 0:
+            self.entries = Memory.malloc_zeroed((self.capacity as i64) * 8)
+            return self
+        if self.count < self.capacity:
+            return self
+        new_capacity: i32 = self.capacity * 2
+        new_entries: i64 = Memory.malloc_zeroed((new_capacity as i64) * 8)
+        if new_entries == 0:
+            return self
+        Memory.copy(new_entries, self.entries, (self.capacity as i64) * 8)
+        Memory.free(self.entries)
+        self.entries = new_entries
+        self.capacity = new_capacity
+        return self
+
+    fun _entry_at(self, index: i32) -> ModelMaterialEntry:
+        if self.entries == 0:
+            return null
+        if index < 0:
+            return null
+        if index >= self.count:
+            return null
+        ptr: i64 = Memory.read_ptr(self.entries + ((index as i64) * 8))
+        return ptr as ModelMaterialEntry
+
+    fun find_name(self, name: str) -> i32:
+        if Memory.strlen(name) == 0:
+            return -1
+        i: i32 = 0
+        while i < self.count:
+            entry: ModelMaterialEntry = self._entry_at(i)
+            if (entry as i64) != 0:
+                if Str.equals(entry.name, name):
+                    return i
+            i = i + 1
+        return -1
+
+    fun find_index(self, material_index: i32) -> i32:
+        if material_index < 0:
+            return -1
+        i: i32 = 0
+        while i < self.count:
+            entry: ModelMaterialEntry = self._entry_at(i)
+            if (entry as i64) != 0:
+                if entry.material_index == material_index:
+                    return i
+            i = i + 1
+        return -1
+
+    fun set(self, name: str, material: Material3D) -> ModelMaterials:
+        if Memory.strlen(name) == 0:
+            return self
+        existing: i32 = self.find_name(name)
+        if existing >= 0:
+            entry_existing: ModelMaterialEntry = self._entry_at(existing)
+            if (entry_existing as i64) != 0:
+                entry_existing.material = material
+            return self
+        self._ensure()
+        if self.entries == 0:
+            return self
+        if self.count >= self.capacity:
+            return self
+        entry: ModelMaterialEntry = ModelMaterialEntry()
+        entry.name = Str.strcpy(name)
+        entry.material_index = -1
+        entry.material = material
+        Memory.write_ptr(self.entries + ((self.count as i64) * 8), entry as i64)
+        self.count = self.count + 1
+        return self
+
+    fun set(self, material_index: i32, material: Material3D) -> ModelMaterials:
+        if material_index < 0:
+            return self
+        existing: i32 = self.find_index(material_index)
+        if existing >= 0:
+            entry_existing: ModelMaterialEntry = self._entry_at(existing)
+            if (entry_existing as i64) != 0:
+                entry_existing.material = material
+            return self
+        self._ensure()
+        if self.entries == 0:
+            return self
+        if self.count >= self.capacity:
+            return self
+        entry: ModelMaterialEntry = ModelMaterialEntry()
+        entry.name = ""
+        entry.material_index = material_index
+        entry.material = material
+        Memory.write_ptr(self.entries + ((self.count as i64) * 8), entry as i64)
+        self.count = self.count + 1
+        return self
+
+    fun resolve(self, name: str, material_index: i32, fallback: Material3D) -> Material3D:
+        by_name: i32 = self.find_name(name)
+        if by_name >= 0:
+            entry_by_name: ModelMaterialEntry = self._entry_at(by_name)
+            if (entry_by_name as i64) != 0:
+                return entry_by_name.material
+        by_index: i32 = self.find_index(material_index)
+        if by_index >= 0:
+            entry_by_index: ModelMaterialEntry = self._entry_at(by_index)
+            if (entry_by_index as i64) != 0:
+                return entry_by_index.material
+        return fallback
+
+    fun destroy(self):
+        if self.entries == 0:
+            return
+        i: i32 = 0
+        while i < self.count:
+            entry: ModelMaterialEntry = self._entry_at(i)
+            if (entry as i64) != 0:
+                if Memory.strlen(entry.name) > 0:
+                    Memory.free(entry.name as i64)
+                Memory.free(entry as i64)
+            i = i + 1
+        Memory.free(self.entries)
+        self.entries = 0
+        self.count = 0
+        self.capacity = 0

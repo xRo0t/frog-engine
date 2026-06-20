@@ -606,12 +606,20 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
       <h4>Loaders</h4>
       <table>
         <tr><th>Method</th><th>Returns</th><th>Description</th></tr>
-        <tr><td><code>Assets.models.load(path)</code></td><td>Model3D</td><td>Loads a glTF / glb model.</td></tr>
+        <tr><td><code>Assets.models.load(path)</code></td><td>Model3D</td><td>Loads a glTF / glb model. For <code>.gltf</code>, Frog first checks for a neighboring runtime cache named <code>*.frog.gltf</code> and uses it automatically when present.</td></tr>
         <tr><td><code>Assets.textures.load(path)</code></td><td>Texture2D</td><td>Loads + GPU-uploads a PNG (smooth spec). Returns a ready texture.</td></tr>
         <tr><td><code>Assets.textures.load(path, spec)</code></td><td>Texture2D</td><td>Same, with a <code>TextureSpec</code> controlling appearance.</td></tr>
         <tr><td><code>Assets.audio.load(path)</code></td><td>AudioClip</td><td>Loads an audio clip descriptor.</td></tr>
         <tr><td><code>Assets.shaders.load(path)</code></td><td>Shader3D</td><td>Loads a shader descriptor. Runtime compilation and pipeline binding are reserved for the advanced shader pipeline.</td></tr>
       </table>
+
+      <h4>Model Import Cache</h4>
+      <p>Large source glTF files should be imported once before shipping. The importer keeps the source path stable for game code, but writes a runtime cache with flattened geometry, material-grouped primitives, and a generated LOD.</p>
+      <pre><code>node packages/frog/tools/import_model.mjs assets/models/car/scene.gltf --target-triangles 12000</code></pre>
+      <p>After that, game code remains explicit and clean:</p>
+      <pre><code>car: <span class="tok-type">Mesh3D</span> = Mesh3D.model(<span class="tok-str">"Car"</span>, <span class="tok-str">"models/car/scene.gltf"</span>)</code></pre>
+      <div class="note"><strong>Runtime rule.</strong> If <code>models/car/scene.frog.gltf</code> exists beside <code>scene.gltf</code>, the loader uses the cache. If it does not exist, Frog loads the source file directly for development.</div>
+      <div class="note"><strong>Material mode.</strong> The importer merges many source materials into a small runtime set by default for fast startup and fewer JSON primitive walks. Use <code>--preserve-materials</code> when exact source material slots are more important than startup cost.</div>
 
       <h3>Asset Types</h3>
       <p>Each loader returns a small struct describing the resource. Common fields:</p>
@@ -771,6 +779,33 @@ cube.set_material(mat)</code></pre>
         <tr><td><code>set_unlit(enabled)</code></td><td>Bypasses directional lighting and automatically disables effective shadow receiving while keeping texture and emissive output.</td></tr>
         <tr><td><code>set_double_sided(enabled)</code></td><td>Stores the flag for later pipeline-state support.</td></tr>
       </table>
+
+      <h3>ModelMaterials</h3>
+      <p>Use <code>ModelMaterials</code> when a glTF model has multiple material slots and you want explicit control by glTF material name or material index. Frog uploads each glTF primitive as an internal model part, then applies the matching material while the <code>Mesh3D</code> still behaves like one object for transform, visibility, and shadows.</p>
+      <pre><code>wall: <span class="tok-type">Material3D</span> = Material3D.create()
+wall.set_texture(Assets.textures.load(<span class="tok-str">"textures/wall.png"</span>, TextureSpec.smooth()))
+wall.set_roughness(<span class="tok-num">0.85</span>)
+wall.set_metallic(<span class="tok-num">0.0</span>)
+
+roof: <span class="tok-type">Material3D</span> = Material3D.create()
+roof.set_texture(Assets.textures.load(<span class="tok-str">"textures/roof.png"</span>, TextureSpec.smooth()))
+roof.set_roughness(<span class="tok-num">0.6</span>)
+
+mats: <span class="tok-type">ModelMaterials</span> = ModelMaterials.create()
+mats.set(<span class="tok-str">"Wall"</span>, wall)      <span class="tok-com"># glTF material name</span>
+mats.set(<span class="tok-str">"Roof"</span>, roof)
+
+building: <span class="tok-type">Mesh3D</span> = Mesh3D.model(<span class="tok-str">"Building"</span>, <span class="tok-str">"models/building/scene.gltf"</span>)
+building.set_model_materials(mats)</code></pre>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>ModelMaterials.create()</code></td><td>Creates an empty material override table.</td></tr>
+        <tr><td><code>set(name, material)</code></td><td>Overrides a glTF material by its authored material name.</td></tr>
+        <tr><td><code>set(index, material)</code></td><td>Overrides a glTF material by numeric material index; useful when the file has unnamed materials.</td></tr>
+        <tr><td><code>resolve(name, index, fallback)</code></td><td>Internal lookup used by <code>Mesh3D</code>: name match first, index fallback second.</td></tr>
+        <tr><td><code>destroy()</code></td><td>Frees the override table when you own a short-lived table manually.</td></tr>
+      </table>
+      <div class="note"><strong>Current scope.</strong> Material slots apply albedo texture, scalar roughness/metallic, emissive, unlit state, shadow flags, and visibility per model part. Normal maps and PBR texture maps are stored by <code>Material3D</code> but still wait on the advanced shader pipeline.</div>
     </section>
 
     <section id="lights">
@@ -850,6 +885,8 @@ scene.add_child(building)</code></pre>
         <tr><td><code>set_mesh(Mesh3D.shape.cube())</code></td><td>Uses the built-in cube mesh.</td></tr>
         <tr><td><code>set_mesh(Mesh3D.shape.plane())</code></td><td>Uses the built-in plane mesh.</td></tr>
         <tr><td><code>set_model(model)</code></td><td>Binds a loaded <code>Model3D</code> as an independent render instance and syncs the current transform.</td></tr>
+        <tr><td><code>set_model_materials(materials)</code></td><td>Applies per-material overrides to a glTF model by material name or index.</td></tr>
+        <tr><td><code>clear_model_materials()</code></td><td>Returns a model to its default/fallback material binding.</td></tr>
         <tr><td><code>set_material(material)</code></td><td>Applies a <code>Material3D</code>.</td></tr>
         <tr><td><code>set_color(color)</code></td><td>Convenience shortcut for simple colored primitives.</td></tr>
         <tr><td><code>set_texture(texture)</code></td><td>Convenience shortcut that edits this mesh's material texture.</td></tr>

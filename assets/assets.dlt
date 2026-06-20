@@ -32,6 +32,15 @@ attach Assets:
 
 attach AssetModels:
 
+    static fun runtime_cache_path(path: str) -> str:
+        if Str.ends_with(path, ".gltf") == false:
+            return ""
+        path_len: i64 = Memory.strlen(path)
+        if path_len <= 5:
+            return ""
+        base: str = Str.substring(path, 0, path_len - 5)
+        return base + ".frog.gltf"
+
     static fun load(path: str) -> Model3D:
         resolved: str = Assets.resolve(path)
         if Str.equals(resolved, ""):
@@ -45,7 +54,17 @@ attach AssetModels:
                 if PathOps.exists(resolved):
                     found_other = 1
                 return Model3D(path=path, resolved_path=resolved, format="unknown", mesh_id=-1, found=found_other, parsed=0, ready=0, error="unsupported model format")
-        return GltfLoader.load(path, resolved, format)
+        load_path: str = path
+        load_resolved: str = resolved
+        if Str.equals(format, "gltf"):
+            cache_path: str = AssetModels.runtime_cache_path(path)
+            if Str.equals(cache_path, "") == false:
+                cache_resolved: str = Assets.resolve(cache_path)
+                if Str.equals(cache_resolved, "") == false:
+                    if PathOps.exists(cache_resolved):
+                        load_path = cache_path
+                        load_resolved = cache_resolved
+        return GltfLoader.load(load_path, load_resolved, format)
 
 attach AssetTextures:
 

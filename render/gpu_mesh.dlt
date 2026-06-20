@@ -172,6 +172,125 @@ fun gltf_load_binary_buffer(gltf_path: str, root: JsonValue) -> i64:
     file.close()
     return data
 
+fun gpu_make_gltf_primitive_vertices(model: Model3D, mesh_index: i32, primitive_index: i32) -> GpuMeshData:
+    if Str.equals(model.format, "gltf") == false:
+        return GpuMeshData()
+    if mesh_index < 0:
+        return GpuMeshData()
+    if primitive_index < 0:
+        return GpuMeshData()
+
+    doc: JsonDocument = model.doc
+    if doc.valid() == 0:
+        doc = Json.parse_file(model.resolved_path)
+    if doc.valid() == 0:
+        return GpuMeshData()
+
+    root: JsonValue = doc.root
+    accessors: JsonValue = root.get("accessors")
+    buffer_views: JsonValue = root.get("bufferViews")
+    meshes: JsonValue = root.get("meshes")
+    materials: JsonValue = root.get("materials")
+    if mesh_index >= meshes.size():
+        return GpuMeshData()
+
+    mesh: JsonValue = meshes.at(mesh_index)
+    prims: JsonValue = mesh.get("primitives")
+    if primitive_index >= prims.size():
+        return GpuMeshData()
+
+    prim: JsonValue = prims.at(primitive_index)
+    attrs: JsonValue = prim.get("attributes")
+    pos_id: i32 = attrs.get_i32("POSITION")
+    indices_id: i32 = prim.get_i32("indices")
+    if pos_id < 0:
+        return GpuMeshData()
+    if indices_id < 0:
+        return GpuMeshData()
+
+    pos_accessor: JsonValue = accessors.at(pos_id)
+    idx_accessor: JsonValue = accessors.at(indices_id)
+    total_vertices: i32 = pos_accessor.get_i32("count")
+    total_indices: i32 = idx_accessor.get_i32("count")
+    if total_vertices <= 0:
+        return GpuMeshData()
+    if total_indices <= 0:
+        return GpuMeshData()
+
+    bin: i64 = gltf_load_binary_buffer(model.resolved_path, root)
+    if bin == 0:
+        return GpuMeshData()
+
+    out: i64 = Memory.malloc_zeroed((total_vertices as i64) * (FROG_GPU_VERTEX_STRIDE as i64))
+    if out == 0:
+        Memory.free(bin)
+        return GpuMeshData()
+    out_indices: i64 = Memory.malloc_zeroed((total_indices as i64) * 4)
+    if out_indices == 0:
+        Memory.free(out)
+        Memory.free(bin)
+        return GpuMeshData()
+
+    material_id: i32 = prim.get_i32("material")
+    pos_offset: i64 = gltf_accessor_data_offset(accessors, buffer_views, pos_id)
+    pos_stride: i32 = gltf_accessor_stride(accessors, buffer_views, pos_id, 12)
+    idx_offset: i64 = gltf_accessor_data_offset(accessors, buffer_views, indices_id)
+    idx_type: i32 = idx_accessor.get_i32("componentType")
+    idx_stride: i32 = 4
+    if idx_type == 5123:
+        idx_stride = 2
+    elif idx_type == 5121:
+        idx_stride = 1
+
+    cr: f32 = gltf_material_color(materials, material_id, 0)
+    cg: f32 = gltf_material_color(materials, material_id, 1)
+    cb: f32 = gltf_material_color(materials, material_id, 2)
+
+    normal_id: i32 = attrs.get_i32("NORMAL")
+    normal_offset: i64 = 0
+    normal_stride: i32 = 12
+    normal_present: i32 = 0
+    if normal_id >= 0:
+        normal_offset = gltf_accessor_data_offset(accessors, buffer_views, normal_id)
+        normal_stride = gltf_accessor_stride(accessors, buffer_views, normal_id, 12)
+        normal_present = 1
+
+    uv_id: i32 = attrs.get_i32("TEXCOORD_0")
+    uv_offset: i64 = 0
+    uv_stride: i32 = 8
+    uv_present: i32 = 0
+    if uv_id >= 0:
+        uv_offset = gltf_accessor_data_offset(accessors, buffer_views, uv_id)
+        uv_stride = gltf_accessor_stride(accessors, buffer_views, uv_id, 8)
+        uv_present = 1
+
+    out_off: i64 = 0
+    vi: i32 = 0
+    while vi < total_vertices:
+        pos_addr: i64 = pos_offset + ((vi as i64) * (pos_stride as i64))
+        normal_addr: i64 = 0
+        if normal_present == 1:
+            normal_addr = normal_offset + ((vi as i64) * (normal_stride as i64))
+        u: f32 = 0.0
+        v: f32 = 0.0
+        if uv_present == 1:
+            uv_addr: i64 = uv_offset + ((vi as i64) * (uv_stride as i64))
+            u = Memory.read_f32(bin + uv_addr)
+            v = Memory.read_f32(bin + uv_addr + 4)
+        out_off = gltf_write_position_vertex(out, out_off, bin, pos_addr, normal_addr, normal_present, cr, cg, cb, u, v)
+        vi = vi + 1
+
+    index_off: i64 = 0
+    ii: i32 = 0
+    while ii < total_indices:
+        vertex_index: i32 = gltf_read_index(bin, idx_offset + ((ii as i64) * (idx_stride as i64)), idx_type)
+        Memory.write_i32(out_indices + index_off, vertex_index)
+        index_off = index_off + 4
+        ii = ii + 1
+
+    Memory.free(bin)
+    return GpuMeshData(vertices=out, vertex_count=total_vertices, indices=out_indices, index_count=total_indices)
+
 fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
     if Str.equals(model.format, "gltf") == false:
         return GpuMeshData()
@@ -198,8 +317,9 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
     while mi < mesh_count:
         mesh: JsonValue = meshes.at(mi)
         prims: JsonValue = mesh.get("primitives")
+        prim_count: i32 = prims.size()
         pi: i32 = 0
-        while pi < prims.size():
+        while pi < prim_count:
             prim: JsonValue = prims.at(pi)
             attrs: JsonValue = prim.get("attributes")
             pos_id: i32 = attrs.get_i32("POSITION")
@@ -235,8 +355,9 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
     while mi < mesh_count:
         mesh2: JsonValue = meshes.at(mi)
         prims2: JsonValue = mesh2.get("primitives")
+        prim_count2: i32 = prims2.size()
         pi2: i32 = 0
-        while pi2 < prims2.size():
+        while pi2 < prim_count2:
             prim2: JsonValue = prims2.at(pi2)
             attrs: JsonValue = prim2.get("attributes")
             pos_id: i32 = attrs.get_i32("POSITION")
