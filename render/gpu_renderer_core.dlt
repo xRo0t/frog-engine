@@ -249,6 +249,7 @@ struct GpuRendererCore:
     mesh_tex_ids:   i64 = 0    # mesh_id -> texture_id (-1 = white fallback)
     mesh_material_params: i64 = 0 # mesh_id -> metallic, roughness, emissive strength, packed emissive/unlit
     mesh_shadow_flags: i64 = 0 # mesh_id -> cast + receive * 2
+    mesh_shadow_distances: i64 = 0 # mesh_id -> object shadow cutoff, 0 = inherit light distance
     white_desc_set: i64 = 0    # descriptor set for the 1x1 white fallback
     white_tex_id:   i32 = -1
     # Offscreen render-scale target. When render_scale != 1, the scene is
@@ -325,6 +326,7 @@ attach GpuRendererCore:
         self.mesh_tex_ids = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.mesh_material_params = Memory.malloc_zeroed(self.vb_capacity * 16)
         self.mesh_shadow_flags = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.mesh_shadow_distances = Memory.malloc_zeroed(self.vb_capacity * 4)
         mti: i32 = 0
         while mti < self.vb_capacity:
             Memory.write_i32(self.mesh_tex_ids + mti * 4, 0 - 1)
@@ -431,6 +433,7 @@ attach GpuRendererCore:
         new_mesh_tex: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_mesh_materials: i64 = Memory.malloc_zeroed(new_cap * 16)
         new_shadow_flags: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_shadow_distances: i64 = Memory.malloc_zeroed(new_cap * 4)
         mti2: i32 = 0
         while mti2 < new_cap:
             Memory.write_i32(new_mesh_tex + mti2 * 4, 0 - 1)
@@ -462,6 +465,8 @@ attach GpuRendererCore:
             Memory.copy(new_mesh_materials, self.mesh_material_params, self.vb_capacity * 16)
         if self.mesh_shadow_flags != 0:
             Memory.copy(new_shadow_flags, self.mesh_shadow_flags, self.vb_capacity * 4)
+        if self.mesh_shadow_distances != 0:
+            Memory.copy(new_shadow_distances, self.mesh_shadow_distances, self.vb_capacity * 4)
         Memory.free(self.vb_handles)
         Memory.free(self.vb_memories)
         Memory.free(self.vb_alloc_sizes)
@@ -482,6 +487,8 @@ attach GpuRendererCore:
             Memory.free(self.mesh_material_params)
         if self.mesh_shadow_flags != 0:
             Memory.free(self.mesh_shadow_flags)
+        if self.mesh_shadow_distances != 0:
+            Memory.free(self.mesh_shadow_distances)
         self.vb_handles = new_handles
         self.vb_memories = new_memories
         self.vb_alloc_sizes = new_alloc_sizes
@@ -499,6 +506,7 @@ attach GpuRendererCore:
         self.mesh_tex_ids = new_mesh_tex
         self.mesh_material_params = new_mesh_materials
         self.mesh_shadow_flags = new_shadow_flags
+        self.mesh_shadow_distances = new_shadow_distances
         self.vb_capacity = new_cap
 
     fun _take_pooled_buffer(self, data_size: i64, usage: i32) -> GpuBufferUpload:
@@ -1393,6 +1401,8 @@ attach GpuRendererCore:
             Memory.copy(self.mesh_material_params + idx * 16, self.mesh_material_params + src_vb_idx * 16, 16)
         if self.mesh_shadow_flags != 0:
             Memory.write_i32(self.mesh_shadow_flags + idx * 4, Memory.read_i32(self.mesh_shadow_flags + src_vb_idx * 4))
+        if self.mesh_shadow_distances != 0:
+            Memory.write_f32(self.mesh_shadow_distances + idx * 4, Memory.read_f32(self.mesh_shadow_distances + src_vb_idx * 4))
         self._copy_mesh_bounds(idx, src_vb_idx)
         self.vb_count = idx + 1
         return idx
@@ -1511,6 +1521,18 @@ attach GpuRendererCore:
         if receive_shadows == 0:
             receive_value = 0
         Memory.write_i32(self.mesh_shadow_flags + mesh_id * 4, cast_value + receive_value * 2)
+
+    fun set_shadow_distance(self, mesh_id: i32, distance: f32):
+        if mesh_id < 0:
+            return
+        if mesh_id >= self.vb_count:
+            return
+        if self.mesh_shadow_distances == 0:
+            return
+        value: f32 = distance
+        if value < 0.0:
+            value = 0.0
+        Memory.write_f32(self.mesh_shadow_distances + mesh_id * 4, value)
 
     fun mesh_descriptor_set(self, mesh_id: i32) -> i64:
         if self.mesh_tex_ids == 0:
@@ -2376,7 +2398,15 @@ attach GpuRendererCore:
                                     bound_y: f32 = Memory.read_f32(self.mesh_bound_ys + gi * 4)
                                     bound_z: f32 = Memory.read_f32(self.mesh_bound_zs + gi * 4)
                                     bound_r: f32 = Memory.read_f32(self.mesh_bound_rs + gi * 4)
-                                    visible = _frog_shadow_instance_visible(cascade_matrix, g_model, bound_x, bound_y, bound_z, bound_r, cam_x, cam_y, cam_z, shadow_max_distance)
+                                    effective_shadow_distance: f32 = shadow_max_distance
+                                    if self.mesh_shadow_distances != 0:
+                                        object_shadow_distance: f32 = Memory.read_f32(self.mesh_shadow_distances + gi * 4)
+                                        if object_shadow_distance > 0.0:
+                                            if effective_shadow_distance <= 0.0:
+                                                effective_shadow_distance = object_shadow_distance
+                                            elif object_shadow_distance < effective_shadow_distance:
+                                                effective_shadow_distance = object_shadow_distance
+                                    visible = _frog_shadow_instance_visible(cascade_matrix, g_model, bound_x, bound_y, bound_z, bound_r, cam_x, cam_y, cam_z, effective_shadow_distance)
                                 else:
                                     visible = 0
                             if visible == 1:
@@ -3031,6 +3061,8 @@ attach GpuRendererCore:
             Memory.free(self.mesh_material_params)
         if self.mesh_shadow_flags != 0:
             Memory.free(self.mesh_shadow_flags)
+        if self.mesh_shadow_distances != 0:
+            Memory.free(self.mesh_shadow_distances)
         self.tex_count = 0
         self.vb_count = 0
         self.instance_capacity = 0

@@ -456,6 +456,9 @@ attach Engine:
     static fun set_shadow_flags(mesh_id: i32, cast_shadows: i32, receive_shadows: i32):
         g_engine_runtime.set_shadow_flags(mesh_id, cast_shadows, receive_shadows)
 
+    static fun set_shadow_distance(mesh_id: i32, distance: f32):
+        g_engine_runtime.set_shadow_distance(mesh_id, distance)
+
     static fun set_transform(mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32):
         g_engine_runtime.set_transform(mesh_id, x, y, z, rx, ry, rz, sx, sy, sz)
 

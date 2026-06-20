@@ -895,9 +895,12 @@ scene.add_child(building)</code></pre>
         <tr><td><code>set_visible(enabled)</code></td><td>Shows or hides the mesh render instance while preserving collision and gameplay state. The state survives material, color, and primitive rebuilds.</td></tr>
         <tr><td><code>set_cast_shadows(enabled)</code></td><td>Overrides the default cast state for this mesh.</td></tr>
         <tr><td><code>set_receive_shadows(enabled)</code></td><td>Overrides the default receive state for this mesh. An unlit material still forces effective receiving off.</td></tr>
+        <tr><td><code>set_shadow_distance(distance)</code></td><td>Sets a per-object shadow caster cutoff. <code>0.0</code> inherits the active light's shadow distance.</td></tr>
+        <tr><td><code>set_lod(index, path, distance)</code> / <code>update_lod(camera)</code></td><td>Registers model LOD levels and switches to the highest level whose distance threshold is reached.</td></tr>
         <tr><td><code>position(x,y,z)</code> / <code>rotation(x,y,z)</code> / <code>scale(x,y,z)</code></td><td>Updates the node transform and renderer transform together.</td></tr>
         <tr><td><code>collision_box(x,y,z)</code></td><td>Enables box collision in local units.</td></tr>
       </table>
+      <div class="note"><strong>LOD update rule.</strong> LOD levels are explicit render assets. Call <code>update_lod(camera)</code> during your frame update for now; scene-wide automatic LOD traversal is planned later.</div>
     </section>
 
     <section id="camera">
