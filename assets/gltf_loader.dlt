@@ -9,6 +9,8 @@ struct GltfLoader:
 attach Model3D:
 
     fun primitive_count(self) -> i32:
+        if Str.equals(self.format, "frogmodel"):
+            return self.frog_part_count
         if self.parsed == 0:
             return 0
         if self.doc.valid() == 0:
@@ -26,6 +28,10 @@ attach Model3D:
         return total
 
     fun mesh_primitive_count(self, mesh_index: i32) -> i32:
+        if Str.equals(self.format, "frogmodel"):
+            if mesh_index != 0:
+                return 0
+            return self.frog_part_count
         if self.parsed == 0:
             return 0
         if self.doc.valid() == 0:
@@ -41,6 +47,14 @@ attach Model3D:
         return prims.size()
 
     fun primitive_material_index(self, mesh_index: i32, primitive_index: i32) -> i32:
+        if Str.equals(self.format, "frogmodel"):
+            if mesh_index != 0:
+                return -1
+            if primitive_index < 0:
+                return -1
+            if primitive_index >= self.frog_part_count:
+                return -1
+            return primitive_index
         if self.parsed == 0:
             return -1
         if self.doc.valid() == 0:
@@ -61,6 +75,21 @@ attach Model3D:
         return prim.get_i32("material")
 
     fun material_name(self, material_index: i32) -> str:
+        if Str.equals(self.format, "frogmodel"):
+            if material_index < 0:
+                return ""
+            if material_index >= self.frog_part_count:
+                return ""
+            part_entry: i64 = self.frog_part_table + ((material_index as i64) * 32)
+            name_offset: i64 = Memory.read_i32(self.frog_data + part_entry + 8) as i64
+            name_size: i64 = Memory.read_i32(self.frog_data + part_entry + 12) as i64
+            if name_offset <= 0:
+                return ""
+            if name_size <= 0:
+                return ""
+            if name_offset + name_size > self.frog_size:
+                return ""
+            return (self.frog_data + name_offset) as str
         if self.parsed == 0:
             return ""
         if self.doc.valid() == 0:

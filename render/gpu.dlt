@@ -114,10 +114,12 @@ fun gpu_camera_proj(fov: f32, aspect: f32) -> i64:
 @heap struct Renderer:
     core: GpuRendererCore = GpuRendererCore()
     model_cache_paths: i64 = 0
+    model_cache_lods: i64 = 0
     model_cache_mesh_ids: i64 = 0
     model_cache_count: i32 = 0
     model_cache_capacity: i32 = 0
     model_part_cache_paths: i64 = 0
+    model_part_cache_lods: i64 = 0
     model_part_cache_mesh_indices: i64 = 0
     model_part_cache_primitive_indices: i64 = 0
     model_part_cache_mesh_ids: i64 = 0
@@ -138,6 +140,7 @@ attach Renderer:
         self.model_cache_capacity = 64
         self.model_cache_count = 0
         self.model_cache_paths = Memory.malloc_zeroed((self.model_cache_capacity as i64) * 8)
+        self.model_cache_lods = Memory.malloc_zeroed((self.model_cache_capacity as i64) * 4)
         self.model_cache_mesh_ids = Memory.malloc_zeroed((self.model_cache_capacity as i64) * 4)
 
     fun _grow_model_cache(self):
@@ -146,21 +149,29 @@ attach Renderer:
             return
         new_cap: i32 = self.model_cache_capacity * 2
         new_paths: i64 = Memory.malloc_zeroed((new_cap as i64) * 8)
+        new_lods: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
         new_ids: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
         if new_paths == 0:
             return
-        if new_ids == 0:
+        if new_lods == 0:
             Memory.free(new_paths)
             return
+        if new_ids == 0:
+            Memory.free(new_paths)
+            Memory.free(new_lods)
+            return
         Memory.copy(new_paths, self.model_cache_paths, (self.model_cache_capacity as i64) * 8)
+        Memory.copy(new_lods, self.model_cache_lods, (self.model_cache_capacity as i64) * 4)
         Memory.copy(new_ids, self.model_cache_mesh_ids, (self.model_cache_capacity as i64) * 4)
         Memory.free(self.model_cache_paths)
+        Memory.free(self.model_cache_lods)
         Memory.free(self.model_cache_mesh_ids)
         self.model_cache_paths = new_paths
+        self.model_cache_lods = new_lods
         self.model_cache_mesh_ids = new_ids
         self.model_cache_capacity = new_cap
 
-    fun _find_model_cache(self, resolved_path: str) -> i32:
+    fun _find_model_cache(self, resolved_path: str, lod: i32) -> i32:
         if self.model_cache_paths == 0:
             return 0 - 1
         index: i32 = 0
@@ -168,15 +179,17 @@ attach Renderer:
             cached_path: str = Memory.read_ptr(self.model_cache_paths + ((index as i64) * 8)) as str
             if Memory.strlen(cached_path) > 0:
                 if Str.equals(cached_path, resolved_path):
-                    return Memory.read_i32(self.model_cache_mesh_ids + ((index as i64) * 4))
+                    cached_lod: i32 = Memory.read_i32(self.model_cache_lods + ((index as i64) * 4))
+                    if cached_lod == lod:
+                        return Memory.read_i32(self.model_cache_mesh_ids + ((index as i64) * 4))
             index = index + 1
         return 0 - 1
 
-    fun _remember_model_cache(self, resolved_path: str, mesh_id: i32):
+    fun _remember_model_cache(self, resolved_path: str, lod: i32, mesh_id: i32):
         if mesh_id < 0:
             return
         self._init_model_cache()
-        existing: i32 = self._find_model_cache(resolved_path)
+        existing: i32 = self._find_model_cache(resolved_path, lod)
         if existing >= 0:
             return
         if self.model_cache_count >= self.model_cache_capacity:
@@ -190,6 +203,7 @@ attach Renderer:
             return
         slot: i32 = self.model_cache_count
         Memory.write_ptr(self.model_cache_paths + ((slot as i64) * 8), stored_path as i64)
+        Memory.write_i32(self.model_cache_lods + ((slot as i64) * 4), lod)
         Memory.write_i32(self.model_cache_mesh_ids + ((slot as i64) * 4), mesh_id)
         self.model_cache_count = slot + 1
 
@@ -199,6 +213,7 @@ attach Renderer:
         self.model_part_cache_capacity = 128
         self.model_part_cache_count = 0
         self.model_part_cache_paths = Memory.malloc_zeroed((self.model_part_cache_capacity as i64) * 8)
+        self.model_part_cache_lods = Memory.malloc_zeroed((self.model_part_cache_capacity as i64) * 4)
         self.model_part_cache_mesh_indices = Memory.malloc_zeroed((self.model_part_cache_capacity as i64) * 4)
         self.model_part_cache_primitive_indices = Memory.malloc_zeroed((self.model_part_cache_capacity as i64) * 4)
         self.model_part_cache_mesh_ids = Memory.malloc_zeroed((self.model_part_cache_capacity as i64) * 4)
@@ -209,38 +224,48 @@ attach Renderer:
             return
         new_cap: i32 = self.model_part_cache_capacity * 2
         new_paths: i64 = Memory.malloc_zeroed((new_cap as i64) * 8)
+        new_lods: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
         new_mesh_indices: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
         new_primitive_indices: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
         new_ids: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
         if new_paths == 0:
             return
+        if new_lods == 0:
+            Memory.free(new_paths)
+            return
         if new_mesh_indices == 0:
             Memory.free(new_paths)
+            Memory.free(new_lods)
             return
         if new_primitive_indices == 0:
             Memory.free(new_paths)
+            Memory.free(new_lods)
             Memory.free(new_mesh_indices)
             return
         if new_ids == 0:
             Memory.free(new_paths)
+            Memory.free(new_lods)
             Memory.free(new_mesh_indices)
             Memory.free(new_primitive_indices)
             return
         Memory.copy(new_paths, self.model_part_cache_paths, (self.model_part_cache_capacity as i64) * 8)
+        Memory.copy(new_lods, self.model_part_cache_lods, (self.model_part_cache_capacity as i64) * 4)
         Memory.copy(new_mesh_indices, self.model_part_cache_mesh_indices, (self.model_part_cache_capacity as i64) * 4)
         Memory.copy(new_primitive_indices, self.model_part_cache_primitive_indices, (self.model_part_cache_capacity as i64) * 4)
         Memory.copy(new_ids, self.model_part_cache_mesh_ids, (self.model_part_cache_capacity as i64) * 4)
         Memory.free(self.model_part_cache_paths)
+        Memory.free(self.model_part_cache_lods)
         Memory.free(self.model_part_cache_mesh_indices)
         Memory.free(self.model_part_cache_primitive_indices)
         Memory.free(self.model_part_cache_mesh_ids)
         self.model_part_cache_paths = new_paths
+        self.model_part_cache_lods = new_lods
         self.model_part_cache_mesh_indices = new_mesh_indices
         self.model_part_cache_primitive_indices = new_primitive_indices
         self.model_part_cache_mesh_ids = new_ids
         self.model_part_cache_capacity = new_cap
 
-    fun _find_model_part_cache(self, resolved_path: str, mesh_index: i32, primitive_index: i32) -> i32:
+    fun _find_model_part_cache(self, resolved_path: str, lod: i32, mesh_index: i32, primitive_index: i32) -> i32:
         if self.model_part_cache_paths == 0:
             return 0 - 1
         index: i32 = 0
@@ -248,19 +273,21 @@ attach Renderer:
             cached_path: str = Memory.read_ptr(self.model_part_cache_paths + ((index as i64) * 8)) as str
             if Memory.strlen(cached_path) > 0:
                 if Str.equals(cached_path, resolved_path):
+                    cached_lod: i32 = Memory.read_i32(self.model_part_cache_lods + ((index as i64) * 4))
                     cached_mesh_index: i32 = Memory.read_i32(self.model_part_cache_mesh_indices + ((index as i64) * 4))
                     cached_primitive_index: i32 = Memory.read_i32(self.model_part_cache_primitive_indices + ((index as i64) * 4))
-                    if cached_mesh_index == mesh_index:
-                        if cached_primitive_index == primitive_index:
-                            return Memory.read_i32(self.model_part_cache_mesh_ids + ((index as i64) * 4))
+                    if cached_lod == lod:
+                        if cached_mesh_index == mesh_index:
+                            if cached_primitive_index == primitive_index:
+                                return Memory.read_i32(self.model_part_cache_mesh_ids + ((index as i64) * 4))
             index = index + 1
         return 0 - 1
 
-    fun _remember_model_part_cache(self, resolved_path: str, mesh_index: i32, primitive_index: i32, mesh_id: i32):
+    fun _remember_model_part_cache(self, resolved_path: str, lod: i32, mesh_index: i32, primitive_index: i32, mesh_id: i32):
         if mesh_id < 0:
             return
         self._init_model_part_cache()
-        existing: i32 = self._find_model_part_cache(resolved_path, mesh_index, primitive_index)
+        existing: i32 = self._find_model_part_cache(resolved_path, lod, mesh_index, primitive_index)
         if existing >= 0:
             return
         if self.model_part_cache_count >= self.model_part_cache_capacity:
@@ -274,6 +301,7 @@ attach Renderer:
             return
         slot: i32 = self.model_part_cache_count
         Memory.write_ptr(self.model_part_cache_paths + ((slot as i64) * 8), stored_path as i64)
+        Memory.write_i32(self.model_part_cache_lods + ((slot as i64) * 4), lod)
         Memory.write_i32(self.model_part_cache_mesh_indices + ((slot as i64) * 4), mesh_index)
         Memory.write_i32(self.model_part_cache_primitive_indices + ((slot as i64) * 4), primitive_index)
         Memory.write_i32(self.model_part_cache_mesh_ids + ((slot as i64) * 4), mesh_id)
@@ -312,11 +340,11 @@ attach Renderer:
             return -1
         if model.parsed == 0:
             return -1
-        cached: i32 = self._find_model_cache(model.resolved_path)
+        cached: i32 = self._find_model_cache(model.resolved_path, model.frog_lod)
         if cached >= 0:
             return cached
         mesh_id: i32 = self.upload_model_mesh(model)
-        self._remember_model_cache(model.resolved_path, mesh_id)
+        self._remember_model_cache(model.resolved_path, model.frog_lod, mesh_id)
         return mesh_id
 
     fun upload_model_part(self, model: Model3D, mesh_index: i32, primitive_index: i32) -> i32:
@@ -324,11 +352,11 @@ attach Renderer:
             return -1
         if model.parsed == 0:
             return -1
-        cached: i32 = self._find_model_part_cache(model.resolved_path, mesh_index, primitive_index)
+        cached: i32 = self._find_model_part_cache(model.resolved_path, model.frog_lod, mesh_index, primitive_index)
         if cached >= 0:
             return cached
         mesh_id: i32 = self.upload_model_part_mesh(model, mesh_index, primitive_index)
-        self._remember_model_part_cache(model.resolved_path, mesh_index, primitive_index, mesh_id)
+        self._remember_model_part_cache(model.resolved_path, model.frog_lod, mesh_index, primitive_index, mesh_id)
         return mesh_id
 
     fun register_instance(self, source_mesh: i32) -> i32:
@@ -424,6 +452,9 @@ attach Renderer:
                 ci = ci + 1
             Memory.free(self.model_cache_paths)
             self.model_cache_paths = 0
+        if self.model_cache_lods != 0:
+            Memory.free(self.model_cache_lods)
+            self.model_cache_lods = 0
         if self.model_cache_mesh_ids != 0:
             Memory.free(self.model_cache_mesh_ids)
             self.model_cache_mesh_ids = 0
@@ -438,6 +469,9 @@ attach Renderer:
                 pi = pi + 1
             Memory.free(self.model_part_cache_paths)
             self.model_part_cache_paths = 0
+        if self.model_part_cache_lods != 0:
+            Memory.free(self.model_part_cache_lods)
+            self.model_part_cache_lods = 0
         if self.model_part_cache_mesh_indices != 0:
             Memory.free(self.model_part_cache_mesh_indices)
             self.model_part_cache_mesh_indices = 0
@@ -492,7 +526,11 @@ attach GpuRendererCore:
         return mesh_id
 
     fun upload_model_mesh(self, model: Model3D) -> i32:
-        mesh: GpuMeshData = gpu_make_gltf_model_vertices(model)
+        mesh: GpuMeshData = GpuMeshData()
+        if Str.equals(model.format, "frogmodel"):
+            mesh = gpu_make_frogmodel_model_vertices(model)
+        else:
+            mesh = gpu_make_gltf_model_vertices(model)
         if mesh.vertices == 0:
             return -1
         if mesh.vertex_count <= 0:
@@ -512,7 +550,11 @@ attach GpuRendererCore:
         return mesh_id
 
     fun upload_model_part_mesh(self, model: Model3D, mesh_index: i32, primitive_index: i32) -> i32:
-        mesh: GpuMeshData = gpu_make_gltf_primitive_vertices(model, mesh_index, primitive_index)
+        mesh: GpuMeshData = GpuMeshData()
+        if Str.equals(model.format, "frogmodel"):
+            mesh = gpu_make_frogmodel_primitive_vertices(model, mesh_index, primitive_index)
+        else:
+            mesh = gpu_make_gltf_primitive_vertices(model, mesh_index, primitive_index)
         if mesh.vertices == 0:
             return -1
         if mesh.vertex_count <= 0:

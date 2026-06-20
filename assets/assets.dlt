@@ -43,6 +43,17 @@ attach ModelLods:
 
 attach AssetModels:
 
+    static fun runtime_cooked_path(path: str) -> str:
+        if Str.ends_with(path, ".frogmodel"):
+            return path
+        if Str.ends_with(path, ".gltf") == false:
+            return ""
+        path_len: i64 = Memory.strlen(path)
+        if path_len <= 5:
+            return ""
+        base: str = Str.substring(path, 0, path_len - 5)
+        return base + ".frogmodel"
+
     static fun runtime_cache_path(path: str) -> str:
         if Str.ends_with(path, ".gltf") == false:
             return ""
@@ -75,6 +86,8 @@ attach AssetModels:
         if Str.equals(resolved, ""):
             return Model3D(path=path, resolved_path="", format="unknown", mesh_id=-1, found=0, parsed=0, ready=0, error="asset root is not mounted; call Assets.mount before loading assets")
         format: str = "gltf"
+        if Str.ends_with(path, ".frogmodel"):
+            return FrogModelLoader.load(path, resolved)
         if Str.ends_with(path, ".glb"):
             format = "glb"
         if Str.ends_with(path, ".gltf") == false:
@@ -86,6 +99,14 @@ attach AssetModels:
         load_path: str = path
         load_resolved: str = resolved
         if Str.equals(format, "gltf"):
+            cooked_path: str = AssetModels.runtime_cooked_path(path)
+            if Str.equals(cooked_path, "") == false:
+                cooked_resolved: str = Assets.resolve(cooked_path)
+                if Str.equals(cooked_resolved, "") == false:
+                    if PathOps.exists(cooked_resolved):
+                        cooked_model: Model3D = FrogModelLoader.load(cooked_path, cooked_resolved)
+                        if cooked_model.parsed == 1:
+                            return cooked_model
             cache_path: str = AssetModels.runtime_cache_path(path)
             if Str.equals(cache_path, "") == false:
                 cache_resolved: str = Assets.resolve(cache_path)

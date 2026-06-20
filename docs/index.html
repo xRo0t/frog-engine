@@ -618,12 +618,12 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
       <pre><code>cd packages/frog
 npm install
 npm run import-model -- assets/models/car/scene.gltf --preserve-materials --lods</code></pre>
-      <p>After that, game code names only the source model. Frog finds the adjacent runtime cache and preloads its generated LODs:</p>
+      <p>After that, game code names only the source model. Frog finds the adjacent cooked model and preloads its generated LODs:</p>
       <pre><code>car: <span class="tok-type">Mesh3D</span> = Mesh3D.model(<span class="tok-str">"Car"</span>, <span class="tok-str">"models/car/scene.gltf"</span>)
 car.set_lods(ModelLods.auto(<span class="tok-num">32.0</span>, <span class="tok-num">72.0</span>))</code></pre>
-      <div class="note"><strong>Runtime rule.</strong> If <code>models/car/scene.frog.gltf</code> exists beside <code>scene.gltf</code>, the loader uses the cache. If it does not exist, Frog loads the source file directly for development.</div>
+      <div class="note"><strong>Runtime rule.</strong> If <code>models/car/scene.frogmodel</code> exists beside <code>scene.gltf</code>, the loader uses the cooked binary. If it does not exist, Frog loads the source file directly for development.</div>
       <div class="note"><strong>Material mode.</strong> The importer merges many source materials into a small runtime set by default for fast startup and fewer JSON primitive walks. Use <code>--preserve-materials</code> when exact source material slots are more important than startup cost.</div>
-      <div class="note"><strong>LOD rule.</strong> <code>--lods</code> generates <code>scene.frog.lod1.gltf</code>, <code>scene.frog.lod2.gltf</code>, and a manifest using meshoptimizer offline. Current runtime mode preloads these GPU meshes, so switching has no file I/O, parsing, or upload hitch. It trades GPU memory for stable frame time.</div>
+      <div class="note"><strong>LOD rule.</strong> <code>--lods</code> writes all generated levels into one <code>scene.frogmodel</code> using meshoptimizer offline. Current runtime mode preloads these GPU meshes, so switching has no file I/O, JSON parsing, or upload hitch. It trades GPU memory for stable frame time.</div>
 
       <h3>Asset Types</h3>
       <p>Each loader returns a small struct describing the resource. Common fields:</p>

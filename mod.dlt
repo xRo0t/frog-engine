@@ -26,6 +26,7 @@ load frog/core/platform/{platform}/input
 # Assets
 load frog/assets/types
 load frog/assets/gltf_loader
+load frog/assets/frog_model_loader
 load frog/assets/assets
 
 # Phase 3: Scene objects

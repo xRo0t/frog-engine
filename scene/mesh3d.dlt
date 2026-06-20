@@ -495,10 +495,15 @@ attach Mesh3D:
     fun _preload_lod(self, index: i32, path: str) -> Mesh3D:
         if index <= 0:
             return self
+        model: Model3D = Assets.models.load(path)
+        return self._preload_lod_model(index, model)
+
+    fun _preload_lod_model(self, index: i32, model: Model3D) -> Mesh3D:
+        if index <= 0:
+            return self
         self._ensure_lod_capacity(index)
         if self.lod_nodes == 0:
             return self
-        model: Model3D = Assets.models.load(path)
         if model.found == 0:
             return self
         if model.parsed == 0:
@@ -557,6 +562,21 @@ attach Mesh3D:
         self.lod_active = 0
         self.lod_manual = 0
         if lods.enabled == 0:
+            return self
+        if Str.equals(self.model_source.format, "frogmodel"):
+            lod1_model: Model3D = self.model_source.lod(1)
+            if lod1_model.found == 1:
+                if lod1_model.parsed == 1:
+                    self.set_lod(1, self.model_source.path, lods.lod1_distance)
+                    self._preload_lod_model(1, lod1_model)
+            lod2_model: Model3D = self.model_source.lod(2)
+            if lod2_model.found == 1:
+                if lod2_model.parsed == 1:
+                    self.set_lod(2, self.model_source.path, lods.lod2_distance)
+                    self._preload_lod_model(2, lod2_model)
+            self._sync_preloaded_lod_transforms()
+            self._apply_preloaded_lod_materials()
+            self._apply_lod_visibility()
             return self
         lod1_path: str = AssetModels.runtime_lod1_path(self.model_source.path)
         if Memory.strlen(lod1_path) > 0:

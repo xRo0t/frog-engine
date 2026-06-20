@@ -172,6 +172,99 @@ fun gltf_load_binary_buffer(gltf_path: str, root: JsonValue) -> i64:
     file.close()
     return data
 
+fun frogmodel_part_entry(model: Model3D, primitive_index: i32) -> i64:
+    if Str.equals(model.format, "frogmodel") == false:
+        return 0
+    if primitive_index < 0:
+        return 0
+    if primitive_index >= model.frog_part_count:
+        return 0
+    return model.frog_part_table + ((primitive_index as i64) * 32)
+
+fun gpu_make_frogmodel_primitive_vertices(model: Model3D, mesh_index: i32, primitive_index: i32) -> GpuMeshData:
+    if mesh_index != 0:
+        return GpuMeshData()
+    entry: i64 = frogmodel_part_entry(model, primitive_index)
+    if entry == 0:
+        return GpuMeshData()
+    vertex_count: i32 = Memory.read_i32(model.frog_data + entry)
+    index_count: i32 = Memory.read_i32(model.frog_data + entry + 4)
+    vertex_offset: i64 = Memory.read_i32(model.frog_data + entry + 16) as i64
+    index_offset: i64 = Memory.read_i32(model.frog_data + entry + 20) as i64
+    vertex_bytes: i64 = Memory.read_i32(model.frog_data + entry + 24) as i64
+    index_bytes: i64 = Memory.read_i32(model.frog_data + entry + 28) as i64
+    expected_vertex_bytes: i64 = (vertex_count as i64) * (FROG_GPU_VERTEX_STRIDE as i64)
+    expected_index_bytes: i64 = (index_count as i64) * 4
+    if vertex_count <= 0:
+        return GpuMeshData()
+    if index_count <= 0:
+        return GpuMeshData()
+    if vertex_bytes != expected_vertex_bytes:
+        return GpuMeshData()
+    if index_bytes != expected_index_bytes:
+        return GpuMeshData()
+    if vertex_offset + vertex_bytes > model.frog_size:
+        return GpuMeshData()
+    if index_offset + index_bytes > model.frog_size:
+        return GpuMeshData()
+    vertices: i64 = Memory.malloc_zeroed(vertex_bytes)
+    if vertices == 0:
+        return GpuMeshData()
+    indices: i64 = Memory.malloc_zeroed(index_bytes)
+    if indices == 0:
+        Memory.free(vertices)
+        return GpuMeshData()
+    Memory.copy(vertices, model.frog_data + vertex_offset, vertex_bytes)
+    Memory.copy(indices, model.frog_data + index_offset, index_bytes)
+    return GpuMeshData(vertices=vertices, vertex_count=vertex_count, indices=indices, index_count=index_count)
+
+fun gpu_make_frogmodel_model_vertices(model: Model3D) -> GpuMeshData:
+    if Str.equals(model.format, "frogmodel") == false:
+        return GpuMeshData()
+    total_vertices: i32 = 0
+    total_indices: i32 = 0
+    part_index: i32 = 0
+    while part_index < model.frog_part_count:
+        entry: i64 = frogmodel_part_entry(model, part_index)
+        if entry == 0:
+            return GpuMeshData()
+        total_vertices = total_vertices + Memory.read_i32(model.frog_data + entry)
+        total_indices = total_indices + Memory.read_i32(model.frog_data + entry + 4)
+        part_index = part_index + 1
+    if total_vertices <= 0:
+        return GpuMeshData()
+    if total_indices <= 0:
+        return GpuMeshData()
+    vertices: i64 = Memory.malloc_zeroed((total_vertices as i64) * (FROG_GPU_VERTEX_STRIDE as i64))
+    if vertices == 0:
+        return GpuMeshData()
+    indices: i64 = Memory.malloc_zeroed((total_indices as i64) * 4)
+    if indices == 0:
+        Memory.free(vertices)
+        return GpuMeshData()
+    vertex_offset: i64 = 0
+    index_offset: i64 = 0
+    vertex_base: i32 = 0
+    part_index = 0
+    while part_index < model.frog_part_count:
+        entry: i64 = frogmodel_part_entry(model, part_index)
+        vertex_count: i32 = Memory.read_i32(model.frog_data + entry)
+        index_count: i32 = Memory.read_i32(model.frog_data + entry + 4)
+        data_vertex_offset: i64 = Memory.read_i32(model.frog_data + entry + 16) as i64
+        data_index_offset: i64 = Memory.read_i32(model.frog_data + entry + 20) as i64
+        vertex_bytes: i64 = (vertex_count as i64) * (FROG_GPU_VERTEX_STRIDE as i64)
+        Memory.copy(vertices + vertex_offset, model.frog_data + data_vertex_offset, vertex_bytes)
+        index_i: i32 = 0
+        while index_i < index_count:
+            source_index: i32 = Memory.read_i32(model.frog_data + data_index_offset + ((index_i as i64) * 4))
+            Memory.write_i32(indices + index_offset, source_index + vertex_base)
+            index_offset = index_offset + 4
+            index_i = index_i + 1
+        vertex_offset = vertex_offset + vertex_bytes
+        vertex_base = vertex_base + vertex_count
+        part_index = part_index + 1
+    return GpuMeshData(vertices=vertices, vertex_count=total_vertices, indices=indices, index_count=total_indices)
+
 fun gpu_make_gltf_primitive_vertices(model: Model3D, mesh_index: i32, primitive_index: i32) -> GpuMeshData:
     if Str.equals(model.format, "gltf") == false:
         return GpuMeshData()

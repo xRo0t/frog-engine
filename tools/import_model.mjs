@@ -5,15 +5,14 @@ import { MeshoptSimplifier } from "meshoptimizer";
 
 const USAGE = `
 Usage:
-  node tools/import_model.mjs <model.gltf> [--out <model.frog.gltf>] [--preserve-materials]
+  node tools/import_model.mjs <model.gltf> [--out <model.frogmodel>] [--preserve-materials]
   node tools/import_model.mjs <model.gltf> --lods
   node tools/import_model.mjs <model.gltf> --lod 0.45 --lod 0.22
 
-Creates a runtime glTF cache next to the source by default:
-  scene.gltf -> scene.frog.gltf + scene.frog.bin
+Creates one cooked runtime model next to the source by default:
+  scene.gltf -> scene.frogmodel
 
-The generated file is still glTF so the current Frog runtime can load it,
-but geometry is pre-flattened and optionally material-merged offline.
+The cooked file contains GPU-ready vertex/index data and every generated LOD.
 
 --lods writes two optimized runtime LODs plus a sibling .lods.json manifest.
 --lod accepts a target triangle ratio from 0.01 through 0.99 and can repeat.
@@ -29,9 +28,7 @@ function parseArgs(argv) {
   const args = {
     source: "",
     out: "",
-    targetTriangles: 0,
     preserveMaterials: false,
-    unsafeDropTriangles: false,
     lodRatios: [],
     useDefaultLods: false,
   };
@@ -44,11 +41,6 @@ function parseArgs(argv) {
     if (a === "--out") {
       i += 1;
       args.out = argv[i] ?? "";
-      continue;
-    }
-    if (a === "--target-triangles") {
-      i += 1;
-      args.targetTriangles = Number.parseInt(argv[i] ?? "", 10);
       continue;
     }
     if (a === "--preserve-materials") {
@@ -68,10 +60,6 @@ function parseArgs(argv) {
       args.lodRatios.push(ratio);
       continue;
     }
-    if (a === "--unsafe-drop-triangles") {
-      args.unsafeDropTriangles = true;
-      continue;
-    }
     if (!args.source) {
       args.source = a;
       continue;
@@ -81,16 +69,6 @@ function parseArgs(argv) {
   if (!args.source) {
     console.log(USAGE.trim());
     process.exit(1);
-  }
-  if (!Number.isFinite(args.targetTriangles) || args.targetTriangles < 0) {
-    fail("--target-triangles must be >= 0");
-  }
-  if (args.targetTriangles > 0 && args.targetTriangles < 256) {
-    fail("--target-triangles must be >= 256 when enabled");
-  }
-  if (args.targetTriangles > 0 && !args.unsafeDropTriangles) {
-    console.warn("frog import_model: ignoring --target-triangles without --unsafe-drop-triangles");
-    args.targetTriangles = 0;
   }
   if (args.useDefaultLods && args.lodRatios.length === 0) {
     args.lodRatios = [0.45, 0.22];
@@ -353,23 +331,6 @@ function collectTriangles(gltf, buffers, preserveMaterials) {
   return { groups: [...groups.values()].filter((g) => g.triangles.length > 0), totalTriangles };
 }
 
-function sampleTriangles(triangles, globalStep, groupTargetMin) {
-  if (globalStep <= 1) {
-    return triangles;
-  }
-  if (triangles.length <= groupTargetMin) {
-    return triangles;
-  }
-  const picked = [];
-  for (let i = 0; i < triangles.length; i += globalStep) {
-    picked.push(triangles[i]);
-  }
-  if (picked.length === 0 && triangles.length > 0) {
-    picked.push(triangles[0]);
-  }
-  return picked;
-}
-
 function makeVertexKey(position, normal, uv) {
   return `${position[0]}|${position[1]}|${position[2]}|${normal[0]}|${normal[1]}|${normal[2]}|${uv[0]}|${uv[1]}`;
 }
@@ -448,6 +409,144 @@ function simplifyGroup(group, ratio) {
 
 function simplifyGroups(groups, ratio) {
   return groups.map((group) => simplifyGroup(group, ratio));
+}
+
+function cookedColor(group) {
+  const weight = group.colorWeight > 0 ? group.colorWeight : 1;
+  return [
+    group.color[0] / weight,
+    group.color[1] / weight,
+    group.color[2] / weight,
+  ];
+}
+
+function remapPosition(position) {
+  return [
+    Number(position?.[0] ?? 0),
+    Number(position?.[2] ?? 0),
+    -Number(position?.[1] ?? 0),
+  ];
+}
+
+function remapNormal(normal) {
+  const x = Number(normal?.[0] ?? 0);
+  const y = Number(normal?.[2] ?? 1);
+  const z = -Number(normal?.[1] ?? 0);
+  const len = Math.hypot(x, y, z);
+  if (len <= 0.000001) {
+    return [0, 1, 0];
+  }
+  return [x / len, y / len, z / len];
+}
+
+function buildCookedPart(group) {
+  const vertexCount = group.triangles.length * 3;
+  const vertexStride = 44;
+  const vertices = Buffer.alloc(vertexCount * vertexStride);
+  const indices = Buffer.alloc(vertexCount * 4);
+  const color = cookedColor(group);
+  let vertex = 0;
+
+  for (const triangle of group.triangles) {
+    for (let corner = 0; corner < 3; corner += 1) {
+      const position = remapPosition(triangle.positions[corner]);
+      const normal = remapNormal(triangle.normals[corner]);
+      const uv = triangle.uvs[corner];
+      const offset = vertex * vertexStride;
+      vertices.writeFloatLE(position[0], offset);
+      vertices.writeFloatLE(position[1], offset + 4);
+      vertices.writeFloatLE(position[2], offset + 8);
+      vertices.writeFloatLE(normal[0], offset + 12);
+      vertices.writeFloatLE(normal[1], offset + 16);
+      vertices.writeFloatLE(normal[2], offset + 20);
+      vertices.writeFloatLE(color[0], offset + 24);
+      vertices.writeFloatLE(color[1], offset + 28);
+      vertices.writeFloatLE(color[2], offset + 32);
+      vertices.writeFloatLE(uv[0] ?? 0, offset + 36);
+      vertices.writeFloatLE(uv[1] ?? 0, offset + 40);
+      indices.writeUInt32LE(vertex, vertex * 4);
+      vertex += 1;
+    }
+  }
+
+  return {
+    name: group.name || "Material",
+    vertexCount,
+    indexCount: vertexCount,
+    vertices,
+    indices,
+  };
+}
+
+function buildCookedLevel(groups, ratio) {
+  const parts = groups
+    .filter((group) => group.triangles.length > 0)
+    .map((group) => buildCookedPart(group));
+  const triangles = parts.reduce((total, part) => total + part.indexCount / 3, 0);
+  return { ratio, parts, triangles };
+}
+
+function buildFrogModel(levels) {
+  const headerSize = 16;
+  const lodEntrySize = 8;
+  const partEntrySize = 32;
+  const lodTableOffset = headerSize;
+  const partTableOffset = lodTableOffset + levels.length * lodEntrySize;
+  const parts = [];
+
+  for (let level = 0; level < levels.length; level += 1) {
+    for (const part of levels[level].parts) {
+      parts.push({ ...part, level });
+    }
+  }
+
+  let cursor = partTableOffset + parts.length * partEntrySize;
+  for (const part of parts) {
+    part.nameData = Buffer.from(`${part.name}\0`, "utf8");
+    part.nameOffset = cursor;
+    part.nameLength = part.nameData.length - 1;
+    cursor += part.nameData.length;
+  }
+  for (const part of parts) {
+    cursor = align4(cursor);
+    part.vertexOffset = cursor;
+    cursor += part.vertices.length;
+    cursor = align4(cursor);
+    part.indexOffset = cursor;
+    cursor += part.indices.length;
+  }
+
+  const output = Buffer.alloc(cursor);
+  output.writeUInt32LE(0x4d475246, 0);
+  output.writeUInt32LE(1, 4);
+  output.writeUInt32LE(levels.length, 8);
+  output.writeUInt32LE(lodTableOffset, 12);
+
+  let partIndex = 0;
+  for (let level = 0; level < levels.length; level += 1) {
+    const lodOffset = lodTableOffset + level * lodEntrySize;
+    output.writeUInt32LE(levels[level].parts.length, lodOffset);
+    output.writeUInt32LE(partTableOffset + partIndex * partEntrySize, lodOffset + 4);
+    partIndex += levels[level].parts.length;
+  }
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    const entry = partTableOffset + index * partEntrySize;
+    output.writeUInt32LE(part.vertexCount, entry);
+    output.writeUInt32LE(part.indexCount, entry + 4);
+    output.writeUInt32LE(part.nameOffset, entry + 8);
+    output.writeUInt32LE(part.nameLength, entry + 12);
+    output.writeUInt32LE(part.vertexOffset, entry + 16);
+    output.writeUInt32LE(part.indexOffset, entry + 20);
+    output.writeUInt32LE(part.vertices.length, entry + 24);
+    output.writeUInt32LE(part.indices.length, entry + 28);
+    part.nameData.copy(output, part.nameOffset);
+    part.vertices.copy(output, part.vertexOffset);
+    part.indices.copy(output, part.indexOffset);
+  }
+
+  return output;
 }
 
 function pushAligned(chunks, cursor) {
@@ -650,7 +749,7 @@ function buildRuntimeGltf(sourceGltf, groups, totalTriangles, targetTriangles, o
 
 function defaultOutPath(source) {
   const ext = path.extname(source);
-  return path.join(path.dirname(source), `${path.basename(source, ext)}.frog${ext}`);
+  return path.join(path.dirname(source), `${path.basename(source, ext)}.frogmodel`);
 }
 
 function lodOutPath(out, level) {
@@ -685,66 +784,27 @@ async function main() {
     fail("no triangle primitives found");
   }
 
-  const outBin = out.replace(/\.gltf$/i, ".bin");
-  const { runtime, bin, runtimeTriangles, step } = buildRuntimeGltf(
-    gltf,
-    groups,
-    totalTriangles,
-    args.targetTriangles,
-    path.basename(outBin),
-    args.preserveMaterials,
-    args.unsafeDropTriangles,
-  );
-
-  fs.mkdirSync(path.dirname(out), { recursive: true });
-  writeRuntimeGltf(out, runtime, bin);
-
-  const lodLevels = [{ path: path.basename(out), ratio: 1.0, triangles: runtimeTriangles }];
+  const levels = [buildCookedLevel(groups, 1.0)];
   if (args.lodRatios.length > 0) {
     await MeshoptSimplifier.ready;
-    for (let index = 0; index < args.lodRatios.length; index += 1) {
-      const ratio = args.lodRatios[index];
-      const lodGroups = simplifyGroups(groups, ratio);
-      const lodTotalTriangles = lodGroups.reduce((total, group) => total + group.triangles.length, 0);
-      const lodOut = lodOutPath(out, index + 1);
-      const lodBin = lodOut.replace(/\.gltf$/i, ".bin");
-      const lodBuild = buildRuntimeGltf(
-        gltf,
-        lodGroups,
-        lodTotalTriangles,
-        0,
-        path.basename(lodBin),
-        args.preserveMaterials,
-        false,
-      );
-      writeRuntimeGltf(lodOut, lodBuild.runtime, lodBuild.bin);
-      lodLevels.push({
-        path: path.basename(lodOut),
-        ratio,
-        triangles: lodBuild.runtimeTriangles,
-      });
-    }
-
-    const manifest = {
-      version: 1,
-      generator: "Frog import_model",
-      source: path.basename(source),
-      levels: lodLevels,
-    };
-    fs.writeFileSync(lodManifestPath(out), `${JSON.stringify(manifest, null, 2)}\n`);
-    console.log(`lod manifest: ${lodManifestPath(out)}`);
-    for (let index = 1; index < lodLevels.length; index += 1) {
-      const lod = lodLevels[index];
-      console.log(`lod${index}: ${lod.path} (${lod.triangles} triangles, ${Math.round(lod.ratio * 100)}%)`);
+    for (const ratio of args.lodRatios) {
+      levels.push(buildCookedLevel(simplifyGroups(groups, ratio), ratio));
     }
   }
 
+  const cooked = buildFrogModel(levels);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, cooked);
+
   console.log(`source: ${source}`);
   console.log(`output: ${out}`);
-  console.log(`triangles: ${totalTriangles} -> ${runtimeTriangles} (step ${step})`);
-  console.log(`geometry: ${args.unsafeDropTriangles ? "unsafe triangle dropping" : "full"}`);
+  console.log(`lods: ${levels.length}`);
+  for (let index = 0; index < levels.length; index += 1) {
+    const level = levels[index];
+    console.log(`lod${index}: ${level.triangles} triangles (${Math.round(level.ratio * 100)}%)`);
+  }
   console.log(`material mode: ${args.preserveMaterials ? "preserve" : "merge"}`);
-  console.log(`materials/primitives: ${runtime.materials?.length ?? 0}/${runtime.meshes[0].primitives.length}`);
+  console.log(`bytes: ${cooked.length}`);
 }
 
 main().catch((error) => fail(error instanceof Error ? error.message : String(error)));
