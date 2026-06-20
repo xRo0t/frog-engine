@@ -614,12 +614,13 @@ texture: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span cl
       </table>
 
       <h4>Model Import Cache</h4>
-      <p>Large source glTF files should be imported once before shipping. The importer keeps the source path stable for game code, but writes a runtime cache with flattened geometry, material-grouped primitives, and a generated LOD.</p>
-      <pre><code>node packages/frog/tools/import_model.mjs assets/models/car/scene.gltf --target-triangles 12000</code></pre>
+      <p>Large source glTF files should be imported once before shipping. The importer keeps the source path stable for game code, but writes a runtime cache with flattened geometry and material-grouped primitives while preserving the original visual topology.</p>
+      <pre><code>node packages/frog/tools/import_model.mjs assets/models/car/scene.gltf</code></pre>
       <p>After that, game code remains explicit and clean:</p>
       <pre><code>car: <span class="tok-type">Mesh3D</span> = Mesh3D.model(<span class="tok-str">"Car"</span>, <span class="tok-str">"models/car/scene.gltf"</span>)</code></pre>
       <div class="note"><strong>Runtime rule.</strong> If <code>models/car/scene.frog.gltf</code> exists beside <code>scene.gltf</code>, the loader uses the cache. If it does not exist, Frog loads the source file directly for development.</div>
       <div class="note"><strong>Material mode.</strong> The importer merges many source materials into a small runtime set by default for fast startup and fewer JSON primitive walks. Use <code>--preserve-materials</code> when exact source material slots are more important than startup cost.</div>
+      <div class="note"><strong>LOD rule.</strong> Triangle dropping is not used by default because naive reduction can leave holes in models. <code>--unsafe-drop-triangles --target-triangles N</code> is only for temporary far LOD/debug assets until Frog has a real mesh simplifier.</div>
 
       <h3>Asset Types</h3>
       <p>Each loader returns a small struct describing the resource. Common fields:</p>

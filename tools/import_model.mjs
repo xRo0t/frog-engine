@@ -4,13 +4,17 @@ import path from "node:path";
 
 const USAGE = `
 Usage:
-  node tools/import_model.mjs <model.gltf> [--target-triangles 12000] [--out <model.frog.gltf>] [--preserve-materials]
+  node tools/import_model.mjs <model.gltf> [--out <model.frog.gltf>] [--preserve-materials]
+  node tools/import_model.mjs <model.gltf> --unsafe-drop-triangles --target-triangles 12000
 
 Creates a runtime glTF cache next to the source by default:
   scene.gltf -> scene.frog.gltf + scene.frog.bin
 
 The generated file is still glTF so the current Frog runtime can load it,
-but geometry is pre-flattened, material-merged, and LOD-reduced offline.
+but geometry is pre-flattened and optionally material-merged offline.
+
+Triangle dropping is intentionally not enabled by default. Use it only for
+throwaway far LOD/debug assets because it can break visual topology.
 `;
 
 function fail(message) {
@@ -22,8 +26,9 @@ function parseArgs(argv) {
   const args = {
     source: "",
     out: "",
-    targetTriangles: 12000,
+    targetTriangles: 0,
     preserveMaterials: false,
+    unsafeDropTriangles: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
     const a = argv[i];
@@ -45,6 +50,10 @@ function parseArgs(argv) {
       args.preserveMaterials = true;
       continue;
     }
+    if (a === "--unsafe-drop-triangles") {
+      args.unsafeDropTriangles = true;
+      continue;
+    }
     if (!args.source) {
       args.source = a;
       continue;
@@ -55,8 +64,15 @@ function parseArgs(argv) {
     console.log(USAGE.trim());
     process.exit(1);
   }
-  if (!Number.isFinite(args.targetTriangles) || args.targetTriangles < 256) {
-    fail("--target-triangles must be >= 256");
+  if (!Number.isFinite(args.targetTriangles) || args.targetTriangles < 0) {
+    fail("--target-triangles must be >= 0");
+  }
+  if (args.targetTriangles > 0 && args.targetTriangles < 256) {
+    fail("--target-triangles must be >= 256 when enabled");
+  }
+  if (args.targetTriangles > 0 && !args.unsafeDropTriangles) {
+    console.warn("frog import_model: ignoring --target-triangles without --unsafe-drop-triangles");
+    args.targetTriangles = 0;
   }
   return args;
 }
@@ -408,8 +424,8 @@ function buildRuntimeMaterials(sourceGltf, groups, preserveMaterials) {
   return materials.length > 0 ? materials : [{ name: "Material" }];
 }
 
-function buildRuntimeGltf(sourceGltf, groups, totalTriangles, targetTriangles, outBinName, preserveMaterials) {
-  const step = Math.max(1, Math.ceil(totalTriangles / targetTriangles));
+function buildRuntimeGltf(sourceGltf, groups, totalTriangles, targetTriangles, outBinName, preserveMaterials, unsafeDropTriangles) {
+  const step = unsafeDropTriangles && targetTriangles > 0 ? Math.max(1, Math.ceil(totalTriangles / targetTriangles)) : 1;
   const chunks = [];
   const cursor = { value: 0 };
   const bufferViews = [];
@@ -507,8 +523,9 @@ function buildRuntimeGltf(sourceGltf, groups, totalTriangles, targetTriangles, o
       extras: {
         sourceTriangles: totalTriangles,
         runtimeTriangles,
-        targetTriangles,
+        targetTriangles: targetTriangles > 0 ? targetTriangles : totalTriangles,
         reductionStep: step,
+        unsafeDropTriangles,
       },
     },
     scene: 0,
@@ -561,6 +578,7 @@ function main() {
     args.targetTriangles,
     path.basename(outBin),
     args.preserveMaterials,
+    args.unsafeDropTriangles,
   );
 
   fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -570,6 +588,7 @@ function main() {
   console.log(`source: ${source}`);
   console.log(`output: ${out}`);
   console.log(`triangles: ${totalTriangles} -> ${runtimeTriangles} (step ${step})`);
+  console.log(`geometry: ${args.unsafeDropTriangles ? "unsafe triangle dropping" : "full"}`);
   console.log(`material mode: ${args.preserveMaterials ? "preserve" : "merge"}`);
   console.log(`materials/primitives: ${runtime.materials?.length ?? 0}/${runtime.meshes[0].primitives.length}`);
 }
