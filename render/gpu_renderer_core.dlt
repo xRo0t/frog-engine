@@ -1012,7 +1012,12 @@ attach GpuRendererCore:
 
         split0: f32 = distance
         if cascade_count > 1:
-            split0 = distance * 0.32
+            cascade_split: f32 = light.shadow.cascade_split
+            if cascade_split < 0.10:
+                cascade_split = 0.10
+            if cascade_split > 0.75:
+                cascade_split = 0.75
+            split0 = distance * cascade_split
             if split0 < 12.0:
                 split0 = 12.0
             if split0 > distance * 0.60:

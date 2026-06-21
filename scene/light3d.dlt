@@ -10,6 +10,7 @@ struct ShadowSettings:
     enabled: i32 = 0
     map_size: i32 = 1024
     cascades: i32 = 1
+    cascade_split: f32 = 0.32
     distance: f32 = 120.0
     fade_distance: f32 = 0.0
     bias: f32 = 0.012
@@ -46,19 +47,19 @@ attach ShadowQuality:
 attach ShadowSettings:
 
     static fun off() -> ShadowSettings:
-        return ShadowSettings(enabled=0, map_size=0, cascades=0, distance=0.0, fade_distance=0.0, bias=0.0, normal_bias=0.0, softness=0.0, filter_quality=0, filter_samples=0, filter_radius=0.0, adaptive=0)
+        return ShadowSettings(enabled=0, map_size=0, cascades=0, cascade_split=0.32, distance=0.0, fade_distance=0.0, bias=0.0, normal_bias=0.0, softness=0.0, filter_quality=0, filter_samples=0, filter_radius=0.0, adaptive=0)
 
     static fun low() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=1024, cascades=1, distance=80.0, fade_distance=12.0, bias=0.020, normal_bias=0.060, softness=0.25, filter_quality=0, filter_samples=0, filter_radius=0.0, adaptive=1)
+        return ShadowSettings(enabled=1, map_size=1024, cascades=1, cascade_split=0.32, distance=80.0, fade_distance=12.0, bias=0.020, normal_bias=0.060, softness=0.25, filter_quality=0, filter_samples=0, filter_radius=0.0, adaptive=1)
 
     static fun medium() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=2048, cascades=1, distance=140.0, fade_distance=24.0, bias=0.016, normal_bias=0.050, softness=0.50, filter_quality=1, filter_samples=0, filter_radius=0.0, adaptive=1)
+        return ShadowSettings(enabled=1, map_size=2048, cascades=1, cascade_split=0.32, distance=140.0, fade_distance=24.0, bias=0.016, normal_bias=0.050, softness=0.50, filter_quality=1, filter_samples=0, filter_radius=0.0, adaptive=1)
 
     static fun high() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=4096, cascades=1, distance=220.0, fade_distance=40.0, bias=0.012, normal_bias=0.035, softness=0.70, filter_quality=2, filter_samples=0, filter_radius=0.0, adaptive=1)
+        return ShadowSettings(enabled=1, map_size=4096, cascades=1, cascade_split=0.32, distance=220.0, fade_distance=40.0, bias=0.012, normal_bias=0.035, softness=0.70, filter_quality=2, filter_samples=0, filter_radius=0.0, adaptive=1)
 
     static fun ultra() -> ShadowSettings:
-        return ShadowSettings(enabled=1, map_size=8192, cascades=2, distance=320.0, fade_distance=64.0, bias=0.010, normal_bias=0.030, softness=0.95, filter_quality=3, filter_samples=0, filter_radius=0.0, adaptive=1)
+        return ShadowSettings(enabled=1, map_size=8192, cascades=2, cascade_split=0.24, distance=320.0, fade_distance=64.0, bias=0.010, normal_bias=0.030, softness=0.95, filter_quality=3, filter_samples=0, filter_radius=0.0, adaptive=1)
 
     fun set_map_size(self, size: i32) -> ShadowSettings:
         if size <= 0:
@@ -73,10 +74,20 @@ attach ShadowSettings:
         if count < 1:
             self.cascades = 1
             return self
-        if count > 4:
-            self.cascades = 4
+        if count > 2:
+            self.cascades = 2
             return self
         self.cascades = count
+        return self
+
+    fun set_cascade_split(self, value: f32) -> ShadowSettings:
+        if value < 0.10:
+            self.cascade_split = 0.10
+            return self
+        if value > 0.75:
+            self.cascade_split = 0.75
+            return self
+        self.cascade_split = value
         return self
 
     fun set_distance(self, value: f32) -> ShadowSettings:

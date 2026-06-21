@@ -842,7 +842,8 @@ scene.add_child(sun)</code></pre>
         <tr><td><code>ShadowSettings.off()</code></td><td>No shadows.</td></tr>
         <tr><td><code>low()</code> / <code>medium()</code> / <code>high()</code> / <code>ultra()</code></td><td>Preset quality levels for map size, distance, bias, PCF softness, and up to two directional shadow cascades.</td></tr>
         <tr><td><code>set_map_size(size)</code></td><td>Sets the desired shadow map resolution.</td></tr>
-        <tr><td><code>set_cascades(count)</code></td><td>Clamps cascade count to 1..4.</td></tr>
+        <tr><td><code>set_cascades(count)</code></td><td>Clamps cascade count to 1..2 in the current renderer. Use two cascades for clearer near shadows with a cheaper far cascade.</td></tr>
+        <tr><td><code>set_cascade_split(value)</code></td><td>Sets where the near cascade ends as a fraction of shadow distance. Smaller values give sharper close shadows; larger values cover more mid-range detail.</td></tr>
         <tr><td><code>set_distance(value)</code></td><td>Sets shadow draw distance. Shadow casters outside this range are skipped by the shadow pass.</td></tr>
         <tr><td><code>set_fade_distance(value)</code></td><td>Fades shadows out over the last part of the draw distance. Use <code>0.0</code> to disable the fade.</td></tr>
         <tr><td><code>set_bias(value)</code></td><td>Sets the constant shadow bias in world units. Lower values keep contact shadows attached; higher values fight acne.</td></tr>
