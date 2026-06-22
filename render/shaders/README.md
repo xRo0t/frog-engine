@@ -11,7 +11,8 @@ glslangValidator -V --target-env vulkan1.0 render/shaders/textured.frag -o rende
 glslangValidator -V --target-env vulkan1.0 render/shaders/shadow.vert -o render/shaders/shadow.vert.spv
 glslangValidator -V --target-env vulkan1.0 render/shaders/sky.vert -o render/shaders/sky.vert.spv
 glslangValidator -V --target-env vulkan1.0 render/shaders/sky.frag -o render/shaders/sky.frag.spv
-node tools/embed_spirv.mjs render/shaders/textured.vert.spv render/shaders/textured.frag.spv render/shaders/shadow.vert.spv render/shaders/sky.vert.spv render/shaders/sky.frag.spv
+glslangValidator -V --target-env vulkan1.0 render/shaders/bloom.frag -o render/shaders/bloom.frag.spv
+node tools/embed_spirv.mjs render/shaders/textured.vert.spv render/shaders/textured.frag.spv render/shaders/shadow.vert.spv render/shaders/sky.vert.spv render/shaders/sky.frag.spv render/shaders/bloom.frag.spv
 
 glslangValidator -V --target-env vulkan1.0 render/shaders/debug_collision.vert -o render/shaders/debug_collision.vert.spv
 glslangValidator -V --target-env vulkan1.0 render/shaders/debug_collision.frag -o render/shaders/debug_collision.frag.spv

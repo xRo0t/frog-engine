@@ -61,6 +61,13 @@ struct Fog:
     end_distance: f32 = 0.0
     density: f32 = 0.0
 
+struct Bloom:
+    enabled: i32 = 0
+    threshold: f32 = 1.0
+    intensity: f32 = 0.0
+    radius: f32 = 2.5
+    scatter: f32 = 0.70
+
 struct SkyShape:
     value: i32 = SKY_OBJECT_SHAPE_CIRCLE
 
@@ -131,6 +138,50 @@ struct Environment:
     clear_color: Color = Color()
     fog: Fog = Fog()
     sky: Sky = Sky()
+    bloom: Bloom = Bloom()
+
+attach Bloom:
+
+    static fun none() -> Bloom:
+        return Bloom(enabled=0, threshold=1.0, intensity=0.0, radius=2.5, scatter=0.70)
+
+    static fun soft() -> Bloom:
+        return Bloom(enabled=1, threshold=0.85, intensity=0.55, radius=4.0, scatter=0.75)
+
+    static fun cinematic() -> Bloom:
+        return Bloom(enabled=1, threshold=0.70, intensity=0.85, radius=6.0, scatter=0.85)
+
+    static fun create(threshold: f32, intensity: f32, radius: f32) -> Bloom:
+        b: Bloom = Bloom.soft()
+        b.threshold = threshold
+        b.intensity = intensity
+        b.radius = radius
+        return b
+
+    fun set_threshold(self, value: f32) -> Bloom:
+        self.threshold = value
+        return self
+
+    fun set_intensity(self, value: f32) -> Bloom:
+        self.intensity = value
+        if value > 0.0:
+            self.enabled = 1
+        return self
+
+    fun set_radius(self, value: f32) -> Bloom:
+        self.radius = value
+        return self
+
+    fun set_scatter(self, value: f32) -> Bloom:
+        self.scatter = clamp(value, 0.0, 1.0)
+        return self
+
+    fun active(self) -> i32:
+        if self.enabled == 0:
+            return 0
+        if self.intensity <= 0.0:
+            return 0
+        return 1
 
 attach FogShape:
 
@@ -628,6 +679,7 @@ attach Environment:
         env.clear_color = Color.rgb(0.15, 0.15, 0.20)
         env.fog = Fog.none()
         env.sky = Sky.none()
+        env.bloom = Bloom.none()
         return env
 
     fun set_clear_color(self, color: Color) -> Environment:
@@ -644,10 +696,18 @@ attach Environment:
             self.clear_color = sky.zenith_color
         return self
 
+    fun set_bloom(self, bloom: Bloom) -> Environment:
+        self.bloom = bloom
+        return self
+
     fun clear_sky(self) -> Environment:
         self.sky = Sky.none()
         return self
 
     fun clear_fog(self) -> Environment:
         self.fog = Fog.none()
+        return self
+
+    fun clear_bloom(self) -> Environment:
+        self.bloom = Bloom.none()
         return self

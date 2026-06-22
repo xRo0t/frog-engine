@@ -2,6 +2,7 @@
 
 layout(set = 0, binding = 0) uniform sampler2D textureSampler;
 layout(set = 0, binding = 1) uniform sampler2DShadow shadowSampler;
+layout(set = 0, binding = 2) uniform sampler2D emissiveSampler;
 
 layout(location = 0) in vec3 fragmentColor;
 layout(location = 1) in vec2 fragmentUv;
@@ -64,6 +65,11 @@ vec4 unpackEmissive() {
 float receivesShadow() {
     float packed = max(floor(fragmentMaterial.w + 0.5), 0.0);
     return mod(floor(packed / 65536.0), 2.0);
+}
+
+float hasEmissiveMap() {
+    float packed = max(floor(fragmentMaterial.w + 0.5), 0.0);
+    return mod(floor(packed / 131072.0), 2.0);
 }
 
 vec2 receiverPlaneDepthGradient(vec2 uv, float depth) {
@@ -372,7 +378,12 @@ void main() {
         vec3 irradiance = vec3(light.a) + light.rgb * wrappedDiffuse * lightIntensity * shadow;
         surfaceColor.rgb *= irradiance;
     }
-    surfaceColor.rgb += emissive.rgb * max(fragmentMaterial.z, 0.0);
+    vec3 emissiveColor = emissive.rgb;
+    if (hasEmissiveMap() > 0.5) {
+        vec4 emissiveTexel = texture(emissiveSampler, fragmentUv);
+        emissiveColor *= emissiveTexel.rgb * emissiveTexel.a;
+    }
+    surfaceColor.rgb += emissiveColor * max(fragmentMaterial.z, 0.0);
 
     float fogFactor = 0.0;
     int fogMode = int(pushConstants.fogParams.x + 0.5);

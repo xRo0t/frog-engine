@@ -788,6 +788,18 @@ attach Mesh3D:
         self.material = mat
         return self.apply_material_bindings()
 
+    fun set_emissive(self, color: Color, strength: f32) -> Mesh3D:
+        mat: Material3D = self.material
+        mat.set_emissive(color, strength)
+        self.material = mat
+        return self.apply_material_bindings()
+
+    fun set_emissive_map(self, texture: Texture2D) -> Mesh3D:
+        mat: Material3D = self.material
+        mat.set_emissive_map(texture)
+        self.material = mat
+        return self.apply_material_bindings()
+
     fun set_alpha(self, alpha: f32) -> Mesh3D:
         mat: Material3D = self.material
         mat.set_alpha(alpha)

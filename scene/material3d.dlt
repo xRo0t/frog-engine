@@ -9,12 +9,14 @@ struct Material3D:
     normal_map: Texture2D = Texture2D()
     roughness_map: Texture2D = Texture2D()
     metallic_map: Texture2D = Texture2D()
+    emissive_map: Texture2D = Texture2D()
     shader: Shader = Shader()
     emissive: Color = Color()
     has_albedo: i32 = 0
     has_normal_map: i32 = 0
     has_roughness_map: i32 = 0
     has_metallic_map: i32 = 0
+    has_emissive_map: i32 = 0
     has_shader: i32 = 0
     metallic: f32 = 0.0
     roughness: f32 = 1.0
@@ -22,6 +24,10 @@ struct Material3D:
     alpha: f32 = 1.0
     unlit: i32 = 0
     double_sided: i32 = 0
+    uv_scale_x: f32 = 1.0
+    uv_scale_y: f32 = 1.0
+    uv_offset_x: f32 = 0.0
+    uv_offset_y: f32 = 0.0
 
 @heap struct ModelMaterialEntry:
     name: str = ""
@@ -43,6 +49,11 @@ attach Material3D:
         mat.roughness = 1.0
         mat.emissive = Color.black()
         mat.emissive_strength = 0.0
+        mat.has_emissive_map = 0
+        mat.uv_scale_x = 1.0
+        mat.uv_scale_y = 1.0
+        mat.uv_offset_x = 0.0
+        mat.uv_offset_y = 0.0
         return mat
 
     static fun colored(color: Color) -> Material3D:
@@ -102,6 +113,18 @@ attach Material3D:
             self.has_metallic_map = 1
         return self
 
+    fun set_emissive_map(self, texture: Texture2D) -> Material3D:
+        self.emissive_map = texture
+        self.has_emissive_map = 0
+        if texture.texture_id >= 0:
+            self.has_emissive_map = 1
+        return self
+
+    fun clear_emissive_map(self) -> Material3D:
+        self.emissive_map = Texture2D()
+        self.has_emissive_map = 0
+        return self
+
     fun set_shader(self, shader: Shader) -> Material3D:
         self.shader = shader
         self.has_shader = 0
@@ -143,6 +166,16 @@ attach Material3D:
 
     fun set_double_sided(self, enabled: i32) -> Material3D:
         self.double_sided = enabled
+        return self
+
+    fun set_uv_scale(self, x: f32, y: f32) -> Material3D:
+        self.uv_scale_x = x
+        self.uv_scale_y = y
+        return self
+
+    fun set_uv_offset(self, x: f32, y: f32) -> Material3D:
+        self.uv_offset_x = x
+        self.uv_offset_y = y
         return self
 
 attach ModelMaterials:

@@ -17,6 +17,25 @@ fun gpu_wv(buf: i64, off: i64, px: f32, py: f32, pz: f32, cr: f32, cg: f32, cb: 
     Memory.write_f32(buf + off + FROG_GPU_VERTEX_UV_OFFSET + 4, v)
     return off + FROG_GPU_VERTEX_STRIDE
 
+fun gpu_write_vertex_uv(buf: i64, vertex_index: i32, u: f32, v: f32):
+    off: i64 = (vertex_index as i64) * (FROG_GPU_VERTEX_STRIDE as i64) + FROG_GPU_VERTEX_UV_OFFSET
+    Memory.write_f32(buf + off, u)
+    Memory.write_f32(buf + off + 4, v)
+
+fun gpu_assign_quad_uvs(buf: i64, start: i32):
+    gpu_write_vertex_uv(buf, start, 0.0, 1.0)
+    gpu_write_vertex_uv(buf, start + 1, 1.0, 0.0)
+    gpu_write_vertex_uv(buf, start + 2, 1.0, 1.0)
+    gpu_write_vertex_uv(buf, start + 3, 0.0, 1.0)
+    gpu_write_vertex_uv(buf, start + 4, 0.0, 0.0)
+    gpu_write_vertex_uv(buf, start + 5, 1.0, 0.0)
+
+fun gpu_assign_cube_uvs(buf: i64):
+    face: i32 = 0
+    while face < 6:
+        gpu_assign_quad_uvs(buf, face * 6)
+        face = face + 1
+
 fun gpu_write_vertex_normal(buf: i64, vertex_index: i32, nx: f32, ny: f32, nz: f32):
     off: i64 = (vertex_index as i64) * (FROG_GPU_VERTEX_STRIDE as i64) + FROG_GPU_VERTEX_NORMAL_OFFSET
     Memory.write_f32(buf + off, nx)
@@ -572,6 +591,7 @@ fun gpu_make_cube_vertices() -> i64:
     off = gpu_wv(buf, off, 0.0 - hx, 0.0 - hy, 0.0 - hz, 0.0, 1.0, 1.0, 0.0, 0.0)
     off = gpu_wv(buf, off, 0.0 - hx, hy, 0.0 - hz, 0.0, 1.0, 1.0, 0.0, 0.0)
     off = gpu_wv(buf, off, 0.0 - hx, hy, hz, 0.0, 1.0, 1.0, 0.0, 0.0)
+    gpu_assign_cube_uvs(buf)
     gpu_assign_flat_normals(buf, 36)
     return buf
 
@@ -614,5 +634,6 @@ fun gpu_make_plane_vertices() -> i64:
     off = gpu_wv(buf, off, 0.0 - hx, 0.0, 0.0 - hz, 0.45, 0.45, 0.45, 0.0, 0.0)
     off = gpu_wv(buf, off, 0.0 - hx, 0.0, hz, 0.45, 0.45, 0.45, 0.0, 0.0)
     off = gpu_wv(buf, off, hx, 0.0, hz, 0.45, 0.45, 0.45, 0.0, 0.0)
+    gpu_assign_quad_uvs(buf, 0)
     gpu_assign_flat_normals(buf, 6)
     return buf

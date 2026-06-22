@@ -20,6 +20,7 @@ layout(location = 16) in vec4 shadowColumn7;
 layout(location = 17) in vec4 shadowParams;
 layout(location = 18) in vec4 shadowSplits;
 layout(location = 19) in vec4 shadowFilter;
+layout(location = 20) in vec4 instanceUvTransform;
 
 layout(location = 0) out vec3 fragmentColor;
 layout(location = 1) out vec2 fragmentUv;
@@ -53,7 +54,7 @@ void main() {
 
     gl_Position = clipPosition;
     fragmentColor = inColor;
-    fragmentUv = inUv;
+    fragmentUv = inUv * instanceUvTransform.xy + instanceUvTransform.zw;
     fragmentFogDistance = abs(clipPosition.w);
     fragmentWorldPosition = worldPosition.xyz;
     fragmentMaterial = instanceMaterial;

@@ -758,6 +758,10 @@ car.set_lods(ModelLods.auto(<span class="tok-num">32.0</span>, <span class="tok-
       <pre><code>mat: <span class="tok-type">Material3D</span> = Material3D.create()
 mat.set_color(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>))
 mat.set_texture(Assets.textures.load(<span class="tok-str">"textures/crate.png"</span>, TextureSpec.pixel()))
+glow_strength: <span class="tok-type">f32</span> = <span class="tok-num">2.0</span> as <span class="tok-type">f32</span>
+mat.set_emissive(Color.rgb(<span class="tok-num">0.25</span>, <span class="tok-num">0.85</span>, <span class="tok-num">1.0</span>), glow_strength)
+mat.set_emissive_map(Assets.textures.load(<span class="tok-str">"textures/crate_emissive.png"</span>, TextureSpec.smooth()))
+mat.set_uv_scale(<span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>)
 mat.set_surface(<span class="tok-num">0.0</span>, <span class="tok-num">0.85</span>)
 
 cube: <span class="tok-type">Mesh3D</span> = Mesh3D.create(<span class="tok-str">"Cube"</span>)
@@ -772,12 +776,16 @@ cube.set_material(mat)</code></pre>
         <tr><td><code>set_albedo(color)</code></td><td>Alias for color albedo, useful when writing PBR-style material code.</td></tr>
         <tr><td><code>set_alpha(alpha)</code></td><td>Sets color alpha and stores the material alpha.</td></tr>
         <tr><td><code>set_texture(texture)</code> / <code>set_albedo(texture)</code></td><td>Sets the albedo texture applied to the mesh.</td></tr>
+        <tr><td><code>set_uv_scale(x, y)</code></td><td>Scales mesh UVs before sampling the texture. Use larger values to tile floors and walls.</td></tr>
+        <tr><td><code>set_uv_offset(x, y)</code></td><td>Offsets mesh UVs before sampling the texture, useful for scrolling or atlas regions.</td></tr>
         <tr><td><code>clear_texture()</code></td><td>Returns the material to the white fallback texture.</td></tr>
         <tr><td><code>set_normal_map(texture)</code></td><td>Stores a normal map for the future lighting pipeline.</td></tr>
         <tr><td><code>set_roughness_map(texture)</code> / <code>set_metallic_map(texture)</code></td><td>Stores PBR data maps.</td></tr>
         <tr><td><code>set_roughness(value)</code> / <code>set_metallic(value)</code></td><td>Stores scalar PBR surface values, clamped to 0..1.</td></tr>
         <tr><td><code>set_surface(metallic, roughness)</code></td><td>Sets both scalar PBR values together.</td></tr>
         <tr><td><code>set_emissive(color)</code> / <code>set_emissive(color, strength)</code></td><td>Sets the material glow color and optional strength.</td></tr>
+        <tr><td><code>set_emissive_map(texture)</code></td><td>Uses a separate texture as the emissive mask/color. White pixels glow at full emissive color, black pixels stay dark.</td></tr>
+        <tr><td><code>clear_emissive_map()</code></td><td>Removes the emissive texture and returns to scalar emissive color only.</td></tr>
         <tr><td><code>set_emissive_strength(value)</code></td><td>Sets emissive strength, clamped at zero.</td></tr>
         <tr><td><code>set_shader(shader)</code></td><td>Stores a custom shader descriptor for the future shader pipeline.</td></tr>
         <tr><td><code>set_unlit(enabled)</code></td><td>Bypasses directional lighting and automatically disables effective shadow receiving while keeping texture and emissive output.</td></tr>
@@ -1040,6 +1048,8 @@ camera.add_child(raycast)
         <tr><td><code>clear_sky()</code></td><td>Environment</td><td>Disables the rendered sky and falls back to the clear color.</td></tr>
         <tr><td><code>set_fog(fog)</code></td><td>Environment</td><td>Stores fog settings for this scene.</td></tr>
         <tr><td><code>clear_fog()</code></td><td>Environment</td><td>Disables fog on this environment.</td></tr>
+        <tr><td><code>set_bloom(bloom)</code></td><td>Environment</td><td>Enables post-process bloom for emissive materials and bright scene pixels.</td></tr>
+        <tr><td><code>clear_bloom()</code></td><td>Environment</td><td>Disables bloom and returns to the direct render/blit path.</td></tr>
       </table>
 
       <h4>Sky</h4>
@@ -1087,6 +1097,19 @@ camera.add_child(raycast)
         <tr><td><code>set_shape(FogShape.depth())</code></td><td>Uses forward view depth for stylized or cheaper fog.</td></tr>
       </table>
 
+      <h4>Bloom</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>Bloom.none()</code></td><td>No post-process bloom.</td></tr>
+        <tr><td><code>Bloom.soft()</code></td><td>Subtle glow for bright stylized objects.</td></tr>
+        <tr><td><code>Bloom.cinematic()</code></td><td>Stronger glow suitable for neon, magic, sci-fi UI, and bright sky objects.</td></tr>
+        <tr><td><code>Bloom.create(threshold, intensity, radius)</code></td><td>Builds explicit bloom settings.</td></tr>
+        <tr><td><code>set_threshold(value)</code></td><td>Lower values bloom more pixels; higher values restrict bloom to very bright/emissive pixels.</td></tr>
+        <tr><td><code>set_intensity(value)</code></td><td>Controls how much bloom is added back to the scene.</td></tr>
+        <tr><td><code>set_radius(value)</code></td><td>Controls the screen-space spread in pixels.</td></tr>
+        <tr><td><code>set_scatter(value)</code></td><td>Controls how wide and soft the final composite feels.</td></tr>
+      </table>
+
       <pre><code>env: <span class="tok-type">Environment</span> = Environment.create()
 sky: <span class="tok-type">Sky</span> = Sky.create()
 sky.set_zenith(Color.rgb(<span class="tok-num">0.30</span>, <span class="tok-num">0.37</span>, <span class="tok-num">0.55</span>))
@@ -1131,12 +1154,20 @@ sky.add_object(night_object)
 sky.add_object(stars)
 env.set_sky(sky)
 env.set_fog(Fog.view_distance(sky.fog_color(), <span class="tok-num">480.0</span>))
+bloom: <span class="tok-type">Bloom</span> = Bloom.cinematic()
+bloom_threshold: <span class="tok-type">f32</span> = <span class="tok-num">0.45</span> as <span class="tok-type">f32</span>
+bloom_intensity: <span class="tok-type">f32</span> = <span class="tok-num">1.35</span> as <span class="tok-type">f32</span>
+bloom_radius: <span class="tok-type">f32</span> = <span class="tok-num">9.0</span> as <span class="tok-type">f32</span>
+bloom = bloom.set_threshold(bloom_threshold)
+bloom = bloom.set_intensity(bloom_intensity)
+bloom = bloom.set_radius(bloom_radius)
+env.set_bloom(bloom)
 scene.set_environment(env)</code></pre>
       <pre><code><span class="tok-com"># Optional: explicitly choose the distance shape.</span>
 fog: <span class="tok-type">Fog</span> = Fog.linear(sky.fog_color(), <span class="tok-num">350.0</span>, <span class="tok-num">480.0</span>)
 fog.set_shape(FogShape.depth())
 env.set_fog(fog)</code></pre>
-      <div class="note">The Vulkan renderer draws a per-pixel world-space gradient before world meshes, with subtle dithering to prevent color banding. Sky objects are generic: the engine does not know whether an object is a sun, moon, planet, portal, or star field.</div>
+      <div class="note">The Vulkan renderer draws a per-pixel world-space gradient before world meshes, with subtle dithering to prevent color banding. Sky objects are generic: the engine does not know whether an object is a sun, moon, planet, portal, or star field. Bloom is a real post-process pass; when disabled, Frog does not submit the bloom fullscreen draw.</div>
     </section>
     <section id="day-cycle">
       <h2>DayCycle</h2>
@@ -1331,7 +1362,9 @@ chicken_a.set_texture(red)
 chicken_b.set_texture(blue)
 
 <span class="tok-com"># Tiled ground, no shimmer at distance</span>
-ground.set_texture(Assets.textures.load(<span class="tok-str">"textures/grass.png"</span>, TextureSpec.ground()))
+ground_mat: <span class="tok-type">Material3D</span> = Material3D.textured(Assets.textures.load(<span class="tok-str">"textures/grass.png"</span>, TextureSpec.ground()))
+ground_mat.set_uv_scale(<span class="tok-num">64.0</span>, <span class="tok-num">64.0</span>)
+ground.set_material(ground_mat)
 
 <span class="tok-com"># Pixel-art atlas: crisp close-up pixels, mipmapped distance</span>
 tiles: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/tiles_atlas.png"</span>, TextureSpec.pixel_tiled())

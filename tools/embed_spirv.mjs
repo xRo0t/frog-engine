@@ -55,12 +55,18 @@ function emitShader(prefix, getterName, compiled) {
   return [...chunks, init.join("\n"), getter.join("\n")].join("\n\n");
 }
 
-const [vertexPath, fragmentPath, shadowVertexPath, skyVertexPath, skyFragmentPath, outputPathArg] = process.argv.slice(2);
+const [vertexPath, fragmentPath, shadowVertexPath, skyVertexPath, skyFragmentPath, bloomFragmentPath, outputPathArg] = process.argv.slice(2);
 if (!vertexPath || !fragmentPath || !shadowVertexPath || !skyVertexPath || !skyFragmentPath) {
-  fail("Usage: node tools/embed_spirv.mjs <vertex.spv> <fragment.spv> <shadow-vertex.spv> <sky-vertex.spv> <sky-fragment.spv> [gpu_shaders.dlt]");
+  fail("Usage: node tools/embed_spirv.mjs <vertex.spv> <fragment.spv> <shadow-vertex.spv> <sky-vertex.spv> <sky-fragment.spv> [bloom-fragment.spv] [gpu_shaders.dlt]");
 }
 
-const outputPath = outputPathArg ?? path.join("render", "gpu_shaders.dlt");
+let finalBloomFragmentPath = bloomFragmentPath;
+let finalOutputPathArg = outputPathArg;
+if (bloomFragmentPath && !outputPathArg && bloomFragmentPath.endsWith(".dlt")) {
+  finalBloomFragmentPath = "";
+  finalOutputPathArg = bloomFragmentPath;
+}
+const outputPath = finalOutputPathArg ?? path.join("render", "gpu_shaders.dlt");
 const current = fs.readFileSync(outputPath, "utf8");
 let markerIndex = current.indexOf(GENERATED_MARKER);
 if (markerIndex < 0) {
@@ -82,6 +88,7 @@ const fragment = readWords(fragmentPath);
 const shadowVertex = readWords(shadowVertexPath);
 const skyVertex = readWords(skyVertexPath);
 const skyFragment = readWords(skyFragmentPath);
+const bloomFragment = finalBloomFragmentPath ? readWords(finalBloomFragmentPath) : null;
 const generated = [
   GENERATED_MARKER,
   "# Generated from the GLSL files in render/shaders.",
@@ -96,6 +103,12 @@ const generated = [
   emitShader("sky_vert", "get_sky_vert_shader", skyVertex),
   "",
   emitShader("sky_frag", "get_sky_frag_shader", skyFragment),
+  ...(bloomFragment
+    ? [
+        "",
+        emitShader("bloom_frag", "get_bloom_frag_shader", bloomFragment),
+      ]
+    : []),
   "",
   "# END GENERATED TEXTURED SHADERS",
   "",
@@ -103,4 +116,5 @@ const generated = [
 
 const tail = preservedTail.length > 0 ? `\n${preservedTail}` : "";
 fs.writeFileSync(outputPath, current.slice(0, markerIndex) + generated + tail, "utf8");
-console.log(`Embedded ${vertex.byteLength}-byte vertex, ${fragment.byteLength}-byte fragment, ${shadowVertex.byteLength}-byte shadow vertex, ${skyVertex.byteLength}-byte sky vertex, and ${skyFragment.byteLength}-byte sky fragment shaders.`);
+const bloomMessage = bloomFragment ? `, and ${bloomFragment.byteLength}-byte bloom fragment` : "";
+console.log(`Embedded ${vertex.byteLength}-byte vertex, ${fragment.byteLength}-byte fragment, ${shadowVertex.byteLength}-byte shadow vertex, ${skyVertex.byteLength}-byte sky vertex, ${skyFragment.byteLength}-byte sky fragment${bloomMessage} shaders.`);
