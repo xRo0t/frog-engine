@@ -11,6 +11,10 @@ const FOG_MODE_EXPONENTIAL_SQUARED: i32 = 3
 const FOG_SHAPE_DEPTH: i32 = 0
 const FOG_SHAPE_SPHERICAL: i32 = 1
 
+const TONE_MAPPING_NONE: i32 = 0
+const TONE_MAPPING_ACES: i32 = 1
+const TONE_MAPPING_REINHARD: i32 = 2
+
 const SKY_MODE_NONE: i32 = 0
 const SKY_MODE_GRADIENT: i32 = 1
 const SKY_OBJECT_SHAPE_CIRCLE: i32 = 1
@@ -67,6 +71,10 @@ struct Bloom:
     intensity: f32 = 0.0
     radius: f32 = 2.5
     scatter: f32 = 0.70
+
+struct ToneMapping:
+    mode: i32 = TONE_MAPPING_NONE
+    exposure: f32 = 1.0
 
 struct SkyShape:
     value: i32 = SKY_OBJECT_SHAPE_CIRCLE
@@ -139,6 +147,27 @@ struct Environment:
     fog: Fog = Fog()
     sky: Sky = Sky()
     bloom: Bloom = Bloom()
+    tone_mapping: ToneMapping = ToneMapping()
+
+attach ToneMapping:
+
+    fun set_none(self) -> ToneMapping:
+        self.mode = TONE_MAPPING_NONE
+        return self
+
+    fun set_aces(self) -> ToneMapping:
+        self.mode = TONE_MAPPING_ACES
+        return self
+
+    fun set_reinhard(self) -> ToneMapping:
+        self.mode = TONE_MAPPING_REINHARD
+        return self
+
+    fun set_exposure(self, value: f32) -> ToneMapping:
+        self.exposure = value
+        if self.exposure < 0.0:
+            self.exposure = 0.0
+        return self
 
 attach Bloom:
 
@@ -680,6 +709,7 @@ attach Environment:
         env.fog = Fog.none()
         env.sky = Sky.none()
         env.bloom = Bloom.none()
+        env.tone_mapping = ToneMapping()
         return env
 
     fun set_clear_color(self, color: Color) -> Environment:
@@ -700,6 +730,10 @@ attach Environment:
         self.bloom = bloom
         return self
 
+    fun set_tone_mapping(self, tone_mapping: ToneMapping) -> Environment:
+        self.tone_mapping = tone_mapping
+        return self
+
     fun clear_sky(self) -> Environment:
         self.sky = Sky.none()
         return self
@@ -710,4 +744,8 @@ attach Environment:
 
     fun clear_bloom(self) -> Environment:
         self.bloom = Bloom.none()
+        return self
+
+    fun clear_tone_mapping(self) -> Environment:
+        self.tone_mapping = ToneMapping()
         return self

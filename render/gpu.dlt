@@ -427,6 +427,9 @@ attach Renderer:
     fun set_directional_light(self, light_ptr: i64):
         self.core.set_directional_light(light_ptr)
 
+    fun set_point_lights(self, light_ptrs: i64, count: i32):
+        self.core.set_point_lights(light_ptrs, count)
+
     fun set_shadow_camera(self, x: f32, y: f32, z: f32, pitch: f32, yaw: f32):
         self.core.set_shadow_camera(x, y, z, pitch, yaw)
 

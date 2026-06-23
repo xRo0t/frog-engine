@@ -1,6 +1,6 @@
 ##############################
 # Frog - Fullscreen Bloom Pass
-# Single-pass bright extraction + blur composite.
+# HDR post-process: optional bloom plus tone mapping into the swapchain.
 ##############################
 
 static g_bloom_pipeline_layout: i64 = 0
@@ -48,7 +48,7 @@ fun frog_bloom_pass_create_pipeline_layout(device: i64, desc_set_layout: i64) ->
         return 0
     Memory.write_i32(pc_range, 16)
     Memory.write_i32(pc_range + 4, 0)
-    Memory.write_i32(pc_range + 8, 32)
+    Memory.write_i32(pc_range + 8, 48)
     Memory.write_ptr(dsl_arr, desc_set_layout)
     Memory.write_i32(ci, 30)
     Memory.write_i32(ci + 20, 1)

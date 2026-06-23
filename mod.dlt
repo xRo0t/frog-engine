@@ -78,9 +78,9 @@ export MOUSE_LEFT, MOUSE_RIGHT
 export Assets, AssetModels, AssetTextures, AssetAudio, AssetShaders
 export Model3D, ModelLods, Texture2D, AudioClip, Shader, Shader3D
 export GpuTexture, TextureSpec, GpuMeshData
-export Environment, Fog, Bloom, Sky, SkyShape, SkyObject, DayCycle
-export Node, Node3D, Mesh3D, Mesh3DShape, Material3D, ModelMaterials, Camera3D, DirectionalLight3D, ShadowSettings, RootNode
-export node3d_create, camera3d_create, directional_light3d_create, root_node_create
+export Environment, Fog, Bloom, ToneMapping, Sky, SkyShape, SkyObject, DayCycle
+export Node, Node3D, Mesh3D, Mesh3DShape, Material3D, ModelMaterials, Camera3D, DirectionalLight3D, PointLight3D, ShadowSettings, RootNode
+export node3d_create, camera3d_create, directional_light3d_create, point_light3d_create, root_node_create
 export Scene, GameObject, ObjectBench
 export Ray3D, RaycastHit, Raycast3D, Physics
 export SoftwareRenderer

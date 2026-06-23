@@ -7,6 +7,9 @@ struct Scene:
     root_ptr: i64 = 0
     active_camera_ptr: i64 = 0
     directional_light_ptr: i64 = 0
+    point_light_ptrs: i64 = 0
+    point_light_count: i32 = 0
+    point_light_capacity: i32 = 0
     day_cycle_ptr: i64 = 0
     env: Environment = Environment()
     env_initialized: i32 = 0
@@ -147,6 +150,11 @@ attach Scene:
         self.root_ptr = 0
         self.active_camera_ptr = 0
         self.directional_light_ptr = 0
+        if self.point_light_ptrs != 0:
+            Memory.free(self.point_light_ptrs)
+        self.point_light_ptrs = 0
+        self.point_light_count = 0
+        self.point_light_capacity = 0
         self.clear_day_cycle()
         self.cleanup()
 

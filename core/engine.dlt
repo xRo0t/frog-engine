@@ -477,6 +477,7 @@ attach Engine:
         if (camera as i64) == 0:
             return
         g_engine_runtime.set_directional_light(g_engine_scene.directional_light_ptr)
+        g_engine_runtime.set_point_lights(g_engine_scene.point_light_ptrs, g_engine_scene.point_light_count)
         if g_engine_collision_debug_enabled == 1:
             g_engine_runtime.set_collision_debug_root(g_engine_scene.root_ptr)
         env: Environment = g_engine_scene.environment()

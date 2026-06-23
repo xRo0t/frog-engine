@@ -68,9 +68,13 @@ attach EngineRuntime:
             ctx.cleanup()
             runtime.app.shutdown()
             return runtime
-        if frog_bloom_pass_init(ctx.vk_device, render_pass.vk_render_pass, render_pass.desc_set_layout, sky_vert_shader.data, sky_vert_shader.size, bloom_frag_shader.data, bloom_frag_shader.size) == 0:
-            print("GPU bloom pass init failed; bloom disabled")
-            frog_bloom_pass_cleanup(ctx.vk_device)
+        if frog_bloom_pass_init(ctx.vk_device, render_pass.vk_present_render_pass, render_pass.desc_set_layout, sky_vert_shader.data, sky_vert_shader.size, bloom_frag_shader.data, bloom_frag_shader.size) == 0:
+            print("GPU post-process pass init failed")
+            render_pass.cleanup(ctx.vk_device)
+            swapchain.cleanup(ctx.vk_instance, ctx.vk_device)
+            ctx.cleanup()
+            runtime.app.shutdown()
+            return runtime
         vert_shader.release()
         frag_shader.release()
         shadow_vert_shader.release()
@@ -224,6 +228,9 @@ attach EngineRuntime:
     fun set_directional_light(self, light_ptr: i64):
         self.renderer.set_directional_light(light_ptr)
 
+    fun set_point_lights(self, light_ptrs: i64, count: i32):
+        self.renderer.set_point_lights(light_ptrs, count)
+
     fun set_window_mode(self, mode: WindowMode) -> i32:
         if self.ready_flag == 0:
             return 0
@@ -272,9 +279,12 @@ attach EngineRuntime:
             swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
             self.ready_flag = 0
             return 0
-        if frog_bloom_pass_init(self.ctx.vk_device, render_pass.vk_render_pass, render_pass.desc_set_layout, sky_vert_shader.data, sky_vert_shader.size, bloom_frag_shader.data, bloom_frag_shader.size) == 0:
-            print("GPU bloom pass resize failed; bloom disabled")
-            frog_bloom_pass_cleanup(self.ctx.vk_device)
+        if frog_bloom_pass_init(self.ctx.vk_device, render_pass.vk_present_render_pass, render_pass.desc_set_layout, sky_vert_shader.data, sky_vert_shader.size, bloom_frag_shader.data, bloom_frag_shader.size) == 0:
+            print("GPU post-process pass resize failed")
+            render_pass.cleanup(self.ctx.vk_device)
+            swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
+            self.ready_flag = 0
+            return 0
         vert_shader.release()
         frag_shader.release()
         shadow_vert_shader.release()

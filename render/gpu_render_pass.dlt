@@ -4,8 +4,11 @@
 # Framebuffers, command pool/buffers
 ##############################
 
+const FROG_HDR_COLOR_FORMAT: i32 = 97
+
 struct RenderPass:
     vk_render_pass:       i64 = 0
+    vk_present_render_pass: i64 = 0
     vk_pipeline_layout:   i64 = 0
     vk_pipeline:          i64 = 0
     vk_command_pool:      i64 = 0
@@ -17,6 +20,7 @@ struct RenderPass:
     shadow:               ShadowPass = ShadowPass()
     # Texture descriptor objects (combined image sampler, fragment stage)
     desc_set_layout:      i64 = 0
+    lighting_set_layout:  i64 = 0
     desc_pool:            i64 = 0
     # Sync
     image_available_sems: i64 = 0
@@ -38,6 +42,74 @@ struct RenderPass:
     frame_img_idxs_arr:   i64 = 0
     frame_initialized:    i32 = 0
 
+fun frog_create_color_depth_render_pass(device: i64, color_format: i32) -> i64:
+    att_descs: i64 = Memory.malloc_zeroed(72)
+    color_ref: i64 = Memory.malloc_zeroed(8)
+    depth_ref: i64 = Memory.malloc_zeroed(8)
+    subpass: i64 = Memory.malloc_zeroed(72)
+    create_info: i64 = Memory.malloc_zeroed(64)
+    out: i64 = Memory.malloc_zeroed(8)
+    if att_descs == 0 or color_ref == 0 or depth_ref == 0 or subpass == 0 or create_info == 0 or out == 0:
+        if att_descs != 0:
+            Memory.free(att_descs)
+        if color_ref != 0:
+            Memory.free(color_ref)
+        if depth_ref != 0:
+            Memory.free(depth_ref)
+        if subpass != 0:
+            Memory.free(subpass)
+        if create_info != 0:
+            Memory.free(create_info)
+        if out != 0:
+            Memory.free(out)
+        return 0
+
+    Memory.write_i32(att_descs, 0)
+    Memory.write_i32(att_descs + 4, color_format)
+    Memory.write_i32(att_descs + 8, 1)
+    Memory.write_i32(att_descs + 12, 1)
+    Memory.write_i32(att_descs + 20, 2)
+    Memory.write_i32(att_descs + 24, 2)
+    Memory.write_i32(att_descs + 32, 2)
+    Memory.write_i32(att_descs + 40, 126)
+    Memory.write_i32(att_descs + 44, 1)
+    Memory.write_i32(att_descs + 48, 1)
+    Memory.write_i32(att_descs + 52, 2)
+    Memory.write_i32(att_descs + 56, 2)
+    Memory.write_i32(att_descs + 60, 2)
+    Memory.write_i32(att_descs + 68, 3)
+
+    Memory.write_i32(color_ref, 0)
+    Memory.write_i32(color_ref + 4, 2)
+    Memory.write_i32(depth_ref, 1)
+    Memory.write_i32(depth_ref + 4, 3)
+
+    Memory.write_i32(subpass, 0)
+    Memory.write_i32(subpass + 4, 0)
+    Memory.write_i32(subpass + 8, 0)
+    Memory.write_i32(subpass + 24, 1)
+    Memory.write_ptr(subpass + 32, color_ref)
+    Memory.write_ptr(subpass + 48, depth_ref)
+
+    Memory.write_i32(create_info, 38)
+    Memory.write_i32(create_info + 16, 0)
+    Memory.write_i32(create_info + 20, 2)
+    Memory.write_ptr(create_info + 24, att_descs)
+    Memory.write_i32(create_info + 32, 1)
+    Memory.write_ptr(create_info + 40, subpass)
+
+    result: i32 = vkCreateRenderPass(device, create_info, 0, out)
+    result_pass: i64 = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(create_info)
+    Memory.free(subpass)
+    Memory.free(depth_ref)
+    Memory.free(color_ref)
+    Memory.free(att_descs)
+    if result != 0:
+        return 0
+    return result_pass
+
 attach RenderPass:
 
     fun init(self, device: i64, phys_device: i64, swapchain_format: i32, sc_image_count: i32, sc_image_views: i64, depth_view: i64, width: i32, height: i32, gfx_family: i32, vert_data: i64, vert_size: i64, frag_data: i64, frag_size: i64, shadow_vert_data: i64, shadow_vert_size: i64) -> i32:
@@ -48,7 +120,7 @@ attach RenderPass:
             return 0
         # Color attachment (index 0)
         Memory.write_i32(att_descs, 0)
-        Memory.write_i32(att_descs + 4, swapchain_format)
+        Memory.write_i32(att_descs + 4, FROG_HDR_COLOR_FORMAT)
         Memory.write_i32(att_descs + 8, 1)
         Memory.write_i32(att_descs + 12, 1)
         Memory.write_i32(att_descs + 16, 0)
@@ -132,6 +204,9 @@ attach RenderPass:
         Memory.free(rp_ci)
         if rp_result != 0:
             return 0
+        self.vk_present_render_pass = frog_create_color_depth_render_pass(device, swapchain_format)
+        if self.vk_present_render_pass == 0:
+            return 0
 
         # 2. Create shader modules
         if vert_data != 0:
@@ -186,13 +261,43 @@ attach RenderPass:
         if dsl_r != 0:
             return 0
 
-        # 2c. Descriptor pool sized for texture + material descriptor sets.
+        # Set 1: shared point-light data. Keeping this separate prevents each
+        # material descriptor set from duplicating the scene lighting buffer.
+        lighting_bind: i64 = Memory.malloc_zeroed(24)
+        lighting_ci: i64 = Memory.malloc_zeroed(32)
+        lighting_out: i64 = Memory.malloc_zeroed(8)
+        if lighting_bind == 0 or lighting_ci == 0 or lighting_out == 0:
+            if lighting_bind != 0:
+                Memory.free(lighting_bind)
+            if lighting_ci != 0:
+                Memory.free(lighting_ci)
+            if lighting_out != 0:
+                Memory.free(lighting_out)
+            return 0
+        Memory.write_i32(lighting_bind, 0)
+        Memory.write_i32(lighting_bind + 4, 6)
+        Memory.write_i32(lighting_bind + 8, 1)
+        Memory.write_i32(lighting_bind + 12, 16)
+        Memory.write_i32(lighting_ci, 32)
+        Memory.write_i32(lighting_ci + 20, 1)
+        Memory.write_ptr(lighting_ci + 24, lighting_bind)
+        lighting_r: i32 = vkCreateDescriptorSetLayout(device, lighting_ci, 0, lighting_out)
+        self.lighting_set_layout = Memory.read_ptr(lighting_out)
+        Memory.free(lighting_out)
+        Memory.free(lighting_ci)
+        Memory.free(lighting_bind)
+        if lighting_r != 0:
+            return 0
+
+        # 2c. Descriptor pool sized for texture/material and shared lighting sets.
         # VkDescriptorPoolSize (8 bytes): type(0), descriptorCount(4)
-        dps: i64 = Memory.malloc_zeroed(8)
+        dps: i64 = Memory.malloc_zeroed(16)
         if dps == 0:
             return 0
         Memory.write_i32(dps, 1)             # COMBINED_IMAGE_SAMPLER
         Memory.write_i32(dps + 4, 24576)     # three samplers per set
+        Memory.write_i32(dps + 8, 6)          # UNIFORM_BUFFER
+        Memory.write_i32(dps + 12, 64)
         # VkDescriptorPoolCreateInfo (sType = 33):
         #  0 sType, 8 pNext, 16 flags, 20 maxSets, 24 poolSizeCount, 32 pPoolSizes
         dp_ci: i64 = Memory.malloc_zeroed(40)
@@ -201,7 +306,7 @@ attach RenderPass:
             return 0
         Memory.write_i32(dp_ci, 33)
         Memory.write_i32(dp_ci + 20, 8192)   # maxSets
-        Memory.write_i32(dp_ci + 24, 1)      # poolSizeCount
+        Memory.write_i32(dp_ci + 24, 2)      # poolSizeCount
         Memory.write_ptr(dp_ci + 32, dps)
         dp_ptr: i64 = Memory.malloc_zeroed(8)
         dp_r: i32 = vkCreateDescriptorPool(device, dp_ci, 0, dp_ptr)
@@ -212,7 +317,8 @@ attach RenderPass:
         if dp_r != 0:
             return 0
 
-        # 3. Create pipeline layout: descriptor set 0 + push constants.
+        # 3. Create pipeline layout: materials (set 0), shared lights (set 1),
+        # and transform/fog/directional-light push constants.
         # 64 bytes VP + 32 fog + 16 fog/projection/light color + 16 light.
         pc_range: i64 = Memory.malloc_zeroed(12)
         if pc_range == 0:
@@ -221,8 +327,9 @@ attach RenderPass:
         Memory.write_i32(pc_range + 4, 0)
         Memory.write_i32(pc_range + 8, 128)
 
-        dsl_arr: i64 = Memory.malloc_zeroed(8)
+        dsl_arr: i64 = Memory.malloc_zeroed(16)
         Memory.write_ptr(dsl_arr, self.desc_set_layout)
+        Memory.write_ptr(dsl_arr + 8, self.lighting_set_layout)
 
         pl_ci: i64 = Memory.malloc_zeroed(48)
         if pl_ci == 0:
@@ -232,7 +339,7 @@ attach RenderPass:
         Memory.write_i32(pl_ci, 30)
         Memory.write_ptr(pl_ci + 8, 0)
         Memory.write_i32(pl_ci + 16, 0)
-        Memory.write_i32(pl_ci + 20, 1)         # setLayoutCount
+        Memory.write_i32(pl_ci + 20, 2)         # setLayoutCount
         Memory.write_ptr(pl_ci + 24, dsl_arr)   # pSetLayouts
         Memory.write_i32(pl_ci + 32, 1)
         Memory.write_ptr(pl_ci + 40, pc_range)
@@ -278,7 +385,7 @@ attach RenderPass:
             Memory.write_i32(fb_ci, 37)
             Memory.write_ptr(fb_ci + 8, 0)
             Memory.write_i32(fb_ci + 16, 0)
-            Memory.write_ptr(fb_ci + 24, self.vk_render_pass)
+            Memory.write_ptr(fb_ci + 24, self.vk_present_render_pass)
             Memory.write_i32(fb_ci + 32, 2)
             Memory.write_ptr(fb_ci + 40, att_arr)
             Memory.write_i32(fb_ci + 48, width)
@@ -454,6 +561,61 @@ attach RenderPass:
         vkUpdateDescriptorSets(device, 3, wds, 0, 0)
         Memory.free(wds)
         Memory.free(img_info)
+        return dset
+
+    fun make_lighting_descriptor(self, device: i64, buffer: i64, size: i64) -> i64:
+        if self.desc_pool == 0:
+            return 0
+        if self.lighting_set_layout == 0:
+            return 0
+        if buffer == 0:
+            return 0
+        if size <= 0:
+            return 0
+        layout_arr: i64 = Memory.malloc_zeroed(8)
+        alloc_info: i64 = Memory.malloc_zeroed(40)
+        out: i64 = Memory.malloc_zeroed(8)
+        if layout_arr == 0 or alloc_info == 0 or out == 0:
+            if layout_arr != 0:
+                Memory.free(layout_arr)
+            if alloc_info != 0:
+                Memory.free(alloc_info)
+            if out != 0:
+                Memory.free(out)
+            return 0
+        Memory.write_ptr(layout_arr, self.lighting_set_layout)
+        Memory.write_i32(alloc_info, 34)
+        Memory.write_ptr(alloc_info + 16, self.desc_pool)
+        Memory.write_i32(alloc_info + 24, 1)
+        Memory.write_ptr(alloc_info + 32, layout_arr)
+        alloc_result: i32 = vkAllocateDescriptorSets(device, alloc_info, out)
+        dset: i64 = Memory.read_ptr(out)
+        Memory.free(out)
+        Memory.free(alloc_info)
+        Memory.free(layout_arr)
+        if alloc_result != 0:
+            return 0
+
+        buffer_info: i64 = Memory.malloc_zeroed(24)
+        write: i64 = Memory.malloc_zeroed(64)
+        if buffer_info == 0 or write == 0:
+            if buffer_info != 0:
+                Memory.free(buffer_info)
+            if write != 0:
+                Memory.free(write)
+            return 0
+        Memory.write_ptr(buffer_info, buffer)
+        Memory.write_i64(buffer_info + 8, 0)
+        Memory.write_i64(buffer_info + 16, size)
+        Memory.write_i32(write, 35)
+        Memory.write_ptr(write + 16, dset)
+        Memory.write_i32(write + 24, 0)
+        Memory.write_i32(write + 32, 1)
+        Memory.write_i32(write + 36, 6)
+        Memory.write_ptr(write + 48, buffer_info)
+        vkUpdateDescriptorSets(device, 1, write, 0, 0)
+        Memory.free(write)
+        Memory.free(buffer_info)
         return dset
 
     fun update_shadow_descriptor(self, device: i64, dset: i64):
@@ -844,6 +1006,8 @@ attach RenderPass:
             vkDestroyDescriptorPool(device, self.desc_pool, 0)
         if self.desc_set_layout != 0:
             vkDestroyDescriptorSetLayout(device, self.desc_set_layout, 0)
+        if self.lighting_set_layout != 0:
+            vkDestroyDescriptorSetLayout(device, self.lighting_set_layout, 0)
         self.shadow.cleanup(device)
         frog_sky_pass_cleanup(device)
         frog_bloom_pass_cleanup(device)
@@ -861,6 +1025,8 @@ attach RenderPass:
             Memory.free(self.framebuffers)
         if self.vk_render_pass != 0:
             vkDestroyRenderPass(device, self.vk_render_pass, 0)
+        if self.vk_present_render_pass != 0:
+            vkDestroyRenderPass(device, self.vk_present_render_pass, 0)
         # Free frame structs
         if self.frame_fence_arr != 0:
             Memory.free(self.frame_fence_arr)

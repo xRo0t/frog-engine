@@ -4,6 +4,14 @@ layout(set = 0, binding = 0) uniform sampler2D textureSampler;
 layout(set = 0, binding = 1) uniform sampler2DShadow shadowSampler;
 layout(set = 0, binding = 2) uniform sampler2D emissiveSampler;
 
+const int MAX_POINT_LIGHTS = 8;
+
+layout(set = 1, binding = 0) uniform PointLightBlock {
+    vec4 meta;
+    vec4 positionRange[MAX_POINT_LIGHTS];
+    vec4 colorEnergy[MAX_POINT_LIGHTS];
+} pointLights;
+
 layout(location = 0) in vec3 fragmentColor;
 layout(location = 1) in vec2 fragmentUv;
 layout(location = 2) in float fragmentFogDistance;
@@ -359,8 +367,7 @@ void main() {
     vec4 emissive = unpackEmissive();
     float packedLight = max(pushConstants.fogColor.a, 0.0);
     float lightIntensity = max(pushConstants.lightDirectionIntensity.w, 0.0);
-    if (packedLight > 0.5 && emissive.a < 0.5) {
-        vec3 lightDirection = normalize(pushConstants.lightDirectionIntensity.xyz);
+    if (emissive.a < 0.5) {
         vec3 normal = normalize(fragmentWorldNormal);
         if (dot(normal, normal) < 0.0001) {
             vec3 dx = dFdx(fragmentWorldPosition);
@@ -371,12 +378,38 @@ void main() {
             normal = -normal;
         }
 
-        vec4 light = unpackLight();
-        float diffuse = max(dot(normal, -lightDirection), 0.0);
-        float wrappedDiffuse = diffuse * 0.85 + 0.15;
-        float shadow = sampleShadow(normal, lightDirection);
-        vec3 irradiance = vec3(light.a) + light.rgb * wrappedDiffuse * lightIntensity * shadow;
-        surfaceColor.rgb *= irradiance;
+        vec3 irradiance = vec3(0.0);
+        bool hasLight = false;
+        if (packedLight > 0.5) {
+            vec3 lightDirection = normalize(pushConstants.lightDirectionIntensity.xyz);
+            vec4 light = unpackLight();
+            float diffuse = max(dot(normal, -lightDirection), 0.0);
+            float wrappedDiffuse = diffuse * 0.85 + 0.15;
+            float shadow = sampleShadow(normal, lightDirection);
+            irradiance += vec3(light.a) + light.rgb * wrappedDiffuse * lightIntensity * shadow;
+            hasLight = true;
+        }
+
+        int pointCount = int(clamp(floor(pointLights.meta.x + 0.5), 0.0, float(MAX_POINT_LIGHTS)));
+        for (int index = 0; index < pointCount; index++) {
+            vec4 pointPositionRange = pointLights.positionRange[index];
+            vec4 pointColorEnergy = pointLights.colorEnergy[index];
+            vec3 delta = pointPositionRange.xyz - fragmentWorldPosition;
+            float distanceToLight = length(delta);
+            float lightRange = max(pointPositionRange.w, 0.0001);
+            if (distanceToLight < lightRange) {
+                vec3 pointDirection = delta / max(distanceToLight, 0.0001);
+                float diffuse = max(dot(normal, pointDirection), 0.0);
+                float normalizedDistance = clamp(1.0 - distanceToLight / lightRange, 0.0, 1.0);
+                float attenuation = normalizedDistance * normalizedDistance;
+                irradiance += pointColorEnergy.rgb * pointColorEnergy.a * diffuse * attenuation;
+                hasLight = true;
+            }
+        }
+
+        if (hasLight) {
+            surfaceColor.rgb *= irradiance;
+        }
     }
     vec3 emissiveColor = emissive.rgb;
     if (hasEmissiveMap() > 0.5) {

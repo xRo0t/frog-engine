@@ -21,6 +21,8 @@ struct ShadowSettings:
     filter_radius: f32 = 0.0
     adaptive: i32 = 1
 
+const FROG_MAX_POINT_LIGHTS: i32 = 8
+
 @heap struct DirectionalLight3D extends Node3D:
     color: Color = Color()
     intensity: f32 = 1.0
@@ -29,6 +31,11 @@ struct ShadowSettings:
     dir_y: f32 = -1.0
     dir_z: f32 = 0.0
     shadow: ShadowSettings = ShadowSettings()
+
+@heap struct PointLight3D extends Node3D:
+    color: Color = Color()
+    energy: f32 = 1.0
+    range: f32 = 8.0
 
 attach ShadowQuality:
 
@@ -250,9 +257,85 @@ attach DirectionalLight3D:
     fun destroy(self):
         node_destroy(self as i64)
 
+fun point_light3d_create(name: str) -> PointLight3D:
+    node: PointLight3D = PointLight3D()
+    node.id = -1
+    node.name = name
+    node.active = 1
+    node.kind = 5
+    node.parent_ptr = 0
+    node.first_child_ptr = 0
+    node.next_sibling_ptr = 0
+    node.mesh_id = -1
+    node.pos_x = 0.0
+    node.pos_y = 0.0
+    node.pos_z = 0.0
+    node.rot_x = 0.0
+    node.rot_y = 0.0
+    node.rot_z = 0.0
+    node.scale_x = 1.0
+    node.scale_y = 1.0
+    node.scale_z = 1.0
+    node.body_type = 0
+    node.collision_type = 0
+    node.collision_size_x = 1.0
+    node.collision_size_y = 1.0
+    node.collision_size_z = 1.0
+    node.collision_offset_x = 0.0
+    node.collision_offset_y = 0.0
+    node.collision_offset_z = 0.0
+    node.velocity_x = 0.0
+    node.velocity_y = 0.0
+    node.velocity_z = 0.0
+    node.mass = 1.0
+    node.texture_id = -1
+    node.cast_shadows = 0
+    node.receive_shadows = 0
+    node.visible = 1
+    node.color = Color.rgb(1.0, 1.0, 1.0)
+    node.energy = 1.0
+    node.range = 8.0
+    return node
+
+attach PointLight3D:
+
+    static fun create() -> PointLight3D:
+        return point_light3d_create("PointLight3D")
+
+    static fun create(name: str) -> PointLight3D:
+        return point_light3d_create(name)
+
+    fun set_color(self, color: Color) -> PointLight3D:
+        self.color = color
+        return self
+
+    fun set_energy(self, value: f32) -> PointLight3D:
+        if value < 0.0:
+            self.energy = 0.0
+            return self
+        self.energy = value
+        return self
+
+    fun set_range(self, value: f32) -> PointLight3D:
+        if value < 0.1:
+            self.range = 0.1
+            return self
+        self.range = value
+        return self
+
+    fun destroy(self):
+        node_destroy(self as i64)
+
 attach Node3D:
 
     fun add_child(self, child: DirectionalLight3D):
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = self as i64
+        child.next_sibling_ptr = self.first_child_ptr
+        self.first_child_ptr = child as i64
+
+    fun add_child(self, child: PointLight3D):
         if (child as i64) == 0:
             return
         child.parent_ptr = self as i64
@@ -280,3 +363,35 @@ attach Scene:
         if self.directional_light_ptr == 0:
             return 0
         return 1
+
+    fun add_child(self, child: PointLight3D):
+        root: RootNode = self.root()
+        if (child as i64) == 0:
+            return
+        child.parent_ptr = root as i64
+        child.next_sibling_ptr = root.first_child_ptr
+        root.first_child_ptr = child as i64
+        self.add_point_light(child)
+
+    fun add_point_light(self, light: PointLight3D):
+        light_ptr: i64 = light as i64
+        if light_ptr == 0:
+            return
+        index: i32 = 0
+        while index < self.point_light_count:
+            existing: i64 = Memory.read_ptr(self.point_light_ptrs + index * 8)
+            if existing == light_ptr:
+                return
+            index = index + 1
+        if self.point_light_count >= FROG_MAX_POINT_LIGHTS:
+            return
+        if self.point_light_ptrs == 0:
+            self.point_light_ptrs = Memory.malloc_zeroed(FROG_MAX_POINT_LIGHTS * 8)
+            self.point_light_capacity = FROG_MAX_POINT_LIGHTS
+        if self.point_light_ptrs == 0:
+            return
+        Memory.write_ptr(self.point_light_ptrs + self.point_light_count * 8, light_ptr)
+        self.point_light_count = self.point_light_count + 1
+
+    fun point_lights_count(self) -> i32:
+        return self.point_light_count

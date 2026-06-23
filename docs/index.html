@@ -822,7 +822,7 @@ building.set_model_materials(mats)</code></pre>
 
     <section id="lights">
       <h2>Lights</h2>
-      <p class="lead">Scene graph sunlight. Direction, color, intensity, ambient contribution, and a directional depth-map shadow are applied by the Vulkan renderer.</p>
+      <p class="lead">Scene graph lighting. Directional lights provide scene sunlight and shadowing; point lights provide local color, energy, and distance falloff.</p>
       <pre><code>sun: <span class="tok-type">DirectionalLight3D</span> = DirectionalLight3D.create(<span class="tok-str">"Sun"</span>)
 sun.set_direction(<span class="tok-num">-0.4</span>, <span class="tok-num">-1.0</span>, <span class="tok-num">-0.2</span>)
 sun.set_color(Color.rgb(<span class="tok-num">1.0</span>, <span class="tok-num">0.92</span>, <span class="tok-num">0.78</span>))
@@ -843,6 +843,23 @@ scene.add_child(sun)</code></pre>
         <tr><td><code>set_shadows(settings)</code></td><td>Stores shadow settings for the light.</td></tr>
         <tr><td><code>disable_shadows()</code></td><td>Disables shadow casting for this light.</td></tr>
       </table>
+
+      <h4>PointLight3D</h4>
+      <pre><code>lamp: <span class="tok-type">PointLight3D</span> = PointLight3D.create(<span class="tok-str">"Cyan Lamp"</span>)
+lamp.position(<span class="tok-num">0.0</span> as f32, <span class="tok-num">2.5</span> as f32, <span class="tok-num">6.0</span> as f32)
+lamp.set_color(Color.rgb(<span class="tok-num">0.18</span> as f32, <span class="tok-num">0.78</span> as f32, <span class="tok-num">1.0</span> as f32))
+lamp.set_energy(<span class="tok-num">3.5</span> as f32)
+lamp.set_range(<span class="tok-num">11.0</span> as f32)
+scene.add_child(lamp)</code></pre>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>PointLight3D.create()</code> / <code>create(name)</code></td><td>Creates a local light node. A scene currently supports up to eight active point lights.</td></tr>
+        <tr><td><code>position(x,y,z)</code></td><td>Inherited from <code>Node3D</code>; sets the light position in world space.</td></tr>
+        <tr><td><code>set_color(color)</code></td><td>Sets the RGB light color.</td></tr>
+        <tr><td><code>set_energy(value)</code></td><td>Sets non-negative light energy.</td></tr>
+        <tr><td><code>set_range(value)</code></td><td>Sets the spherical influence radius. Intensity falls off smoothly to zero at this distance.</td></tr>
+      </table>
+      <div class="note"><strong>Current scope.</strong> Point lights are evaluated in the material shader and do not cast shadows yet. Directional-light shadows remain the efficient choice for sun or moon lighting.</div>
 
       <h4>ShadowSettings</h4>
       <table>
@@ -1037,7 +1054,7 @@ camera.add_child(raycast)
     </section>
     <section id="environment">
       <h2>Environment</h2>
-      <p class="lead">Per-scene render settings. Use it for sky color, distance fog, and future lighting controls.</p>
+      <p class="lead">Per-scene render settings for sky color, fog, HDR tone mapping, and post-process bloom.</p>
 
       <h4>Environment</h4>
       <table>
@@ -1049,7 +1066,9 @@ camera.add_child(raycast)
         <tr><td><code>set_fog(fog)</code></td><td>Environment</td><td>Stores fog settings for this scene.</td></tr>
         <tr><td><code>clear_fog()</code></td><td>Environment</td><td>Disables fog on this environment.</td></tr>
         <tr><td><code>set_bloom(bloom)</code></td><td>Environment</td><td>Enables post-process bloom for emissive materials and bright scene pixels.</td></tr>
-        <tr><td><code>clear_bloom()</code></td><td>Environment</td><td>Disables bloom and returns to the direct render/blit path.</td></tr>
+        <tr><td><code>clear_bloom()</code></td><td>Environment</td><td>Disables only bloom; the neutral presentation pass remains active.</td></tr>
+        <tr><td><code>set_tone_mapping(tone_mapping)</code></td><td>Environment</td><td>Sets HDR exposure and the final tone-mapping operator.</td></tr>
+        <tr><td><code>clear_tone_mapping()</code></td><td>Environment</td><td>Uses neutral SDR clamping after HDR rendering.</td></tr>
       </table>
 
       <h4>Sky</h4>
@@ -1110,6 +1129,16 @@ camera.add_child(raycast)
         <tr><td><code>set_scatter(value)</code></td><td>Controls how wide and soft the final composite feels.</td></tr>
       </table>
 
+      <h4>ToneMapping</h4>
+      <table>
+        <tr><th>Method</th><th>Description</th></tr>
+        <tr><td><code>ToneMapping()</code></td><td>Creates neutral direct clamping with exposure <code>1.0</code>. This is the default.</td></tr>
+        <tr><td><code>set_aces()</code></td><td>Uses an ACES-fitted filmic curve for HDR scenes.</td></tr>
+        <tr><td><code>set_reinhard()</code></td><td>Uses a simple Reinhard curve.</td></tr>
+        <tr><td><code>set_none()</code></td><td>Returns to neutral direct clamping.</td></tr>
+        <tr><td><code>set_exposure(value)</code></td><td>Multiplies HDR scene brightness before tone mapping.</td></tr>
+      </table>
+
       <pre><code>env: <span class="tok-type">Environment</span> = Environment.create()
 sky: <span class="tok-type">Sky</span> = Sky.create()
 sky.set_zenith(Color.rgb(<span class="tok-num">0.30</span>, <span class="tok-num">0.37</span>, <span class="tok-num">0.55</span>))
@@ -1154,6 +1183,11 @@ sky.add_object(night_object)
 sky.add_object(stars)
 env.set_sky(sky)
 env.set_fog(Fog.view_distance(sky.fog_color(), <span class="tok-num">480.0</span>))
+<span class="tok-com"># Optional: disabled by default.</span>
+tone_mapping: <span class="tok-type">ToneMapping</span> = ToneMapping()
+tone_mapping = tone_mapping.set_aces()
+tone_mapping = tone_mapping.set_exposure(<span class="tok-num">1.0</span> as <span class="tok-type">f32</span>)
+env.set_tone_mapping(tone_mapping)
 bloom: <span class="tok-type">Bloom</span> = Bloom.cinematic()
 bloom_threshold: <span class="tok-type">f32</span> = <span class="tok-num">0.45</span> as <span class="tok-type">f32</span>
 bloom_intensity: <span class="tok-type">f32</span> = <span class="tok-num">1.35</span> as <span class="tok-type">f32</span>
@@ -1167,7 +1201,7 @@ scene.set_environment(env)</code></pre>
 fog: <span class="tok-type">Fog</span> = Fog.linear(sky.fog_color(), <span class="tok-num">350.0</span>, <span class="tok-num">480.0</span>)
 fog.set_shape(FogShape.depth())
 env.set_fog(fog)</code></pre>
-      <div class="note">The Vulkan renderer draws a per-pixel world-space gradient before world meshes, with subtle dithering to prevent color banding. Sky objects are generic: the engine does not know whether an object is a sun, moon, planet, portal, or star field. Bloom is a real post-process pass; when disabled, Frog does not submit the bloom fullscreen draw.</div>
+      <div class="note">The Vulkan renderer draws a per-pixel world-space gradient before world meshes, with subtle dithering to prevent color banding. The scene is rendered to a floating-point HDR target, then presented with neutral clamping by default. Sky objects are generic: the engine does not know whether an object is a sun, moon, planet, portal, or star field. Bloom is optional; ACES and exposure are opt-in per environment.</div>
     </section>
     <section id="day-cycle">
       <h2>DayCycle</h2>

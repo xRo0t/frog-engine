@@ -16,6 +16,9 @@ struct GpuMeshBounds:
     center_z: f32 = 0.0
     radius: f32 = 1.0
 
+const FROG_POINT_LIGHT_SLOTS: i32 = 8
+const FROG_POINT_LIGHT_DATA_SIZE: i64 = 272
+
 fun _frog_abs_f32(v: f32) -> f32:
     if v < 0.0:
         return 0.0 - v
@@ -212,6 +215,13 @@ struct GpuRendererCore:
     vb_capacity:       i32 = 0
     initialized:       i32 = 0
     current_frame:     i32 = 0
+    # Borrowed Scene light registry plus double-buffered GPU uniform data.
+    point_light_ptrs:  i64 = 0
+    point_light_count: i32 = 0
+    point_light_buffers: i64 = 0
+    point_light_memories: i64 = 0
+    point_light_mapped_ptrs: i64 = 0
+    point_light_desc_sets: i64 = 0
     # Pre-allocated scratch buffers for render loop
     scratch_vb_arr:    i64 = 0
     scratch_off_arr:   i64 = 0
@@ -392,6 +402,14 @@ attach GpuRendererCore:
         if self.render_state == 0:
             return
         Memory.write_ptr(self.render_state, light_ptr)
+
+    fun set_point_lights(self, light_ptrs: i64, count: i32):
+        self.point_light_ptrs = light_ptrs
+        self.point_light_count = count
+        if self.point_light_count < 0:
+            self.point_light_count = 0
+        if self.point_light_count > FROG_POINT_LIGHT_SLOTS:
+            self.point_light_count = FROG_POINT_LIGHT_SLOTS
 
     fun set_shadow_camera(self, x: f32, y: f32, z: f32, pitch: f32, yaw: f32):
         if self.render_state == 0:
@@ -938,6 +956,101 @@ attach GpuRendererCore:
             slot = slot + 1
         Memory.free(zeros)
         return 1
+
+    fun _ensure_point_light_globals(self, rp: RenderPass) -> i32:
+        if self.point_light_buffers == 0:
+            self.point_light_buffers = Memory.malloc_zeroed(16)
+            self.point_light_memories = Memory.malloc_zeroed(16)
+            self.point_light_mapped_ptrs = Memory.malloc_zeroed(16)
+            self.point_light_desc_sets = Memory.malloc_zeroed(16)
+        if self.point_light_buffers == 0 or self.point_light_memories == 0 or self.point_light_mapped_ptrs == 0 or self.point_light_desc_sets == 0:
+            return 0
+
+        zero_data: i64 = Memory.malloc_zeroed(FROG_POINT_LIGHT_DATA_SIZE)
+        if zero_data == 0:
+            return 0
+        slot: i32 = 0
+        while slot < 2:
+            buffer: i64 = Memory.read_ptr(self.point_light_buffers + slot * 8)
+            memory: i64 = Memory.read_ptr(self.point_light_memories + slot * 8)
+            mapped: i64 = Memory.read_ptr(self.point_light_mapped_ptrs + slot * 8)
+            if buffer == 0 or memory == 0 or mapped == 0:
+                uploaded: GpuBufferUpload = self._upload_buffer(zero_data, FROG_POINT_LIGHT_DATA_SIZE, 16)
+                if uploaded.ok == 0:
+                    Memory.free(zero_data)
+                    return 0
+                Memory.write_ptr(self.point_light_buffers + slot * 8, uploaded.handle)
+                Memory.write_ptr(self.point_light_memories + slot * 8, uploaded.memory)
+                Memory.write_ptr(self.scratch_map_pp, 0)
+                map_result: i32 = vkMapMemory(self.device, uploaded.memory, 0, FROG_POINT_LIGHT_DATA_SIZE, 0, self.scratch_map_pp)
+                mapped = Memory.read_ptr(self.scratch_map_pp)
+                if map_result != 0 or mapped == 0:
+                    vkDestroyBuffer(self.device, uploaded.handle, 0)
+                    vkFreeMemory(self.device, uploaded.memory, 0)
+                    Memory.free(zero_data)
+                    return 0
+                Memory.write_ptr(self.point_light_mapped_ptrs + slot * 8, mapped)
+                buffer = uploaded.handle
+            desc: i64 = Memory.read_ptr(self.point_light_desc_sets + slot * 8)
+            if desc == 0:
+                desc = rp.make_lighting_descriptor(self.device, buffer, FROG_POINT_LIGHT_DATA_SIZE)
+                if desc == 0:
+                    Memory.free(zero_data)
+                    return 0
+                Memory.write_ptr(self.point_light_desc_sets + slot * 8, desc)
+            slot = slot + 1
+        Memory.free(zero_data)
+        return 1
+
+    fun rebuild_point_light_descriptors(self, rp: RenderPass) -> i32:
+        if self.point_light_desc_sets == 0:
+            return 1
+        slot: i32 = 0
+        while slot < 2:
+            Memory.write_ptr(self.point_light_desc_sets + slot * 8, 0)
+            buffer: i64 = 0
+            if self.point_light_buffers != 0:
+                buffer = Memory.read_ptr(self.point_light_buffers + slot * 8)
+            if buffer != 0:
+                desc: i64 = rp.make_lighting_descriptor(self.device, buffer, FROG_POINT_LIGHT_DATA_SIZE)
+                if desc == 0:
+                    return 0
+                Memory.write_ptr(self.point_light_desc_sets + slot * 8, desc)
+            slot = slot + 1
+        return 1
+
+    fun _write_point_light_data(self, out: i64):
+        if out == 0:
+            return
+        Memory.set(out, 0, FROG_POINT_LIGHT_DATA_SIZE)
+        if self.point_light_ptrs == 0:
+            return
+        source_count: i32 = self.point_light_count
+        if source_count > FROG_POINT_LIGHT_SLOTS:
+            source_count = FROG_POINT_LIGHT_SLOTS
+        write_index: i32 = 0
+        source_index: i32 = 0
+        while source_index < source_count:
+            ptr: i64 = Memory.read_ptr(self.point_light_ptrs + source_index * 8)
+            if ptr != 0:
+                light: PointLight3D = ptr as PointLight3D
+                if light.active == 1:
+                    if light.energy > 0.0001:
+                        if light.range > 0.0001:
+                            pos_offset: i64 = 16 + write_index * 16
+                            color_offset: i64 = 144 + write_index * 16
+                            Memory.write_f32(out + pos_offset, light.pos_x)
+                            Memory.write_f32(out + pos_offset + 4, light.pos_y)
+                            Memory.write_f32(out + pos_offset + 8, light.pos_z)
+                            Memory.write_f32(out + pos_offset + 12, light.range)
+                            Memory.write_f32(out + color_offset, light.color.r)
+                            Memory.write_f32(out + color_offset + 4, light.color.g)
+                            Memory.write_f32(out + color_offset + 8, light.color.b)
+                            Memory.write_f32(out + color_offset + 12, light.energy)
+                            write_index = write_index + 1
+            source_index = source_index + 1
+        active_count: f32 = write_index as f32
+        Memory.write_f32(out, active_count)
 
     fun _refresh_shadow_descriptors(self, rp: RenderPass):
         if self.tex_desc_sets == 0:
@@ -1506,7 +1619,7 @@ attach GpuRendererCore:
 
     fun rebuild_texture_descriptors(self, rp: RenderPass) -> i32:
         if self.tex_desc_sets == 0:
-            return 1
+            return self.rebuild_point_light_descriptors(rp)
         index: i32 = 0
         while index < self.tex_count:
             view: i64 = Memory.read_ptr(self.tex_views + index * 8)
@@ -1522,7 +1635,7 @@ attach GpuRendererCore:
                 self.white_desc_set = Memory.read_ptr(self.tex_desc_sets + self.white_tex_id * 8)
         if self.mesh_desc_sets != 0:
             Memory.zero(self.mesh_desc_sets, self.vb_capacity * 8)
-        return 1
+        return self.rebuild_point_light_descriptors(rp)
 
     # Assign a texture id to a mesh/instance.
     fun bind_texture(self, mesh_id: i32, tex_id: i32):
@@ -2267,32 +2380,19 @@ attach GpuRendererCore:
         present_fb: i64 = fb
         rw: i32 = render_width
         rh: i32 = render_height
-        use_scaled: i32 = 0
-        if rw != width:
-            use_scaled = 1
-        if rh != height:
-            use_scaled = 1
-        bloom_enabled: i32 = env.bloom.active()
-        if bloom_enabled == 1:
-            if frog_bloom_pass_ready() == 0:
-                bloom_enabled = 0
-        if bloom_enabled == 1:
-            use_scaled = 1
-        if use_scaled == 1:
-            if self.ensure_render_scale_target(rp, sc.format, rw, rh) == 1:
-                fb = self.scale_framebuffer
-            else:
-                use_scaled = 0
-                bloom_enabled = 0
-                rw = width
-                rh = height
+        # A floating-point scene target preserves bright values until the
+        # final presentation stage. ToneMapping.none() remains neutral.
+        use_scaled: i32 = 1
+        if self.ensure_render_scale_target(rp, FROG_HDR_COLOR_FORMAT, rw, rh) == 1:
+            fb = self.scale_framebuffer
+        else:
+            return
         self.ensure_white_texture(rp, rp.vk_command_pool)
         swap_img: i64 = 0
         swap_old_layout: i32 = 0
-        if use_scaled == 1:
-            if sc.images != 0:
-                swap_img = Memory.read_ptr(sc.images + img_idx * 8)
-            swap_old_layout = sc.image_layout(img_idx)
+        if sc.images != 0:
+            swap_img = Memory.read_ptr(sc.images + img_idx * 8)
+        swap_old_layout = sc.image_layout(img_idx)
         self._record_commands(cmd_buf, fb, present_fb, rp, cam_view, cam_proj, rw, rh, env, use_scaled, self.scale_color_image, swap_img, swap_old_layout, width, height)
         if use_scaled == 1:
             sc.set_image_layout(img_idx, 1000001002)
@@ -2569,9 +2669,7 @@ attach GpuRendererCore:
             vkCmdEndRenderPass(cmd)
         return shadow_instance_total
 
-    fun _record_bloom_present(self, cmd: i64, framebuffer: i64, rp: RenderPass, src_image: i64, dst_image: i64, dst_width: i32, dst_height: i32, bloom: Bloom):
-        if bloom.active() == 0:
-            return
+    fun _record_bloom_present(self, cmd: i64, framebuffer: i64, rp: RenderPass, src_image: i64, dst_image: i64, dst_width: i32, dst_height: i32, bloom: Bloom, tone_mapping: ToneMapping):
         if frog_bloom_pass_ready() == 0:
             return
         if framebuffer == 0:
@@ -2581,7 +2679,7 @@ attach GpuRendererCore:
         if dst_width <= 0 or dst_height <= 0:
             return
 
-        # Scene color attachment -> sampled texture for the bloom composite.
+        # HDR scene color -> sampled texture for post processing.
         gpu_tex_barrier(cmd, src_image, 2, 5, 256, 32, 1024, 128)
 
         rpi: i64 = self.scratch_render_info
@@ -2590,7 +2688,7 @@ attach GpuRendererCore:
             return
         Memory.set(rpi, 0, 96)
         Memory.write_i32(rpi, 43)
-        Memory.write_ptr(rpi + 16, rp.vk_render_pass)
+        Memory.write_ptr(rpi + 16, rp.vk_present_render_pass)
         Memory.write_ptr(rpi + 24, framebuffer)
         Memory.write_i32(rpi + 40, dst_width)
         Memory.write_i32(rpi + 44, dst_height)
@@ -2634,7 +2732,7 @@ attach GpuRendererCore:
                 out_h: f32 = dst_height
                 inv_w: f32 = 1.0 / out_w
                 inv_h: f32 = 1.0 / out_h
-                Memory.set(push_data, 0, 32)
+                Memory.set(push_data, 0, 48)
                 Memory.write_f32(push_data, bloom.threshold)
                 Memory.write_f32(push_data + 4, bloom.intensity)
                 Memory.write_f32(push_data + 8, bloom.radius)
@@ -2643,7 +2741,10 @@ attach GpuRendererCore:
                 Memory.write_f32(push_data + 20, inv_h)
                 Memory.write_f32(push_data + 24, out_w)
                 Memory.write_f32(push_data + 28, out_h)
-                vkCmdPushConstants(cmd, bloom_layout, 16, 0, 32, push_data)
+                Memory.write_f32(push_data + 32, tone_mapping.exposure)
+                tone_mode: f32 = tone_mapping.mode as f32
+                Memory.write_f32(push_data + 36, tone_mode)
+                vkCmdPushConstants(cmd, bloom_layout, 16, 0, 48, push_data)
                 vkCmdDraw(cmd, 3, 1, 0, 0)
 
         vkCmdEndRenderPass(cmd)
@@ -2654,6 +2755,8 @@ attach GpuRendererCore:
 
     fun _record_commands(self, cmd: i64, framebuffer: i64, present_framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32, env: Environment, use_scaled: i32, scale_color_image: i64, swap_image: i64, swap_old_layout: i32, swap_width: i32, swap_height: i32) -> void:
         if self._ensure_shadow_globals() == 0:
+            return
+        if self._ensure_point_light_globals(rp) == 0:
             return
         shadow_data: i64 = self.scratch_push_data
         shadow_enabled: i32 = self._write_shadow_data(shadow_data)
@@ -2670,6 +2773,11 @@ attach GpuRendererCore:
         if shadow_global_mapped == 0:
             return
         Memory.copy(shadow_global_mapped, shadow_data, 176)
+        point_light_mapped: i64 = Memory.read_ptr(self.point_light_mapped_ptrs + frame_slot * 8)
+        point_light_desc: i64 = Memory.read_ptr(self.point_light_desc_sets + frame_slot * 8)
+        if point_light_mapped == 0 or point_light_desc == 0:
+            return
+        self._write_point_light_data(point_light_mapped)
         if rp.shadow.map_size <= 1:
             shadow_enabled = 0
             Memory.write_f32(shadow_global_mapped + 128, 0.0)
@@ -2744,6 +2852,9 @@ attach GpuRendererCore:
 
         if rp.vk_pipeline != 0:
             vkCmdBindPipeline(cmd, 0, rp.vk_pipeline)
+
+            Memory.write_ptr(self.scratch_desc_arr, point_light_desc)
+            vkCmdBindDescriptorSets(cmd, 0, rp.vk_pipeline_layout, 1, 1, self.scratch_desc_arr, 0, 0)
 
             shadow_global_buffer: i64 = Memory.read_ptr(shadow_global_buffers + frame_slot * 8)
             if shadow_global_buffer != 0:
@@ -3005,13 +3116,8 @@ attach GpuRendererCore:
 
         vkCmdEndRenderPass(cmd)
         if use_scaled == 1:
-            if env.bloom.active() == 1:
-                if frog_bloom_pass_ready() != 0:
-                    self._record_bloom_present(cmd, present_framebuffer, rp, scale_color_image, swap_image, swap_width, swap_height, env.bloom)
-                else:
-                    self._record_render_scale_blit(cmd, scale_color_image, swap_image, swap_old_layout, width, height, swap_width, swap_height)
-            else:
-                self._record_render_scale_blit(cmd, scale_color_image, swap_image, swap_old_layout, width, height, swap_width, swap_height)
+            if frog_bloom_pass_ready() != 0:
+                self._record_bloom_present(cmd, present_framebuffer, rp, scale_color_image, swap_image, swap_width, swap_height, env.bloom, env.tone_mapping)
         vkEndCommandBuffer(cmd)
 
     fun cleanup(self) -> void:
@@ -3197,6 +3303,35 @@ attach GpuRendererCore:
                 Memory.free(shadow_global_memories)
             if shadow_global_mapped_ptrs != 0:
                 Memory.free(shadow_global_mapped_ptrs)
+        if self.point_light_buffers != 0:
+            point_slot: i32 = 0
+            while point_slot < 2:
+                point_buffer: i64 = Memory.read_ptr(self.point_light_buffers + point_slot * 8)
+                point_memory: i64 = Memory.read_ptr(self.point_light_memories + point_slot * 8)
+                point_mapped: i64 = 0
+                if self.point_light_mapped_ptrs != 0:
+                    point_mapped = Memory.read_ptr(self.point_light_mapped_ptrs + point_slot * 8)
+                if point_memory != 0:
+                    if point_mapped != 0:
+                        vkUnmapMemory(self.device, point_memory)
+                if point_buffer != 0:
+                    vkDestroyBuffer(self.device, point_buffer, 0)
+                if point_memory != 0:
+                    vkFreeMemory(self.device, point_memory, 0)
+                point_slot = point_slot + 1
+            Memory.free(self.point_light_buffers)
+        if self.point_light_memories != 0:
+            Memory.free(self.point_light_memories)
+        if self.point_light_mapped_ptrs != 0:
+            Memory.free(self.point_light_mapped_ptrs)
+        if self.point_light_desc_sets != 0:
+            Memory.free(self.point_light_desc_sets)
+        self.point_light_buffers = 0
+        self.point_light_memories = 0
+        self.point_light_mapped_ptrs = 0
+        self.point_light_desc_sets = 0
+        self.point_light_ptrs = 0
+        self.point_light_count = 0
         if self.render_state != 0:
             Memory.free(self.render_state)
         if self.scratch_vb_arr != 0:

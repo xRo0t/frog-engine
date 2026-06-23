@@ -44,6 +44,7 @@ Current local shape:
 - `Engine.debug.frame_pacing(1)` prints frame-time min/avg/max, spikes, present mode, target FPS, and render scale.
 - `Assets` groups public resource loading APIs for models, textures, audio, and shaders.
 - `DirectionalLight3D` drives GPU diffuse/specular sunlight with color, intensity, direction, and ambient control.
+- `PointLight3D` provides up to eight local color lights per scene with position, energy, and range controls.
 - `ShadowSettings` defines shadow-map quality for the upcoming depth pipeline.
 - `Material3D` applies albedo, emissive, and unlit state per instance while preserving batching; roughness and metallic are staged for the PBR pass.
 - `Shader3D` is the public shader descriptor name for advanced material pipelines.
