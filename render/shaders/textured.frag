@@ -3,8 +3,12 @@
 layout(set = 0, binding = 0) uniform sampler2D textureSampler;
 layout(set = 0, binding = 1) uniform sampler2DShadow shadowSampler;
 layout(set = 0, binding = 2) uniform sampler2D emissiveSampler;
+layout(set = 0, binding = 3) uniform sampler2D normalSampler;
+layout(set = 0, binding = 4) uniform sampler2D metallicRoughnessSampler;
+layout(set = 0, binding = 5) uniform sampler2D occlusionSampler;
 
 const int MAX_POINT_LIGHTS = 8;
+const float PI = 3.14159265359;
 
 layout(set = 1, binding = 0) uniform PointLightBlock {
     vec4 meta;
@@ -78,6 +82,70 @@ float receivesShadow() {
 float hasEmissiveMap() {
     float packed = max(floor(fragmentMaterial.w + 0.5), 0.0);
     return mod(floor(packed / 131072.0), 2.0);
+}
+
+float hasNormalMap() {
+    float packed = max(floor(fragmentMaterial.w + 0.5), 0.0);
+    return mod(floor(packed / 262144.0), 2.0);
+}
+
+float hasMetallicRoughnessMap() {
+    float packed = max(floor(fragmentMaterial.w + 0.5), 0.0);
+    return mod(floor(packed / 524288.0), 2.0);
+}
+
+float hasOcclusionMap() {
+    float packed = max(floor(fragmentMaterial.w + 0.5), 0.0);
+    return mod(floor(packed / 1048576.0), 2.0);
+}
+
+mat3 normalMapFrame(vec3 normal, vec3 worldPosition, vec2 uv) {
+    vec3 dpdx = dFdx(worldPosition);
+    vec3 dpdy = dFdy(worldPosition);
+    vec2 duvdx = dFdx(uv);
+    vec2 duvdy = dFdy(uv);
+    vec3 tangent = cross(dpdy, normal) * duvdx.x + cross(normal, dpdx) * duvdy.x;
+    vec3 bitangent = cross(dpdy, normal) * duvdx.y + cross(normal, dpdx) * duvdy.y;
+    float scale = inversesqrt(max(dot(tangent, tangent), dot(bitangent, bitangent)));
+    return mat3(tangent * scale, bitangent * scale, normal);
+}
+
+float distributionGGX(vec3 normal, vec3 halfVector, float roughness) {
+    float alpha = roughness * roughness;
+    float alphaSquared = alpha * alpha;
+    float normalHalf = max(dot(normal, halfVector), 0.0);
+    float normalHalfSquared = normalHalf * normalHalf;
+    float denominator = normalHalfSquared * (alphaSquared - 1.0) + 1.0;
+    return alphaSquared / max(PI * denominator * denominator, 0.0001);
+}
+
+float geometrySchlickGGX(float normalVector, float roughness) {
+    float r = roughness + 1.0;
+    float k = (r * r) * 0.125;
+    return normalVector / max(normalVector * (1.0 - k) + k, 0.0001);
+}
+
+float geometrySmith(vec3 normal, vec3 viewDirection, vec3 lightDirection, float roughness) {
+    float normalView = max(dot(normal, viewDirection), 0.0);
+    float normalLight = max(dot(normal, lightDirection), 0.0);
+    return geometrySchlickGGX(normalView, roughness) * geometrySchlickGGX(normalLight, roughness);
+}
+
+vec3 fresnelSchlick(float cosine, vec3 baseReflectance) {
+    return baseReflectance + (1.0 - baseReflectance) * pow(1.0 - cosine, 5.0);
+}
+
+vec3 evaluatePbrLight(vec3 normal, vec3 viewDirection, vec3 lightDirection, vec3 albedo, float metallic, float roughness, vec3 radiance) {
+    vec3 halfVector = normalize(viewDirection + lightDirection);
+    vec3 baseReflectance = mix(vec3(0.04), albedo, metallic);
+    vec3 fresnel = fresnelSchlick(max(dot(halfVector, viewDirection), 0.0), baseReflectance);
+    float distribution = distributionGGX(normal, halfVector, roughness);
+    float geometry = geometrySmith(normal, viewDirection, lightDirection, roughness);
+    float normalView = max(dot(normal, viewDirection), 0.0);
+    float normalLight = max(dot(normal, lightDirection), 0.0);
+    vec3 specular = (distribution * geometry * fresnel) / max(4.0 * normalView * normalLight, 0.0001);
+    vec3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PI;
+    return (diffuse + specular) * radiance * normalLight;
 }
 
 vec2 receiverPlaneDepthGradient(vec2 uv, float depth) {
@@ -362,7 +430,8 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
 
 void main() {
     vec4 textureColor = texture(textureSampler, fragmentUv);
-    vec4 surfaceColor = vec4(fragmentColor * textureColor.rgb, textureColor.a);
+    vec3 albedo = fragmentColor * textureColor.rgb;
+    vec4 surfaceColor = vec4(albedo, textureColor.a);
 
     vec4 emissive = unpackEmissive();
     float packedLight = max(pushConstants.fogColor.a, 0.0);
@@ -378,15 +447,40 @@ void main() {
             normal = -normal;
         }
 
+        if (hasNormalMap() > 0.5) {
+            vec3 sampledNormal = texture(normalSampler, fragmentUv).xyz * 2.0 - 1.0;
+            normal = normalize(normalMapFrame(normal, fragmentWorldPosition, fragmentUv) * sampledNormal);
+        }
+
+        float metallic = clamp(fragmentMaterial.x, 0.0, 1.0);
+        float roughness = clamp(fragmentMaterial.y, 0.045, 1.0);
+        if (hasMetallicRoughnessMap() > 0.5) {
+            vec4 metallicRoughness = texture(metallicRoughnessSampler, fragmentUv);
+            metallic *= metallicRoughness.b;
+            roughness = clamp(roughness * metallicRoughness.g, 0.045, 1.0);
+        }
+
+        float occlusion = 1.0;
+        if (hasOcclusionMap() > 0.5) {
+            occlusion = texture(occlusionSampler, fragmentUv).r;
+        }
+
+        vec3 cameraPosition = vec3(
+            pushConstants.fogShapeProjectionLight.y,
+            pushConstants.fogShapeProjectionLight.z,
+            pushConstants.fogShapeProjectionLight.w
+        );
+        vec3 viewDirection = normalize(cameraPosition - fragmentWorldPosition);
+
         vec3 irradiance = vec3(0.0);
         bool hasLight = false;
         if (packedLight > 0.5) {
             vec3 lightDirection = normalize(pushConstants.lightDirectionIntensity.xyz);
             vec4 light = unpackLight();
-            float diffuse = max(dot(normal, -lightDirection), 0.0);
-            float wrappedDiffuse = diffuse * 0.85 + 0.15;
             float shadow = sampleShadow(normal, lightDirection);
-            irradiance += vec3(light.a) + light.rgb * wrappedDiffuse * lightIntensity * shadow;
+            vec3 directionalRadiance = light.rgb * lightIntensity * shadow;
+            irradiance += albedo * light.a * occlusion;
+            irradiance += evaluatePbrLight(normal, viewDirection, -lightDirection, albedo, metallic, roughness, directionalRadiance);
             hasLight = true;
         }
 
@@ -399,16 +493,16 @@ void main() {
             float lightRange = max(pointPositionRange.w, 0.0001);
             if (distanceToLight < lightRange) {
                 vec3 pointDirection = delta / max(distanceToLight, 0.0001);
-                float diffuse = max(dot(normal, pointDirection), 0.0);
                 float normalizedDistance = clamp(1.0 - distanceToLight / lightRange, 0.0, 1.0);
                 float attenuation = normalizedDistance * normalizedDistance;
-                irradiance += pointColorEnergy.rgb * pointColorEnergy.a * diffuse * attenuation;
+                vec3 pointRadiance = pointColorEnergy.rgb * pointColorEnergy.a * attenuation;
+                irradiance += evaluatePbrLight(normal, viewDirection, pointDirection, albedo, metallic, roughness, pointRadiance);
                 hasLight = true;
             }
         }
 
         if (hasLight) {
-            surfaceColor.rgb *= irradiance;
+            surfaceColor.rgb = irradiance;
         }
     }
     vec3 emissiveColor = emissive.rgb;

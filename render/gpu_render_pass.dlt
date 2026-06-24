@@ -42,6 +42,18 @@ struct RenderPass:
     frame_img_idxs_arr:   i64 = 0
     frame_initialized:    i32 = 0
 
+struct MaterialDescriptorImages:
+    albedo_view: i64 = 0
+    albedo_sampler: i64 = 0
+    emissive_view: i64 = 0
+    emissive_sampler: i64 = 0
+    normal_view: i64 = 0
+    normal_sampler: i64 = 0
+    metallic_roughness_view: i64 = 0
+    metallic_roughness_sampler: i64 = 0
+    occlusion_view: i64 = 0
+    occlusion_sampler: i64 = 0
+
 fun frog_create_color_depth_render_pass(device: i64, color_format: i32) -> i64:
     att_descs: i64 = Memory.malloc_zeroed(72)
     color_ref: i64 = Memory.malloc_zeroed(8)
@@ -225,10 +237,11 @@ attach RenderPass:
 
         # 2b. Descriptor set layout:
         # binding 0 = albedo, binding 1 = comparison shadow map,
-        # binding 2 = emissive map.
+        # binding 2 = emission, binding 3 = normal,
+        # binding 4 = metallic-roughness, binding 5 = occlusion.
         # VkDescriptorSetLayoutBinding (24 bytes): binding(0), descriptorType(4),
         # descriptorCount(8), stageFlags(12), pImmutableSamplers(16).
-        dsl_bind: i64 = Memory.malloc_zeroed(72)
+        dsl_bind: i64 = Memory.malloc_zeroed(144)
         if dsl_bind == 0:
             return 0
         Memory.write_i32(dsl_bind, 0)        # binding 0
@@ -243,6 +256,18 @@ attach RenderPass:
         Memory.write_i32(dsl_bind + 52, 1)   # COMBINED_IMAGE_SAMPLER
         Memory.write_i32(dsl_bind + 56, 1)
         Memory.write_i32(dsl_bind + 60, 16)
+        Memory.write_i32(dsl_bind + 72, 3)   # binding 3
+        Memory.write_i32(dsl_bind + 76, 1)   # COMBINED_IMAGE_SAMPLER
+        Memory.write_i32(dsl_bind + 80, 1)
+        Memory.write_i32(dsl_bind + 84, 16)
+        Memory.write_i32(dsl_bind + 96, 4)   # binding 4
+        Memory.write_i32(dsl_bind + 100, 1)  # COMBINED_IMAGE_SAMPLER
+        Memory.write_i32(dsl_bind + 104, 1)
+        Memory.write_i32(dsl_bind + 108, 16)
+        Memory.write_i32(dsl_bind + 120, 5)  # binding 5
+        Memory.write_i32(dsl_bind + 124, 1)  # COMBINED_IMAGE_SAMPLER
+        Memory.write_i32(dsl_bind + 128, 1)
+        Memory.write_i32(dsl_bind + 132, 16)
         # VkDescriptorSetLayoutCreateInfo (sType = 32):
         #  0 sType, 8 pNext, 16 flags, 20 bindingCount, 24 pBindings
         dsl_ci: i64 = Memory.malloc_zeroed(32)
@@ -250,7 +275,7 @@ attach RenderPass:
             Memory.free(dsl_bind)
             return 0
         Memory.write_i32(dsl_ci, 32)
-        Memory.write_i32(dsl_ci + 20, 3)
+        Memory.write_i32(dsl_ci + 20, 6)
         Memory.write_ptr(dsl_ci + 24, dsl_bind)
         dsl_ptr: i64 = Memory.malloc_zeroed(8)
         dsl_r: i32 = vkCreateDescriptorSetLayout(device, dsl_ci, 0, dsl_ptr)
@@ -295,7 +320,7 @@ attach RenderPass:
         if dps == 0:
             return 0
         Memory.write_i32(dps, 1)             # COMBINED_IMAGE_SAMPLER
-        Memory.write_i32(dps + 4, 24576)     # three samplers per set
+        Memory.write_i32(dps + 4, 49152)     # six samplers per material set
         Memory.write_i32(dps + 8, 6)          # UNIFORM_BUFFER
         Memory.write_i32(dps + 12, 64)
         # VkDescriptorPoolCreateInfo (sType = 33):
@@ -487,21 +512,40 @@ attach RenderPass:
 
         return 1
 
-    # Allocate a descriptor set and bind albedo + shared shadow + emissive map.
+    # Allocate a descriptor set for one complete PBR material.
     fun make_texture_descriptor(self, device: i64, view: i64, sampler: i64) -> i64:
-        return self.make_material_descriptor(device, view, sampler, view, sampler)
+        images: MaterialDescriptorImages = MaterialDescriptorImages(albedo_view=view, albedo_sampler=sampler, emissive_view=view, emissive_sampler=sampler, normal_view=view, normal_sampler=sampler, metallic_roughness_view=view, metallic_roughness_sampler=sampler, occlusion_view=view, occlusion_sampler=sampler)
+        return self.make_material_descriptor(device, images)
 
-    fun make_material_descriptor(self, device: i64, albedo_view: i64, albedo_sampler: i64, emissive_view: i64, emissive_sampler: i64) -> i64:
+    fun make_material_descriptor(self, device: i64, images: MaterialDescriptorImages) -> i64:
         if self.desc_pool == 0:
             return 0
         if self.desc_set_layout == 0:
             return 0
-        final_emissive_view: i64 = emissive_view
-        final_emissive_sampler: i64 = emissive_sampler
+        final_emissive_view: i64 = images.emissive_view
+        final_emissive_sampler: i64 = images.emissive_sampler
         if final_emissive_view == 0:
-            final_emissive_view = albedo_view
+            final_emissive_view = images.albedo_view
         if final_emissive_sampler == 0:
-            final_emissive_sampler = albedo_sampler
+            final_emissive_sampler = images.albedo_sampler
+        final_normal_view: i64 = images.normal_view
+        final_normal_sampler: i64 = images.normal_sampler
+        if final_normal_view == 0:
+            final_normal_view = images.albedo_view
+        if final_normal_sampler == 0:
+            final_normal_sampler = images.albedo_sampler
+        final_metallic_roughness_view: i64 = images.metallic_roughness_view
+        final_metallic_roughness_sampler: i64 = images.metallic_roughness_sampler
+        if final_metallic_roughness_view == 0:
+            final_metallic_roughness_view = images.albedo_view
+        if final_metallic_roughness_sampler == 0:
+            final_metallic_roughness_sampler = images.albedo_sampler
+        final_occlusion_view: i64 = images.occlusion_view
+        final_occlusion_sampler: i64 = images.occlusion_sampler
+        if final_occlusion_view == 0:
+            final_occlusion_view = images.albedo_view
+        if final_occlusion_sampler == 0:
+            final_occlusion_sampler = images.albedo_sampler
         # VkDescriptorSetAllocateInfo (sType = 34):
         #  0 sType, 8 pNext, 16 descriptorPool, 24 descriptorSetCount, 32 pSetLayouts
         layout_arr: i64 = Memory.malloc_zeroed(8)
@@ -520,10 +564,11 @@ attach RenderPass:
         if ar != 0:
             return 0
 
-        # VkDescriptorImageInfo[3] (24 bytes each): albedo, shadow, emissive.
-        img_info: i64 = Memory.malloc_zeroed(72)
-        Memory.write_ptr(img_info, albedo_sampler)
-        Memory.write_ptr(img_info + 8, albedo_view)
+        # VkDescriptorImageInfo[6] (24 bytes each): albedo, shadow, emission,
+        # normal, metallic-roughness, and occlusion.
+        img_info: i64 = Memory.malloc_zeroed(144)
+        Memory.write_ptr(img_info, images.albedo_sampler)
+        Memory.write_ptr(img_info + 8, images.albedo_view)
         Memory.write_i32(img_info + 16, 5)   # SHADER_READ_ONLY_OPTIMAL
         if self.shadow.sampler != 0:
             Memory.write_ptr(img_info + 24, self.shadow.sampler)
@@ -533,10 +578,19 @@ attach RenderPass:
         Memory.write_ptr(img_info + 48, final_emissive_sampler)
         Memory.write_ptr(img_info + 56, final_emissive_view)
         Memory.write_i32(img_info + 64, 5)
+        Memory.write_ptr(img_info + 72, final_normal_sampler)
+        Memory.write_ptr(img_info + 80, final_normal_view)
+        Memory.write_i32(img_info + 88, 5)
+        Memory.write_ptr(img_info + 96, final_metallic_roughness_sampler)
+        Memory.write_ptr(img_info + 104, final_metallic_roughness_view)
+        Memory.write_i32(img_info + 112, 5)
+        Memory.write_ptr(img_info + 120, final_occlusion_sampler)
+        Memory.write_ptr(img_info + 128, final_occlusion_view)
+        Memory.write_i32(img_info + 136, 5)
         # VkWriteDescriptorSet (sType = 35):
         #  0 sType, 8 pNext, 16 dstSet, 24 dstBinding, 28 dstArrayElement,
         # 32 descriptorCount, 36 descriptorType, 40 pImageInfo, 48 pBufferInfo, 56 pTexelBufferView
-        wds: i64 = Memory.malloc_zeroed(192)
+        wds: i64 = Memory.malloc_zeroed(384)
         Memory.write_i32(wds, 35)
         Memory.write_ptr(wds + 16, dset)
         Memory.write_i32(wds + 24, 0)        # dstBinding
@@ -558,7 +612,25 @@ attach RenderPass:
         Memory.write_i32(wds + 160, 1)
         Memory.write_i32(wds + 164, 1)
         Memory.write_ptr(wds + 168, img_info + 48)
-        vkUpdateDescriptorSets(device, 3, wds, 0, 0)
+        Memory.write_i32(wds + 192, 35)
+        Memory.write_ptr(wds + 208, dset)
+        Memory.write_i32(wds + 216, 3)
+        Memory.write_i32(wds + 224, 1)
+        Memory.write_i32(wds + 228, 1)
+        Memory.write_ptr(wds + 232, img_info + 72)
+        Memory.write_i32(wds + 256, 35)
+        Memory.write_ptr(wds + 272, dset)
+        Memory.write_i32(wds + 280, 4)
+        Memory.write_i32(wds + 288, 1)
+        Memory.write_i32(wds + 292, 1)
+        Memory.write_ptr(wds + 296, img_info + 96)
+        Memory.write_i32(wds + 320, 35)
+        Memory.write_ptr(wds + 336, dset)
+        Memory.write_i32(wds + 344, 5)
+        Memory.write_i32(wds + 352, 1)
+        Memory.write_i32(wds + 356, 1)
+        Memory.write_ptr(wds + 360, img_info + 120)
+        vkUpdateDescriptorSets(device, 6, wds, 0, 0)
         Memory.free(wds)
         Memory.free(img_info)
         return dset

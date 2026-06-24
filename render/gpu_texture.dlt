@@ -42,6 +42,15 @@ attach TextureSpec:
     static fun smooth() -> TextureSpec:
         return TextureSpec()
 
+    # Smooth + repeat + sRGB, explicit for albedo and emission textures.
+    static fun color_smooth() -> TextureSpec:
+        return TextureSpec.smooth()
+
+    # Smooth + repeat + linear data for normal, roughness, metallic, and AO maps.
+    static fun data_smooth() -> TextureSpec:
+        spec: TextureSpec = TextureSpec.smooth()
+        return spec.as_data()
+
     # Sharp pixels + clamp to edge. For pixel art or crisp UI sprites.
     static fun pixel() -> TextureSpec:
         s: TextureSpec = TextureSpec()

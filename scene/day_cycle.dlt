@@ -143,7 +143,11 @@ attach DayCycle:
             moon: DirectionalLight3D = self.moon_ptr as DirectionalLight3D
             moon.set_direction(sun_x, sun_y, 0.0 - self.sun_path_depth)
 
+        # Sky and ambient light can carry through twilight, but direct rays
+        # must stop at the horizon. Otherwise the sun shines upward once its
+        # visual position moves below the world and produces inverted shadows.
         daylight: f32 = day_cycle_smooth01((sun_y + 0.12) / 0.32)
+        direct_sunlight: f32 = day_cycle_smooth01(sun_y / 0.12)
         high_sun: f32 = day_cycle_smooth01(sun_y * 1.45)
         horizon_proximity: f32 = day_cycle_smooth01(1.0 - day_cycle_abs(sun_y) * 4.5)
         twilight: f32 = horizon_proximity * day_cycle_smooth01((sun_y + 0.16) / 0.16)
@@ -155,7 +159,7 @@ attach DayCycle:
 
         if self.update_light == 1:
             sun.set_color(sun_color)
-            sun.set_intensity(lerp(0.0, 1.05, daylight))
+            sun.set_intensity(lerp(0.0, 1.05, direct_sunlight))
             sun.set_ambient(lerp(0.04, 0.42, daylight))
             if self.moon_ptr != 0:
                 moon_light: DirectionalLight3D = self.moon_ptr as DirectionalLight3D

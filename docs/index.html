@@ -260,7 +260,7 @@
         <div class="card"><h4>Engine</h4><p>Window, lifecycle, frame timing, rendering, GPU selection, and debug flags.</p></div>
         <div class="card"><h4>Scene</h4><p>The active world. It owns a node tree, an active camera, and an environment.</p></div>
         <div class="card"><h4>Mesh3D</h4><p>A visible node: transform, built-in shape, material, texture, and collision helpers.</p></div>
-        <div class="card"><h4>Material3D</h4><p>Reusable surface data: color, texture, alpha, roughness, metallic, and future shader data.</p></div>
+        <div class="card"><h4>Material3D</h4><p>Reusable PBR surface data: albedo, normal, metallic-roughness, occlusion, and emission.</p></div>
         <div class="card"><h4>Assets</h4><p>Load models, textures, audio, and shaders from a mounted game-owned root.</p></div>
         <div class="card"><h4>Math</h4><p>Vec3, Mat4, Quat, Color plus angle / rng / clamp helpers.</p></div>
       </div>
@@ -754,10 +754,12 @@ car.set_lods(ModelLods.auto(<span class="tok-num">32.0</span>, <span class="tok-
 
     <section id="material3d">
       <h2>Material3D</h2>
-      <p class="lead">A reusable surface descriptor for <code>Mesh3D</code>. Color, albedo, emissive, and unlit state are applied by the current GPU lighting pipeline. Roughness, metallic, normal maps, and custom shader slots remain available for the advanced PBR pipeline.</p>
+      <p class="lead">A reusable physically based surface descriptor for <code>Mesh3D</code>. Frog applies albedo, normal, metallic-roughness, occlusion, emission, shadows, and direct lights in the GPU renderer.</p>
       <pre><code>mat: <span class="tok-type">Material3D</span> = Material3D.create()
-mat.set_color(Color.rgb(<span class="tok-num">0.08</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.92</span>))
-mat.set_texture(Assets.textures.load(<span class="tok-str">"textures/crate.png"</span>, TextureSpec.pixel()))
+mat.set_albedo_texture(Assets.textures.load(<span class="tok-str">"textures/crate.png"</span>, TextureSpec.color_smooth()))
+mat.set_normal_map(Assets.textures.load(<span class="tok-str">"textures/crate_normal.png"</span>, TextureSpec.data_smooth()))
+mat.set_metallic_roughness_map(Assets.textures.load(<span class="tok-str">"textures/crate_metallic_roughness.png"</span>, TextureSpec.data_smooth()))
+mat.set_occlusion_map(Assets.textures.load(<span class="tok-str">"textures/crate_occlusion.png"</span>, TextureSpec.data_smooth()))
 glow_strength: <span class="tok-type">f32</span> = <span class="tok-num">2.0</span> as <span class="tok-type">f32</span>
 mat.set_emissive(Color.rgb(<span class="tok-num">0.25</span>, <span class="tok-num">0.85</span>, <span class="tok-num">1.0</span>), glow_strength)
 mat.set_emissive_map(Assets.textures.load(<span class="tok-str">"textures/crate_emissive.png"</span>, TextureSpec.smooth()))
@@ -773,14 +775,15 @@ cube.set_material(mat)</code></pre>
         <tr><td><code>Material3D.colored(color)</code></td><td>Creates a material with a color in one call.</td></tr>
         <tr><td><code>Material3D.textured(texture)</code></td><td>Creates a white material with an albedo texture.</td></tr>
         <tr><td><code>set_color(color)</code></td><td>Changes the material color.</td></tr>
-        <tr><td><code>set_albedo(color)</code></td><td>Alias for color albedo, useful when writing PBR-style material code.</td></tr>
+        <tr><td><code>set_albedo(color)</code></td><td>Sets the albedo tint, or the complete albedo when no texture is assigned.</td></tr>
         <tr><td><code>set_alpha(alpha)</code></td><td>Sets color alpha and stores the material alpha.</td></tr>
-        <tr><td><code>set_texture(texture)</code> / <code>set_albedo(texture)</code></td><td>Sets the albedo texture applied to the mesh.</td></tr>
+        <tr><td><code>set_albedo_texture(texture)</code></td><td>Sets the sRGB albedo texture applied to the mesh.</td></tr>
         <tr><td><code>set_uv_scale(x, y)</code></td><td>Scales mesh UVs before sampling the texture. Use larger values to tile floors and walls.</td></tr>
         <tr><td><code>set_uv_offset(x, y)</code></td><td>Offsets mesh UVs before sampling the texture, useful for scrolling or atlas regions.</td></tr>
         <tr><td><code>clear_texture()</code></td><td>Returns the material to the white fallback texture.</td></tr>
-        <tr><td><code>set_normal_map(texture)</code></td><td>Stores a normal map for the future lighting pipeline.</td></tr>
-        <tr><td><code>set_roughness_map(texture)</code> / <code>set_metallic_map(texture)</code></td><td>Stores PBR data maps.</td></tr>
+        <tr><td><code>set_normal_map(texture)</code></td><td>Sets a linear tangent-space normal map.</td></tr>
+        <tr><td><code>set_metallic_roughness_map(texture)</code></td><td>Sets the glTF packed map: green = roughness, blue = metallic.</td></tr>
+        <tr><td><code>set_occlusion_map(texture)</code></td><td>Sets the glTF ambient-occlusion map: red = occlusion.</td></tr>
         <tr><td><code>set_roughness(value)</code> / <code>set_metallic(value)</code></td><td>Stores scalar PBR surface values, clamped to 0..1.</td></tr>
         <tr><td><code>set_surface(metallic, roughness)</code></td><td>Sets both scalar PBR values together.</td></tr>
         <tr><td><code>set_emissive(color)</code> / <code>set_emissive(color, strength)</code></td><td>Sets the material glow color and optional strength.</td></tr>
@@ -817,7 +820,7 @@ building.set_model_materials(mats)</code></pre>
         <tr><td><code>resolve(name, index, fallback)</code></td><td>Internal lookup used by <code>Mesh3D</code>: name match first, index fallback second.</td></tr>
         <tr><td><code>destroy()</code></td><td>Frees the override table when you own a short-lived table manually.</td></tr>
       </table>
-      <div class="note"><strong>Current scope.</strong> Material slots apply albedo texture, scalar roughness/metallic, emissive, unlit state, shadow flags, and visibility per model part. Normal maps and PBR texture maps are stored by <code>Material3D</code> but still wait on the advanced shader pipeline.</div>
+      <div class="note"><strong>PBR maps.</strong> Material slots apply albedo, normal, metallic-roughness, occlusion, emission, scalar factors, unlit state, shadows, and visibility per model part. glTF metallic-roughness textures use green for roughness and blue for metallic.</div>
     </section>
 
     <section id="lights">
@@ -1355,7 +1358,7 @@ debug_cube.set_color(Color.rgb(<span class="tok-num">0.95</span>, <span class="t
         <tr><td><code>Mesh3D.set_color</code></td><td>One debug cube, simple primitive, quick test.</td><td>Fine during setup; avoid changing it every frame.</td></tr>
         <tr><td><code>Mesh3D.set_texture</code></td><td>One mesh with one texture.</td><td>Load the texture once; do not call <code>Assets.textures.load</code> inside the loop.</td></tr>
       </table>
-      <div class="note warn"><strong>Current renderer.</strong> Directional diffuse light, color, albedo, emissive, unlit materials, and one directional depth-map shadow with PCF filtering are active. Renderable meshes cast and receive shadows by default. Roughness/metallic specular lighting, normal maps, custom shaders, double-sided state, and cascaded shadow maps remain staged for the advanced PBR pipeline.</div>
+      <div class="note warn"><strong>Current renderer.</strong> Directional and point lights, Cook-Torrance PBR materials, normal maps, metallic-roughness, occlusion, emission, and directional depth-map shadows are active. Renderable meshes cast and receive shadows by default. Custom shader pipelines, point-light shadows, image-based lighting, and mesh tangents from cooked assets are later renderer work.</div>
     </section>
 
     <section id="textures">
@@ -1375,7 +1378,9 @@ actor.set_texture(actor_tex)</code></pre>
       <p>A <code>TextureSpec</code> sets filtering, wrapping, and color space. Presets cover the common cases:</p>
       <table>
         <tr><th>Preset</th><th>Use for</th></tr>
-        <tr><td><code>TextureSpec.smooth()</code></td><td>Default. Linear filtering, repeat wrap, sRGB color. Models and photos.</td></tr>
+        <tr><td><code>TextureSpec.color_smooth()</code></td><td>Explicit smooth sRGB color sampling. Use for albedo and emission.</td></tr>
+        <tr><td><code>TextureSpec.data_smooth()</code></td><td>Explicit smooth linear sampling. Use for normal, metallic-roughness, and occlusion.</td></tr>
+        <tr><td><code>TextureSpec.smooth()</code></td><td>Default smooth sRGB color sampling.</td></tr>
         <tr><td><code>TextureSpec.pixel()</code></td><td>Sharp nearest filtering + clamp. Pixel art and crisp sprites.</td></tr>
         <tr><td><code>TextureSpec.pixel_tiled()</code></td><td>Sharp nearest filtering + repeat + mipmaps. Pixel-art tiles and atlases.</td></tr>
         <tr><td><code>TextureSpec.ground()</code></td><td>Linear + repeat + anisotropy + mipmaps. Tiled floors/walls seen at glancing angles.</td></tr>
@@ -1404,7 +1409,7 @@ ground.set_material(ground_mat)
 tiles: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/tiles_atlas.png"</span>, TextureSpec.pixel_tiled())
 
 <span class="tok-com"># Normal map — linear data, not color</span>
-n: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/wall_normal.png"</span>, TextureSpec.smooth().as_data())</code></pre>
+n: <span class="tok-type">Texture2D</span> = Assets.textures.load(<span class="tok-str">"textures/wall_normal.png"</span>, TextureSpec.data_smooth())</code></pre>
       <div class="note"><strong>PNG support.</strong> Textures decode through a pure-Dolet PNG decoder: full zlib/DEFLATE inflate, all five row filters, color types 0/2/3/4/6, and bit depths 1/2/4/8/16.</div>
       <div class="note"><strong>Low-level path.</strong> If you work with raw mesh ids (e.g. GPU instances), <code>Engine.upload_texture(path)</code> / <code>Engine.upload_texture_spec(path, spec)</code> and <code>Engine.bind_texture(mesh_id, tex_id)</code> are still available.</div>
     </section>

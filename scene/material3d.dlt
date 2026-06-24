@@ -7,15 +7,15 @@ struct Material3D:
     color: Color = Color()
     albedo: Texture2D = Texture2D()
     normal_map: Texture2D = Texture2D()
-    roughness_map: Texture2D = Texture2D()
-    metallic_map: Texture2D = Texture2D()
+    metallic_roughness_map: Texture2D = Texture2D()
+    occlusion_map: Texture2D = Texture2D()
     emissive_map: Texture2D = Texture2D()
     shader: Shader = Shader()
     emissive: Color = Color()
     has_albedo: i32 = 0
     has_normal_map: i32 = 0
-    has_roughness_map: i32 = 0
-    has_metallic_map: i32 = 0
+    has_metallic_roughness_map: i32 = 0
+    has_occlusion_map: i32 = 0
     has_emissive_map: i32 = 0
     has_shader: i32 = 0
     metallic: f32 = 0.0
@@ -77,6 +77,9 @@ attach Material3D:
     fun set_texture(self, texture: Texture2D) -> Material3D:
         return self.set_albedo(texture)
 
+    fun set_albedo_texture(self, texture: Texture2D) -> Material3D:
+        return self.set_albedo(texture)
+
     fun set_albedo(self, color: Color) -> Material3D:
         return self.set_color(color)
 
@@ -99,18 +102,18 @@ attach Material3D:
             self.has_normal_map = 1
         return self
 
-    fun set_roughness_map(self, texture: Texture2D) -> Material3D:
-        self.roughness_map = texture
-        self.has_roughness_map = 0
+    fun set_metallic_roughness_map(self, texture: Texture2D) -> Material3D:
+        self.metallic_roughness_map = texture
+        self.has_metallic_roughness_map = 0
         if texture.texture_id >= 0:
-            self.has_roughness_map = 1
+            self.has_metallic_roughness_map = 1
         return self
 
-    fun set_metallic_map(self, texture: Texture2D) -> Material3D:
-        self.metallic_map = texture
-        self.has_metallic_map = 0
+    fun set_occlusion_map(self, texture: Texture2D) -> Material3D:
+        self.occlusion_map = texture
+        self.has_occlusion_map = 0
         if texture.texture_id >= 0:
-            self.has_metallic_map = 1
+            self.has_occlusion_map = 1
         return self
 
     fun set_emissive_map(self, texture: Texture2D) -> Material3D:

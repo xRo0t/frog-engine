@@ -41,7 +41,16 @@ fun _frog_pack_material(material: Material3D) -> f32:
     emissive_map: i32 = 0
     if material.has_emissive_map != 0:
         emissive_map = 1
-    return (r + g * 32 + b * 1024 + unlit * 32768 + emissive_map * 131072) as f32
+    normal_map: i32 = 0
+    if material.has_normal_map != 0:
+        normal_map = 1
+    metallic_roughness_map: i32 = 0
+    if material.has_metallic_roughness_map != 0:
+        metallic_roughness_map = 1
+    occlusion_map: i32 = 0
+    if material.has_occlusion_map != 0:
+        occlusion_map = 1
+    return (r + g * 32 + b * 1024 + unlit * 32768 + emissive_map * 131072 + normal_map * 262144 + metallic_roughness_map * 524288 + occlusion_map * 1048576) as f32
 
 fun _frog_mesh_bounds(vertices: i64, vertex_count: i32) -> GpuMeshBounds:
     if vertices == 0:
@@ -261,6 +270,9 @@ struct GpuRendererCore:
     tex_capacity:   i32 = 0
     mesh_tex_ids:   i64 = 0    # mesh_id -> texture_id (-1 = white fallback)
     mesh_emissive_tex_ids: i64 = 0 # mesh_id -> emissive texture_id (-1 = white fallback)
+    mesh_normal_tex_ids: i64 = 0 # mesh_id -> normal texture id (-1 = white fallback)
+    mesh_metallic_roughness_tex_ids: i64 = 0 # mesh_id -> glTF metallic-roughness texture id
+    mesh_occlusion_tex_ids: i64 = 0 # mesh_id -> ambient-occlusion texture id
     mesh_desc_sets: i64 = 0    # mesh_id -> material descriptor set cache
     mesh_material_params: i64 = 0 # mesh_id -> material vec4 + uv transform vec4
     mesh_shadow_flags: i64 = 0 # mesh_id -> cast + receive * 2
@@ -342,6 +354,9 @@ attach GpuRendererCore:
         # mesh_id -> texture_id, default -1 (white fallback)
         self.mesh_tex_ids = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.mesh_emissive_tex_ids = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.mesh_normal_tex_ids = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.mesh_metallic_roughness_tex_ids = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.mesh_occlusion_tex_ids = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.mesh_desc_sets = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.mesh_material_params = Memory.malloc_zeroed(self.vb_capacity * 32)
         self.mesh_shadow_flags = Memory.malloc_zeroed(self.vb_capacity * 4)
@@ -350,6 +365,9 @@ attach GpuRendererCore:
         while mti < self.vb_capacity:
             Memory.write_i32(self.mesh_tex_ids + mti * 4, 0 - 1)
             Memory.write_i32(self.mesh_emissive_tex_ids + mti * 4, 0 - 1)
+            Memory.write_i32(self.mesh_normal_tex_ids + mti * 4, 0 - 1)
+            Memory.write_i32(self.mesh_metallic_roughness_tex_ids + mti * 4, 0 - 1)
+            Memory.write_i32(self.mesh_occlusion_tex_ids + mti * 4, 0 - 1)
             Memory.write_f32(self.mesh_material_params + mti * 32 + 4, 1.0)
             Memory.write_f32(self.mesh_material_params + mti * 32 + 16, 1.0)
             Memory.write_f32(self.mesh_material_params + mti * 32 + 20, 1.0)
@@ -462,6 +480,9 @@ attach GpuRendererCore:
         new_bound_rs: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_mesh_tex: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_mesh_emissive_tex: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_mesh_normal_tex: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_mesh_metallic_roughness_tex: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_mesh_occlusion_tex: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_mesh_desc_sets: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_mesh_materials: i64 = Memory.malloc_zeroed(new_cap * 32)
         new_shadow_flags: i64 = Memory.malloc_zeroed(new_cap * 4)
@@ -470,6 +491,9 @@ attach GpuRendererCore:
         while mti2 < new_cap:
             Memory.write_i32(new_mesh_tex + mti2 * 4, 0 - 1)
             Memory.write_i32(new_mesh_emissive_tex + mti2 * 4, 0 - 1)
+            Memory.write_i32(new_mesh_normal_tex + mti2 * 4, 0 - 1)
+            Memory.write_i32(new_mesh_metallic_roughness_tex + mti2 * 4, 0 - 1)
+            Memory.write_i32(new_mesh_occlusion_tex + mti2 * 4, 0 - 1)
             Memory.write_f32(new_mesh_materials + mti2 * 32 + 4, 1.0)
             Memory.write_f32(new_mesh_materials + mti2 * 32 + 16, 1.0)
             Memory.write_f32(new_mesh_materials + mti2 * 32 + 20, 1.0)
@@ -498,6 +522,12 @@ attach GpuRendererCore:
             Memory.copy(new_mesh_tex, self.mesh_tex_ids, self.vb_capacity * 4)
         if self.mesh_emissive_tex_ids != 0:
             Memory.copy(new_mesh_emissive_tex, self.mesh_emissive_tex_ids, self.vb_capacity * 4)
+        if self.mesh_normal_tex_ids != 0:
+            Memory.copy(new_mesh_normal_tex, self.mesh_normal_tex_ids, self.vb_capacity * 4)
+        if self.mesh_metallic_roughness_tex_ids != 0:
+            Memory.copy(new_mesh_metallic_roughness_tex, self.mesh_metallic_roughness_tex_ids, self.vb_capacity * 4)
+        if self.mesh_occlusion_tex_ids != 0:
+            Memory.copy(new_mesh_occlusion_tex, self.mesh_occlusion_tex_ids, self.vb_capacity * 4)
         if self.mesh_desc_sets != 0:
             Memory.copy(new_mesh_desc_sets, self.mesh_desc_sets, self.vb_capacity * 8)
         if self.mesh_material_params != 0:
@@ -524,6 +554,12 @@ attach GpuRendererCore:
             Memory.free(self.mesh_tex_ids)
         if self.mesh_emissive_tex_ids != 0:
             Memory.free(self.mesh_emissive_tex_ids)
+        if self.mesh_normal_tex_ids != 0:
+            Memory.free(self.mesh_normal_tex_ids)
+        if self.mesh_metallic_roughness_tex_ids != 0:
+            Memory.free(self.mesh_metallic_roughness_tex_ids)
+        if self.mesh_occlusion_tex_ids != 0:
+            Memory.free(self.mesh_occlusion_tex_ids)
         if self.mesh_desc_sets != 0:
             Memory.free(self.mesh_desc_sets)
         if self.mesh_material_params != 0:
@@ -548,6 +584,9 @@ attach GpuRendererCore:
         self.vb_visible = new_visible
         self.mesh_tex_ids = new_mesh_tex
         self.mesh_emissive_tex_ids = new_mesh_emissive_tex
+        self.mesh_normal_tex_ids = new_mesh_normal_tex
+        self.mesh_metallic_roughness_tex_ids = new_mesh_metallic_roughness_tex
+        self.mesh_occlusion_tex_ids = new_mesh_occlusion_tex
         self.mesh_desc_sets = new_mesh_desc_sets
         self.mesh_material_params = new_mesh_materials
         self.mesh_shadow_flags = new_shadow_flags
@@ -1670,6 +1709,21 @@ attach GpuRendererCore:
             if material.has_emissive_map == 1:
                 emissive_tex_id = material.emissive_map.texture_id
             Memory.write_i32(self.mesh_emissive_tex_ids + mesh_id * 4, emissive_tex_id)
+        if self.mesh_normal_tex_ids != 0:
+            normal_tex_id: i32 = 0 - 1
+            if material.has_normal_map == 1:
+                normal_tex_id = material.normal_map.texture_id
+            Memory.write_i32(self.mesh_normal_tex_ids + mesh_id * 4, normal_tex_id)
+        if self.mesh_metallic_roughness_tex_ids != 0:
+            metallic_roughness_tex_id: i32 = 0 - 1
+            if material.has_metallic_roughness_map == 1:
+                metallic_roughness_tex_id = material.metallic_roughness_map.texture_id
+            Memory.write_i32(self.mesh_metallic_roughness_tex_ids + mesh_id * 4, metallic_roughness_tex_id)
+        if self.mesh_occlusion_tex_ids != 0:
+            occlusion_tex_id: i32 = 0 - 1
+            if material.has_occlusion_map == 1:
+                occlusion_tex_id = material.occlusion_map.texture_id
+            Memory.write_i32(self.mesh_occlusion_tex_ids + mesh_id * 4, occlusion_tex_id)
         if self.mesh_desc_sets != 0:
             Memory.write_ptr(self.mesh_desc_sets + mesh_id * 8, 0)
 
@@ -1713,17 +1767,45 @@ attach GpuRendererCore:
         emissive_tid: i32 = 0 - 1
         if self.mesh_emissive_tex_ids != 0:
             emissive_tid = Memory.read_i32(self.mesh_emissive_tex_ids + mesh_id * 4)
+        normal_tid: i32 = 0 - 1
+        if self.mesh_normal_tex_ids != 0:
+            normal_tid = Memory.read_i32(self.mesh_normal_tex_ids + mesh_id * 4)
+        metallic_roughness_tid: i32 = 0 - 1
+        if self.mesh_metallic_roughness_tex_ids != 0:
+            metallic_roughness_tid = Memory.read_i32(self.mesh_metallic_roughness_tex_ids + mesh_id * 4)
+        occlusion_tid: i32 = 0 - 1
+        if self.mesh_occlusion_tex_ids != 0:
+            occlusion_tid = Memory.read_i32(self.mesh_occlusion_tex_ids + mesh_id * 4)
         if emissive_tid < 0 or emissive_tid >= self.tex_count:
             emissive_tid = self.white_tex_id
+        if normal_tid < 0 or normal_tid >= self.tex_count:
+            normal_tid = self.white_tex_id
+        if metallic_roughness_tid < 0 or metallic_roughness_tid >= self.tex_count:
+            metallic_roughness_tid = self.white_tex_id
+        if occlusion_tid < 0 or occlusion_tid >= self.tex_count:
+            occlusion_tid = self.white_tex_id
         if tid < 0:
             return self.white_desc_set
         if emissive_tid < 0:
+            return self.white_desc_set
+        if normal_tid < 0:
+            return self.white_desc_set
+        if metallic_roughness_tid < 0:
+            return self.white_desc_set
+        if occlusion_tid < 0:
             return self.white_desc_set
         albedo_view: i64 = Memory.read_ptr(self.tex_views + tid * 8)
         albedo_sampler: i64 = Memory.read_ptr(self.tex_samplers + tid * 8)
         emissive_view: i64 = Memory.read_ptr(self.tex_views + emissive_tid * 8)
         emissive_sampler: i64 = Memory.read_ptr(self.tex_samplers + emissive_tid * 8)
-        dset: i64 = rp.make_material_descriptor(self.device, albedo_view, albedo_sampler, emissive_view, emissive_sampler)
+        normal_view: i64 = Memory.read_ptr(self.tex_views + normal_tid * 8)
+        normal_sampler: i64 = Memory.read_ptr(self.tex_samplers + normal_tid * 8)
+        metallic_roughness_view: i64 = Memory.read_ptr(self.tex_views + metallic_roughness_tid * 8)
+        metallic_roughness_sampler: i64 = Memory.read_ptr(self.tex_samplers + metallic_roughness_tid * 8)
+        occlusion_view: i64 = Memory.read_ptr(self.tex_views + occlusion_tid * 8)
+        occlusion_sampler: i64 = Memory.read_ptr(self.tex_samplers + occlusion_tid * 8)
+        images: MaterialDescriptorImages = MaterialDescriptorImages(albedo_view=albedo_view, albedo_sampler=albedo_sampler, emissive_view=emissive_view, emissive_sampler=emissive_sampler, normal_view=normal_view, normal_sampler=normal_sampler, metallic_roughness_view=metallic_roughness_view, metallic_roughness_sampler=metallic_roughness_sampler, occlusion_view=occlusion_view, occlusion_sampler=occlusion_sampler)
+        dset: i64 = rp.make_material_descriptor(self.device, images)
         if dset == 0:
             return self.white_desc_set
         if self.mesh_desc_sets != 0:
@@ -2991,6 +3073,15 @@ attach GpuRendererCore:
                         group_emissive_tex_id: i32 = 0 - 1
                         if self.mesh_emissive_tex_ids != 0:
                             group_emissive_tex_id = Memory.read_i32(self.mesh_emissive_tex_ids + mi * 4)
+                        group_normal_tex_id: i32 = 0 - 1
+                        if self.mesh_normal_tex_ids != 0:
+                            group_normal_tex_id = Memory.read_i32(self.mesh_normal_tex_ids + mi * 4)
+                        group_metallic_roughness_tex_id: i32 = 0 - 1
+                        if self.mesh_metallic_roughness_tex_ids != 0:
+                            group_metallic_roughness_tex_id = Memory.read_i32(self.mesh_metallic_roughness_tex_ids + mi * 4)
+                        group_occlusion_tex_id: i32 = 0 - 1
+                        if self.mesh_occlusion_tex_ids != 0:
+                            group_occlusion_tex_id = Memory.read_i32(self.mesh_occlusion_tex_ids + mi * 4)
                         gi: i32 = mi
                         while gi < self.vb_count:
                             g_vb: i64 = Memory.read_ptr(self.vb_handles + gi * 8)
@@ -3003,6 +3094,15 @@ attach GpuRendererCore:
                             g_emissive_tex: i32 = 0 - 1
                             if self.mesh_emissive_tex_ids != 0:
                                 g_emissive_tex = Memory.read_i32(self.mesh_emissive_tex_ids + gi * 4)
+                            g_normal_tex: i32 = 0 - 1
+                            if self.mesh_normal_tex_ids != 0:
+                                g_normal_tex = Memory.read_i32(self.mesh_normal_tex_ids + gi * 4)
+                            g_metallic_roughness_tex: i32 = 0 - 1
+                            if self.mesh_metallic_roughness_tex_ids != 0:
+                                g_metallic_roughness_tex = Memory.read_i32(self.mesh_metallic_roughness_tex_ids + gi * 4)
+                            g_occlusion_tex: i32 = 0 - 1
+                            if self.mesh_occlusion_tex_ids != 0:
+                                g_occlusion_tex = Memory.read_i32(self.mesh_occlusion_tex_ids + gi * 4)
                             g_model: i64 = 0
                             if self.model_matrices != 0:
                                 g_model = Memory.read_ptr(self.model_matrices + gi * 8)
@@ -3017,6 +3117,12 @@ attach GpuRendererCore:
                             elif g_tex != group_tex_id:
                                 break
                             elif g_emissive_tex != group_emissive_tex_id:
+                                break
+                            elif g_normal_tex != group_normal_tex_id:
+                                break
+                            elif g_metallic_roughness_tex != group_metallic_roughness_tex_id:
+                                break
+                            elif g_occlusion_tex != group_occlusion_tex_id:
                                 break
                             elif g_model == 0:
                                 break
