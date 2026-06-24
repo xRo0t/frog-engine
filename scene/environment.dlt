@@ -142,12 +142,43 @@ struct Sky:
     primary_enabled: i32 = 0
     object_store: i64 = 0
 
+struct EnvironmentLighting:
+    enabled: i32 = 0
+    diffuse_strength: f32 = 0.0
+    reflection_strength: f32 = 0.0
+
 struct Environment:
     clear_color: Color = Color()
     fog: Fog = Fog()
     sky: Sky = Sky()
+    lighting: EnvironmentLighting = EnvironmentLighting()
     bloom: Bloom = Bloom()
     tone_mapping: ToneMapping = ToneMapping()
+
+attach EnvironmentLighting:
+
+    static fun none() -> EnvironmentLighting:
+        return EnvironmentLighting(enabled=0, diffuse_strength=0.0, reflection_strength=0.0)
+
+    # Uses the scene Sky as a procedural indirect-lighting source.
+    static fun sky() -> EnvironmentLighting:
+        return EnvironmentLighting(enabled=1, diffuse_strength=0.08, reflection_strength=0.18)
+
+    fun set_diffuse_strength(self, value: f32) -> EnvironmentLighting:
+        self.diffuse_strength = clamp(value, 0.0, 4.0)
+        if self.diffuse_strength > 0.0:
+            self.enabled = 1
+        return self
+
+    fun set_reflection_strength(self, value: f32) -> EnvironmentLighting:
+        self.reflection_strength = clamp(value, 0.0, 4.0)
+        if self.reflection_strength > 0.0:
+            self.enabled = 1
+        return self
+
+    fun disable(self) -> EnvironmentLighting:
+        self.enabled = 0
+        return self
 
 attach ToneMapping:
 
@@ -708,6 +739,7 @@ attach Environment:
         env.clear_color = Color.rgb(0.15, 0.15, 0.20)
         env.fog = Fog.none()
         env.sky = Sky.none()
+        env.lighting = EnvironmentLighting.none()
         env.bloom = Bloom.none()
         env.tone_mapping = ToneMapping()
         return env
@@ -724,6 +756,10 @@ attach Environment:
         self.sky = sky
         if sky.enabled() == 1:
             self.clear_color = sky.zenith_color
+        return self
+
+    fun set_lighting(self, lighting: EnvironmentLighting) -> Environment:
+        self.lighting = lighting
         return self
 
     fun set_bloom(self, bloom: Bloom) -> Environment:

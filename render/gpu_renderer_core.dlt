@@ -17,7 +17,7 @@ struct GpuMeshBounds:
     radius: f32 = 1.0
 
 const FROG_POINT_LIGHT_SLOTS: i32 = 8
-const FROG_POINT_LIGHT_DATA_SIZE: i64 = 272
+const FROG_POINT_LIGHT_DATA_SIZE: i64 = 336
 
 fun _frog_abs_f32(v: f32) -> f32:
     if v < 0.0:
@@ -1058,10 +1058,24 @@ attach GpuRendererCore:
             slot = slot + 1
         return 1
 
-    fun _write_point_light_data(self, out: i64):
+    fun _write_point_light_data(self, out: i64, env: Environment):
         if out == 0:
             return
         Memory.set(out, 0, FROG_POINT_LIGHT_DATA_SIZE)
+        if env.lighting.enabled == 1:
+            if env.sky.enabled() == 1:
+                Memory.write_f32(out + 272, env.sky.zenith_color.r)
+                Memory.write_f32(out + 276, env.sky.zenith_color.g)
+                Memory.write_f32(out + 280, env.sky.zenith_color.b)
+                Memory.write_f32(out + 288, env.sky.horizon_color.r)
+                Memory.write_f32(out + 292, env.sky.horizon_color.g)
+                Memory.write_f32(out + 296, env.sky.horizon_color.b)
+                Memory.write_f32(out + 304, env.sky.lower_color.r)
+                Memory.write_f32(out + 308, env.sky.lower_color.g)
+                Memory.write_f32(out + 312, env.sky.lower_color.b)
+                Memory.write_f32(out + 320, env.lighting.diffuse_strength)
+                Memory.write_f32(out + 324, env.lighting.reflection_strength)
+                Memory.write_f32(out + 328, 1.0)
         if self.point_light_ptrs == 0:
             return
         source_count: i32 = self.point_light_count
@@ -2859,7 +2873,7 @@ attach GpuRendererCore:
         point_light_desc: i64 = Memory.read_ptr(self.point_light_desc_sets + frame_slot * 8)
         if point_light_mapped == 0 or point_light_desc == 0:
             return
-        self._write_point_light_data(point_light_mapped)
+        self._write_point_light_data(point_light_mapped, env)
         if rp.shadow.map_size <= 1:
             shadow_enabled = 0
             Memory.write_f32(shadow_global_mapped + 128, 0.0)

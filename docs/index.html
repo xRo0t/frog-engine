@@ -1066,12 +1066,23 @@ camera.add_child(raycast)
         <tr><td><code>set_clear_color(color)</code></td><td>Environment</td><td>Sets the Vulkan clear color for this scene.</td></tr>
         <tr><td><code>set_sky(sky)</code></td><td>Environment</td><td>Sets the smooth world-space gradient sky for this scene.</td></tr>
         <tr><td><code>clear_sky()</code></td><td>Environment</td><td>Disables the rendered sky and falls back to the clear color.</td></tr>
+        <tr><td><code>set_lighting(lighting)</code></td><td>Environment</td><td>Uses scene environment data for procedural indirect lighting and soft sky reflections.</td></tr>
         <tr><td><code>set_fog(fog)</code></td><td>Environment</td><td>Stores fog settings for this scene.</td></tr>
         <tr><td><code>clear_fog()</code></td><td>Environment</td><td>Disables fog on this environment.</td></tr>
         <tr><td><code>set_bloom(bloom)</code></td><td>Environment</td><td>Enables post-process bloom for emissive materials and bright scene pixels.</td></tr>
         <tr><td><code>clear_bloom()</code></td><td>Environment</td><td>Disables only bloom; the neutral presentation pass remains active.</td></tr>
         <tr><td><code>set_tone_mapping(tone_mapping)</code></td><td>Environment</td><td>Sets HDR exposure and the final tone-mapping operator.</td></tr>
         <tr><td><code>clear_tone_mapping()</code></td><td>Environment</td><td>Uses neutral SDR clamping after HDR rendering.</td></tr>
+      </table>
+
+      <h4>EnvironmentLighting</h4>
+      <table>
+        <tr><th>Constructor / Method</th><th>Description</th></tr>
+        <tr><td><code>EnvironmentLighting.none()</code></td><td>No indirect environment lighting.</td></tr>
+        <tr><td><code>EnvironmentLighting.sky()</code></td><td>Samples the active sky colors as lightweight procedural diffuse and reflection lighting.</td></tr>
+        <tr><td><code>set_diffuse_strength(value)</code></td><td>Controls how much sky color contributes to non-metal diffuse surfaces.</td></tr>
+        <tr><td><code>set_reflection_strength(value)</code></td><td>Controls sky-colored specular reflection on glossy or metallic surfaces.</td></tr>
+        <tr><td><code>disable()</code></td><td>Turns the lighting block off while keeping the value object reusable.</td></tr>
       </table>
 
       <h4>Sky</h4>
@@ -1186,6 +1197,8 @@ sky.add_object(night_object)
 sky.add_object(stars)
 env.set_sky(sky)
 env.set_fog(Fog.view_distance(sky.fog_color(), <span class="tok-num">480.0</span>))
+lighting: <span class="tok-type">EnvironmentLighting</span> = EnvironmentLighting.sky()
+env.set_lighting(lighting)
 <span class="tok-com"># Optional: disabled by default.</span>
 tone_mapping: <span class="tok-type">ToneMapping</span> = ToneMapping()
 tone_mapping = tone_mapping.set_aces()
@@ -1204,7 +1217,7 @@ scene.set_environment(env)</code></pre>
 fog: <span class="tok-type">Fog</span> = Fog.linear(sky.fog_color(), <span class="tok-num">350.0</span>, <span class="tok-num">480.0</span>)
 fog.set_shape(FogShape.depth())
 env.set_fog(fog)</code></pre>
-      <div class="note">The Vulkan renderer draws a per-pixel world-space gradient before world meshes, with subtle dithering to prevent color banding. The scene is rendered to a floating-point HDR target, then presented with neutral clamping by default. Sky objects are generic: the engine does not know whether an object is a sun, moon, planet, portal, or star field. Bloom is optional; ACES and exposure are opt-in per environment.</div>
+      <div class="note">The Vulkan renderer draws a per-pixel world-space gradient before world meshes, with subtle dithering to prevent color banding. The scene is rendered to a floating-point HDR target, then presented with neutral clamping by default. Sky objects are generic: the engine does not know whether an object is a sun, moon, planet, portal, or star field. EnvironmentLighting is procedural and lightweight; full cubemap/HDR IBL is a separate asset pipeline. Bloom is optional; ACES and exposure are opt-in per environment.</div>
     </section>
     <section id="day-cycle">
       <h2>DayCycle</h2>

@@ -14,6 +14,10 @@ layout(set = 1, binding = 0) uniform PointLightBlock {
     vec4 meta;
     vec4 positionRange[MAX_POINT_LIGHTS];
     vec4 colorEnergy[MAX_POINT_LIGHTS];
+    vec4 skyZenith;
+    vec4 skyHorizon;
+    vec4 skyLower;
+    vec4 environmentLighting;
 } pointLights;
 
 layout(location = 0) in vec3 fragmentColor;
@@ -146,6 +150,32 @@ vec3 evaluatePbrLight(vec3 normal, vec3 viewDirection, vec3 lightDirection, vec3
     vec3 specular = (distribution * geometry * fresnel) / max(4.0 * normalView * normalLight, 0.0001);
     vec3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PI;
     return (diffuse + specular) * radiance * normalLight;
+}
+
+vec3 sampleSkyLighting(vec3 direction) {
+    float vertical = clamp(normalize(direction).y, -1.0, 1.0);
+    if (vertical >= 0.0) {
+        return mix(pointLights.skyHorizon.rgb, pointLights.skyZenith.rgb, vertical);
+    }
+    return mix(pointLights.skyHorizon.rgb, pointLights.skyLower.rgb, -vertical);
+}
+
+vec3 evaluateSkyLighting(vec3 normal, vec3 viewDirection, vec3 albedo, float metallic, float roughness) {
+    vec3 baseReflectance = mix(vec3(0.04), albedo, metallic);
+    float normalView = max(dot(normal, viewDirection), 0.0);
+    vec3 fresnel = fresnelSchlick(normalView, baseReflectance);
+    vec3 diffuseWeight = (1.0 - fresnel) * (1.0 - metallic);
+    vec3 diffuse = diffuseWeight * albedo / PI;
+
+    vec3 diffuseIrradiance = sampleSkyLighting(normal);
+    vec3 reflectionDirection = reflect(-viewDirection, normal);
+    vec3 sharpReflection = sampleSkyLighting(reflectionDirection);
+    vec3 roughReflection = sampleSkyLighting(normal);
+    vec3 specularIrradiance = mix(sharpReflection, roughReflection, roughness * roughness);
+    float specularFade = 1.0 - roughness * 0.65;
+
+    return diffuse * diffuseIrradiance * pointLights.environmentLighting.x
+        + fresnel * specularIrradiance * pointLights.environmentLighting.y * specularFade;
 }
 
 vec2 receiverPlaneDepthGradient(vec2 uv, float depth) {
@@ -474,6 +504,7 @@ void main() {
 
         vec3 irradiance = vec3(0.0);
         bool hasLight = false;
+        bool hasSkyLighting = pointLights.environmentLighting.z > 0.5;
         if (packedLight > 0.5) {
             vec3 lightDirection = normalize(pushConstants.lightDirectionIntensity.xyz);
             vec4 light = unpackLight();
@@ -481,6 +512,11 @@ void main() {
             vec3 directionalRadiance = light.rgb * lightIntensity * shadow;
             irradiance += albedo * light.a * occlusion;
             irradiance += evaluatePbrLight(normal, viewDirection, -lightDirection, albedo, metallic, roughness, directionalRadiance);
+            hasLight = true;
+        }
+
+        if (hasSkyLighting) {
+            irradiance += evaluateSkyLighting(normal, viewDirection, albedo, metallic, roughness) * occlusion;
             hasLight = true;
         }
 
