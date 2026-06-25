@@ -99,6 +99,11 @@ attach EngineRuntime:
         else:
             print("[frog.cull] GPU culling pipeline FAILED to init (CPU fallback)")
         runtime.cull = cull
+        # Phase 3 step 1: point the renderer at the runtime-owned cull
+        # pipeline and enable per-frame GPU cull verification. This only
+        # prints visible counts for comparison; it does NOT change rendering.
+        if runtime.cull.ready == 1:
+            runtime.renderer.core.set_gpu_culling(1, runtime.cull as i64)
 
         runtime.ready_flag = 1
         return runtime

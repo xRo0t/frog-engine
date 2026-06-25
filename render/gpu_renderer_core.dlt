@@ -431,6 +431,66 @@ attach GpuRendererCore:
         else:
             self.gpu_culling_enabled = 1
 
+    # PHASE 3 STEP 1 (verification, no rendering change): run the GPU cull
+    # over the whole scene in parallel with the CPU and print how many
+    # instances each side considers visible. If they match on the real
+    # scene, the GPU cull logic is correct and we can switch the draw.
+    # cmd_pool from the render pass; vp_mat = proj*view (column-major).
+    fun gpu_cull_verify(self, cmd_pool: i64, vp_mat: i64):
+        if self.gpu_cull_ptr == 0:
+            return
+        if vp_mat == 0:
+            return
+        cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
+        if cull.ready == 0:
+            return
+        if self.vb_count <= 0:
+            return
+        if cull.ensure_capacity(self.vb_count) == 0:
+            return
+
+        # Upload every registered instance (model + bounds) as a candidate.
+        # material/uv are irrelevant for the count, so write_instance (zeros
+        # them) is fine here.
+        i: i32 = 0
+        cand: i32 = 0
+        while i < self.vb_count:
+            model_ptr: i64 = 0
+            if self.model_matrices != 0:
+                model_ptr = Memory.read_ptr(self.model_matrices + i * 8)
+            if model_ptr != 0:
+                bx: f32 = 0.0
+                by: f32 = 0.0
+                bz: f32 = 0.0
+                br: f32 = 8.0
+                if self.mesh_bound_rs != 0:
+                    bx = Memory.read_f32(self.mesh_bound_xs + i * 4)
+                    by = Memory.read_f32(self.mesh_bound_ys + i * 4)
+                    bz = Memory.read_f32(self.mesh_bound_zs + i * 4)
+                    br = Memory.read_f32(self.mesh_bound_rs + i * 4)
+                    if br <= 0.0:
+                        br = 8.0
+                cull.write_instance(cand, model_ptr, bx, by, bz, br)
+                cand = cand + 1
+            i = i + 1
+
+        # Build push constants: extract frustum planes from VP + candidate count.
+        push: i64 = Memory.malloc_zeroed(FROG_CULL_PUSH_SIZE)
+        frog_cull_extract_planes(vp_mat, push)
+        Memory.write_i32(push + 96, cand)
+
+        cull.prepare_indirect(36)
+        cmd: i64 = gpu_tex_begin_oneshot(self.device, cmd_pool)
+        if cmd == 0:
+            Memory.free(push)
+            return
+        cull.dispatch(cmd, cand, push)
+        gpu_tex_end_oneshot(self.device, cmd_pool, self.gfx_queue, cmd)
+        Memory.free(push)
+
+        gpu_visible: i32 = cull.visible_count()
+        print(@"[frog.cull] scene cull: candidates={cand} gpu_visible={gpu_visible}")
+
     fun set_directional_light(self, light_ptr: i64):
         if self.render_state == 0:
             return
@@ -2473,6 +2533,18 @@ attach GpuRendererCore:
         current_fence: i64 = Memory.read_ptr(rp.in_flight_fences + self.current_frame * 8)
         Memory.write_ptr(rp.frame_fence_arr, current_fence)
         vkWaitForFences(device, 1, rp.frame_fence_arr, 1, 0 - 1)
+
+        # PHASE 3 STEP 1: GPU cull verification (no render change). Runs the
+        # GPU cull over the whole scene and prints the visible count for
+        # comparison with the CPU. Safe here: previous frame's GPU work is
+        # done (we just waited on its fence). Only when explicitly enabled.
+        if self.gpu_culling_enabled == 1:
+            verify_vp: i64 = self.scratch_vp_matrix
+            if verify_vp != 0:
+                if cam_view != 0:
+                    if cam_proj != 0:
+                        _frog_multiply_4x4_into(cam_proj, cam_view, verify_vp)
+                        self.gpu_cull_verify(rp.vk_command_pool, verify_vp)
 
         # Acquire next image (reset fence AFTER successful acquire to avoid deadlock)
         Memory.write_i32(rp.frame_img_idx_ptr, 0)
