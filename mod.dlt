@@ -44,6 +44,7 @@ load frog/render/software_renderer
 
 # Phase 4: Independent Vulkan GPU rendering
 load frog/render/gpu_shaders
+load frog/render/gpu_culling
 load frog/render/platform/{platform}/gpu_vulkan_context
 load frog/render/gpu_swapchain
 load frog/render/gpu_texture

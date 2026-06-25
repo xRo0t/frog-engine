@@ -1,0 +1,526 @@
+##############################
+# Frog - GPU-Driven Culling
+# Compute-shader frustum culling that compacts visible instances into a
+# GPU buffer the graphics pass draws via a single instanced draw.
+#
+# Pipeline (per mesh group, per frame):
+#   1. CPU uploads candidate instances (model matrix + bounds) to in-buf
+#   2. CPU resets the visible-count buffer to 0
+#   3. vkCmdDispatch -> compute culls, atomic-appends visible columns
+#   4. compute->vertex barrier
+#   5. graphics reads the compacted out-buf as its instance vertex buffer
+#
+# This module owns ONLY the compute side (pipeline + buffers + dispatch).
+# The graphics integration lives in gpu_renderer_core.dlt.
+##############################
+
+# A candidate instance as seen by the compute shader: 80 bytes.
+#   [0..63]  model matrix (4 columns x vec4)
+#   [64..79] bounds sphere (center.xyz, radius)
+FROG_CULL_INSTANCE_STRIDE: i32 = 80
+# A compacted output instance: just the 64-byte model matrix (4 x vec4),
+# matching what the graphics per-instance vertex buffer expects.
+FROG_CULL_OUT_STRIDE: i32 = 64
+# Push-constant block: 6 planes (vec4) + 4 u32 = 96 + 16 = 112 bytes.
+FROG_CULL_PUSH_SIZE: i32 = 112
+
+struct GpuCullPipeline:
+    device: i64 = 0
+    phys_device: i64 = 0
+    desc_set_layout: i64 = 0
+    pipeline_layout: i64 = 0
+    pipeline: i64 = 0
+    desc_pool: i64 = 0
+    desc_set: i64 = 0
+    shader_module: i64 = 0
+    ready: i32 = 0
+    # Buffers (host-visible, persistently mapped for simplicity v1).
+    in_buffer: i64 = 0
+    in_memory: i64 = 0
+    in_mapped: i64 = 0
+    out_buffer: i64 = 0
+    out_memory: i64 = 0
+    count_buffer: i64 = 0
+    count_memory: i64 = 0
+    count_mapped: i64 = 0
+    capacity: i32 = 0
+
+# Find a host-visible + host-coherent memory type index for the given
+# memory-requirement bits. Returns -1 on failure. Mirrors the search in
+# gpu_renderer_core's buffer upload.
+fun _frog_cull_find_host_mem(phys_device: i64, req_bits: i32) -> i32:
+    mem_props: i64 = Memory.malloc_zeroed(520)
+    if mem_props == 0:
+        return 0 - 1
+    vkGetPhysicalDeviceMemoryProperties(phys_device, mem_props)
+    type_count: i32 = Memory.read_i32(mem_props)
+    idx: i32 = 0 - 1
+    ti: i32 = 0
+    while ti < type_count:
+        bit_check: i32 = 1
+        shift: i32 = 0
+        while shift < ti:
+            bit_check = bit_check * 2
+            shift = shift + 1
+        if (req_bits / bit_check) - (req_bits / (bit_check * 2)) * 2 == 1:
+            flags: i32 = Memory.read_i32(mem_props + 4 + ti * 8)
+            # bit1 = HOST_VISIBLE, bit2 = HOST_COHERENT
+            if (flags / 2) - (flags / 4) * 2 == 1:
+                if (flags / 4) - (flags / 8) * 2 == 1:
+                    idx = ti
+                    ti = type_count
+        ti = ti + 1
+    Memory.free(mem_props)
+    return idx
+
+# Create a host-visible storage buffer of `size` bytes with the given
+# usage flags. Writes handle->out_buf_pp and memory->out_mem_pp (each an
+# 8-byte slot). Returns 1 on success, 0 on failure. If map_pp != 0, the
+# buffer is persistently mapped and the pointer written there.
+fun _frog_cull_make_buffer(device: i64, phys_device: i64, size: i64, usage: i32, out_buf_pp: i64, out_mem_pp: i64, map_pp: i64) -> i32:
+    buf_ci: i64 = Memory.malloc_zeroed(56)
+    if buf_ci == 0:
+        return 0
+    Memory.write_i32(buf_ci, 12)            # sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO
+    Memory.write_i64(buf_ci + 24, size)     # size
+    Memory.write_i32(buf_ci + 32, usage)    # usage
+    Memory.write_i32(buf_ci + 36, 0)        # sharingMode = EXCLUSIVE
+    bp: i64 = Memory.malloc_zeroed(8)
+    r: i32 = vkCreateBuffer(device, buf_ci, 0, bp)
+    buf: i64 = Memory.read_ptr(bp)
+    Memory.free(bp)
+    Memory.free(buf_ci)
+    if r != 0:
+        return 0
+
+    mem_req: i64 = Memory.malloc_zeroed(24)
+    vkGetBufferMemoryRequirements(device, buf, mem_req)
+    req_size: i64 = Memory.read_i64(mem_req)
+    req_bits: i32 = Memory.read_i32(mem_req + 16)
+    Memory.free(mem_req)
+
+    mt: i32 = _frog_cull_find_host_mem(phys_device, req_bits)
+    if mt < 0:
+        vkDestroyBuffer(device, buf, 0)
+        return 0
+
+    ai: i64 = Memory.malloc_zeroed(32)
+    Memory.write_i32(ai, 5)                 # sType = MEMORY_ALLOCATE_INFO
+    Memory.write_i64(ai + 16, req_size)
+    Memory.write_i32(ai + 24, mt)
+    mp: i64 = Memory.malloc_zeroed(8)
+    ar: i32 = vkAllocateMemory(device, ai, 0, mp)
+    mem: i64 = Memory.read_ptr(mp)
+    Memory.free(mp)
+    Memory.free(ai)
+    if ar != 0:
+        vkDestroyBuffer(device, buf, 0)
+        return 0
+
+    vkBindBufferMemory(device, buf, mem, 0)
+    Memory.write_ptr(out_buf_pp, buf)
+    Memory.write_ptr(out_mem_pp, mem)
+
+    if map_pp != 0:
+        pp: i64 = Memory.malloc_zeroed(8)
+        vkMapMemory(device, mem, 0, size, 0, pp)
+        Memory.write_ptr(map_pp, Memory.read_ptr(pp))
+        Memory.free(pp)
+    return 1
+
+attach GpuCullPipeline:
+
+    # Phase 0: create the compute pipeline + descriptor layout. Does NOT
+    # allocate per-frame buffers (that's ensure_capacity, Phase 1) and does
+    # NOT touch the graphics path. Safe to call after device creation.
+    fun init(self, device: i64, phys_device: i64) -> i32:
+        self.device = device
+        self.phys_device = phys_device
+
+        # --- Descriptor set layout: 3 storage buffers (binding 0,1,2) ---
+        # VkDescriptorSetLayoutBinding = 24 bytes each.
+        #   binding(u32) descriptorType(u32) descriptorCount(u32)
+        #   stageFlags(u32) pImmutableSamplers(ptr@+16)
+        # VK_DESCRIPTOR_TYPE_STORAGE_BUFFER = 7
+        # VK_SHADER_STAGE_COMPUTE_BIT = 32
+        bindings: i64 = Memory.malloc_zeroed(24 * 3)
+        bi: i32 = 0
+        while bi < 3:
+            base: i64 = (bi as i64) * 24
+            Memory.write_i32(bindings + base, bi)         # binding
+            Memory.write_i32(bindings + base + 4, 7)      # STORAGE_BUFFER
+            Memory.write_i32(bindings + base + 8, 1)      # count
+            Memory.write_i32(bindings + base + 12, 32)    # COMPUTE stage
+            bi = bi + 1
+
+        # VkDescriptorSetLayoutCreateInfo (sType=32):
+        #   0 sType, 8 pNext, 16 flags, 20 bindingCount, 24 pBindings
+        dsl_ci2: i64 = Memory.malloc_zeroed(40)
+        Memory.write_i32(dsl_ci2, 32)                     # sType
+        Memory.write_i32(dsl_ci2 + 20, 3)                 # bindingCount
+        Memory.write_ptr(dsl_ci2 + 24, bindings)          # pBindings
+        dslp: i64 = Memory.malloc_zeroed(8)
+        r1: i32 = vkCreateDescriptorSetLayout(device, dsl_ci2, 0, dslp)
+        self.desc_set_layout = Memory.read_ptr(dslp)
+        Memory.free(dslp)
+        Memory.free(dsl_ci2)
+        Memory.free(bindings)
+        if r1 != 0:
+            print(@"[frog.cull] FAIL descriptor_set_layout r={r1}")
+            return 0
+
+        # --- Pipeline layout: 1 set + push-constant range ---
+        # VkPushConstantRange = stageFlags(u32) offset(u32) size(u32) = 12B
+        pcr: i64 = Memory.malloc_zeroed(12)
+        Memory.write_i32(pcr, 32)                         # COMPUTE stage
+        Memory.write_i32(pcr + 4, 0)                      # offset
+        Memory.write_i32(pcr + 8, FROG_CULL_PUSH_SIZE)    # size
+        setp: i64 = Memory.malloc_zeroed(8)
+        Memory.write_ptr(setp, self.desc_set_layout)
+        # VkPipelineLayoutCreateInfo:
+        #   sType(4) pad(4) pNext(8) flags(4) pad(4) setLayoutCount(4) pad(4)
+        #   pSetLayouts(8) pushConstantRangeCount(4) pad(4) pPushConstantRanges(8)
+        pl_ci: i64 = Memory.malloc_zeroed(56)
+        Memory.write_i32(pl_ci, 30)                       # sType = PIPELINE_LAYOUT_CREATE_INFO
+        Memory.write_i32(pl_ci + 20, 1)                   # setLayoutCount @ +20
+        Memory.write_ptr(pl_ci + 24, setp)                # pSetLayouts @ +24
+        Memory.write_i32(pl_ci + 32, 1)                   # pushConstantRangeCount @ +32
+        Memory.write_ptr(pl_ci + 40, pcr)                 # pPushConstantRanges @ +40
+        plp: i64 = Memory.malloc_zeroed(8)
+        r2: i32 = vkCreatePipelineLayout(device, pl_ci, 0, plp)
+        self.pipeline_layout = Memory.read_ptr(plp)
+        Memory.free(plp)
+        Memory.free(pl_ci)
+        Memory.free(pcr)
+        Memory.free(setp)
+        if r2 != 0:
+            print(@"[frog.cull] FAIL pipeline_layout r={r2}")
+            return 0
+
+        # --- Shader module from embedded SPIR-V ---
+        sh: EmbeddedShader = get_cull_compute_shader()
+        if sh.data == 0:
+            print("[frog.cull] FAIL shader data null")
+            return 0
+        sm_ci: i64 = Memory.malloc_zeroed(40)
+        Memory.write_i32(sm_ci, 12)                       # sType — match engine's working shader-module path
+        Memory.write_i64(sm_ci + 24, sh.size)             # codeSize (bytes) @ +24
+        Memory.write_ptr(sm_ci + 32, sh.data)             # pCode @ +32
+        smp: i64 = Memory.malloc_zeroed(8)
+        r3: i32 = vkCreateShaderModule(device, sm_ci, 0, smp)
+        self.shader_module = Memory.read_ptr(smp)
+        Memory.free(smp)
+        Memory.free(sm_ci)
+        sh.release()
+        if r3 != 0:
+            print(@"[frog.cull] FAIL shader_module r={r3}")
+            return 0
+
+        # --- Compute pipeline ---
+        # VkPipelineShaderStageCreateInfo (48B):
+        #   sType(4) pad(4) pNext(8) flags(4) stage(4) module(8) pName(8) pSpec(8)
+        entry: str = "main"
+        # VkPipelineShaderStageCreateInfo (48B):
+        #   0 sType, 8 pNext, 16 flags, 20 stage, 24 module, 32 pName, 40 pSpec
+        stage: i64 = Memory.malloc_zeroed(48)
+        Memory.write_i32(stage, 18)                       # sType = PIPELINE_SHADER_STAGE_CREATE_INFO
+        Memory.write_i32(stage + 20, 32)                  # stage = COMPUTE @ +20
+        Memory.write_ptr(stage + 24, self.shader_module)  # module @ +24
+        Memory.write_ptr(stage + 32, entry as i64)        # pName @ +32
+        # VkComputePipelineCreateInfo:
+        #   0 sType, 8 pNext, 16 flags, 24 stage(48 inline), 72 layout,
+        #   80 basePipelineHandle, 88 basePipelineIndex
+        cp_ci: i64 = Memory.malloc_zeroed(104)
+        Memory.write_i32(cp_ci, 29)                       # sType = COMPUTE_PIPELINE_CREATE_INFO
+        Memory.copy(cp_ci + 24, stage, 48)                # stage inline @ +24
+        Memory.write_ptr(cp_ci + 72, self.pipeline_layout)# layout @ +72
+        Memory.write_i32(cp_ci + 88, 0 - 1)               # basePipelineIndex = -1
+        cpp: i64 = Memory.malloc_zeroed(8)
+        r4: i32 = vkCreateComputePipelines(device, 0, 1, cp_ci, 0, cpp)
+        self.pipeline = Memory.read_ptr(cpp)
+        Memory.free(cpp)
+        Memory.free(cp_ci)
+        Memory.free(stage)
+        if r4 != 0:
+            print(@"[frog.cull] FAIL compute_pipeline r={r4}")
+            return 0
+
+        # --- Descriptor pool (3 storage buffers, 1 set) ---
+        # VkDescriptorPoolSize = type(u32) count(u32) = 8B
+        ps: i64 = Memory.malloc_zeroed(8)
+        Memory.write_i32(ps, 7)                           # STORAGE_BUFFER
+        Memory.write_i32(ps + 4, 3)                       # 3 descriptors
+        # VkDescriptorPoolCreateInfo:
+        #   sType(4) pad(4) pNext(8) flags(4) maxSets(4) poolSizeCount(4) pad(4) pPoolSizes(8)
+        dp_ci: i64 = Memory.malloc_zeroed(40)
+        Memory.write_i32(dp_ci, 33)                       # sType = DESCRIPTOR_POOL_CREATE_INFO
+        Memory.write_i32(dp_ci + 16, 0)                   # flags
+        Memory.write_i32(dp_ci + 20, 1)                   # maxSets
+        Memory.write_i32(dp_ci + 24, 1)                   # poolSizeCount
+        Memory.write_ptr(dp_ci + 32, ps)                  # pPoolSizes
+        dpp: i64 = Memory.malloc_zeroed(8)
+        r5: i32 = vkCreateDescriptorPool(device, dp_ci, 0, dpp)
+        self.desc_pool = Memory.read_ptr(dpp)
+        Memory.free(dpp)
+        Memory.free(dp_ci)
+        Memory.free(ps)
+        if r5 != 0:
+            print(@"[frog.cull] FAIL descriptor_pool r={r5}")
+            return 0
+
+        self.ready = 1
+        return 1
+
+    # Phase 1: ensure the three buffers can hold `count` instances.
+    # Reallocates (grows) when needed. Returns 1 on success.
+    fun ensure_capacity(self, count: i32) -> i32:
+        if self.ready == 0:
+            return 0
+        if count <= self.capacity:
+            return 1
+        new_cap: i32 = self.capacity
+        if new_cap < 256:
+            new_cap = 256
+        while new_cap < count:
+            new_cap = new_cap * 2
+
+        # Free old buffers if any.
+        self._free_buffers()
+
+        in_size: i64 = (new_cap as i64) * (FROG_CULL_INSTANCE_STRIDE as i64)
+        out_size: i64 = (new_cap as i64) * (FROG_CULL_OUT_STRIDE as i64)
+        # usage: STORAGE_BUFFER(0x20) | VERTEX_BUFFER(0x80) for out so the
+        # graphics pass can bind it as an instance vertex buffer.
+        bp: i64 = Memory.malloc_zeroed(8)
+        mp: i64 = Memory.malloc_zeroed(8)
+        map_pp: i64 = Memory.malloc_zeroed(8)
+
+        if _frog_cull_make_buffer(self.device, self.phys_device, in_size, 32, bp, mp, map_pp) == 0:
+            Memory.free(bp)
+            Memory.free(mp)
+            Memory.free(map_pp)
+            return 0
+        self.in_buffer = Memory.read_ptr(bp)
+        self.in_memory = Memory.read_ptr(mp)
+        self.in_mapped = Memory.read_ptr(map_pp)
+
+        if _frog_cull_make_buffer(self.device, self.phys_device, out_size, 160, bp, mp, 0) == 0:
+            Memory.free(bp)
+            Memory.free(mp)
+            Memory.free(map_pp)
+            return 0
+        self.out_buffer = Memory.read_ptr(bp)
+        self.out_memory = Memory.read_ptr(mp)
+
+        # count buffer: 4 bytes, STORAGE(0x20). Host-mapped so CPU resets it.
+        if _frog_cull_make_buffer(self.device, self.phys_device, 4, 32, bp, mp, map_pp) == 0:
+            Memory.free(bp)
+            Memory.free(mp)
+            Memory.free(map_pp)
+            return 0
+        self.count_buffer = Memory.read_ptr(bp)
+        self.count_memory = Memory.read_ptr(mp)
+        self.count_mapped = Memory.read_ptr(map_pp)
+
+        Memory.free(bp)
+        Memory.free(mp)
+        Memory.free(map_pp)
+
+        self.capacity = new_cap
+        self._update_descriptors()
+        return 1
+
+    # Allocate (once) the descriptor set and point its 3 bindings at the
+    # current buffers. Called after (re)allocation.
+    fun _update_descriptors(self):
+        if self.desc_set == 0:
+            # Allocate the set from the pool.
+            setp: i64 = Memory.malloc_zeroed(8)
+            Memory.write_ptr(setp, self.desc_set_layout)
+            # VkDescriptorSetAllocateInfo:
+            #   sType(4) pad(4) pNext(8) descriptorPool(8) count(4) pad(4) pSetLayouts(8)
+            ai: i64 = Memory.malloc_zeroed(40)
+            Memory.write_i32(ai, 34)                      # sType = DESCRIPTOR_SET_ALLOCATE_INFO
+            Memory.write_ptr(ai + 16, self.desc_pool)
+            Memory.write_i32(ai + 24, 1)
+            Memory.write_ptr(ai + 32, setp)
+            dsp: i64 = Memory.malloc_zeroed(8)
+            vkAllocateDescriptorSets(self.device, ai, dsp)
+            self.desc_set = Memory.read_ptr(dsp)
+            Memory.free(dsp)
+            Memory.free(ai)
+            Memory.free(setp)
+
+        # Write 3 buffer descriptors. VkDescriptorBufferInfo = buffer(8) offset(8) range(8) = 24B.
+        # VkWriteDescriptorSet = 64B:
+        #   sType(4) pad(4) pNext(8) dstSet(8) dstBinding(4) dstArrayElement(4)
+        #   descriptorCount(4) descriptorType(4) pImageInfo(8) pBufferInfo(8) pTexelBufferView(8)
+        bufs: i64 = Memory.malloc_zeroed(24 * 3)
+        # binding 0: in_buffer (full range)
+        Memory.write_ptr(bufs + 0, self.in_buffer)
+        Memory.write_i64(bufs + 8, 0)
+        Memory.write_i64(bufs + 16, 0 - 1)               # VK_WHOLE_SIZE
+        # binding 1: out_buffer
+        Memory.write_ptr(bufs + 24, self.out_buffer)
+        Memory.write_i64(bufs + 32, 0)
+        Memory.write_i64(bufs + 40, 0 - 1)
+        # binding 2: count_buffer
+        Memory.write_ptr(bufs + 48, self.count_buffer)
+        Memory.write_i64(bufs + 56, 0)
+        Memory.write_i64(bufs + 64, 0 - 1)
+
+        writes: i64 = Memory.malloc_zeroed(64 * 3)
+        wi: i32 = 0
+        while wi < 3:
+            wbase: i64 = (wi as i64) * 64
+            Memory.write_i32(writes + wbase, 35)          # sType = WRITE_DESCRIPTOR_SET
+            Memory.write_ptr(writes + wbase + 16, self.desc_set)
+            Memory.write_i32(writes + wbase + 24, wi)     # dstBinding
+            Memory.write_i32(writes + wbase + 32, 1)      # descriptorCount
+            Memory.write_i32(writes + wbase + 36, 7)      # STORAGE_BUFFER
+            Memory.write_ptr(writes + wbase + 48, bufs + (wi as i64) * 24)  # pBufferInfo
+            wi = wi + 1
+        vkUpdateDescriptorSets(self.device, 3, writes, 0, 0)
+        Memory.free(writes)
+        Memory.free(bufs)
+
+    fun _free_buffers(self):
+        if self.in_buffer != 0:
+            vkDestroyBuffer(self.device, self.in_buffer, 0)
+            vkFreeMemory(self.device, self.in_memory, 0)
+            self.in_buffer = 0
+            self.in_memory = 0
+            self.in_mapped = 0
+        if self.out_buffer != 0:
+            vkDestroyBuffer(self.device, self.out_buffer, 0)
+            vkFreeMemory(self.device, self.out_memory, 0)
+            self.out_buffer = 0
+            self.out_memory = 0
+        if self.count_buffer != 0:
+            vkDestroyBuffer(self.device, self.count_buffer, 0)
+            vkFreeMemory(self.device, self.count_memory, 0)
+            self.count_buffer = 0
+            self.count_memory = 0
+            self.count_mapped = 0
+
+    fun cleanup(self):
+        self._free_buffers()
+        if self.pipeline != 0:
+            vkDestroyPipeline(self.device, self.pipeline, 0)
+            self.pipeline = 0
+        if self.shader_module != 0:
+            vkDestroyShaderModule(self.device, self.shader_module, 0)
+            self.shader_module = 0
+        if self.pipeline_layout != 0:
+            vkDestroyPipelineLayout(self.device, self.pipeline_layout, 0)
+            self.pipeline_layout = 0
+        if self.desc_pool != 0:
+            vkDestroyDescriptorPool(self.device, self.desc_pool, 0)
+            self.desc_pool = 0
+        if self.desc_set_layout != 0:
+            vkDestroyDescriptorSetLayout(self.device, self.desc_set_layout, 0)
+            self.desc_set_layout = 0
+        self.ready = 0
+        self.desc_set = 0
+        self.capacity = 0
+
+    # Reset the visible-count buffer to 0 (CPU write, host-coherent).
+    fun reset_count(self):
+        if self.count_mapped != 0:
+            Memory.write_i32(self.count_mapped, 0)
+
+    # Write one candidate instance (model matrix 64B + bounds 16B) into the
+    # input buffer at slot `idx`. model_ptr = 64-byte column-major matrix.
+    fun write_instance(self, idx: i32, model_ptr: i64, cx: f32, cy: f32, cz: f32, radius: f32):
+        if self.in_mapped == 0:
+            return
+        if idx < 0:
+            return
+        if idx >= self.capacity:
+            return
+        dst: i64 = self.in_mapped + (idx as i64) * (FROG_CULL_INSTANCE_STRIDE as i64)
+        Memory.copy(dst, model_ptr, 64)
+        Memory.write_f32(dst + 64, cx)
+        Memory.write_f32(dst + 68, cy)
+        Memory.write_f32(dst + 72, cz)
+        Memory.write_f32(dst + 76, radius)
+
+    # Record the culling dispatch into `cmd`. push_ptr points at a filled
+    # FROG_CULL_PUSH_SIZE block (6 planes + instanceCount + pad). After this
+    # the out_buffer holds compacted visible instance columns and the count
+    # buffer holds how many. A compute->vertex barrier is inserted so the
+    # graphics pass sees the writes.
+    fun dispatch(self, cmd: i64, instance_count: i32, push_ptr: i64):
+        if self.ready == 0:
+            return
+        if instance_count <= 0:
+            return
+        vkCmdBindPipeline(cmd, 1, self.pipeline)         # bindPoint 1 = COMPUTE
+        dsp: i64 = Memory.malloc_zeroed(8)
+        Memory.write_ptr(dsp, self.desc_set)
+        vkCmdBindDescriptorSets(cmd, 1, self.pipeline_layout, 0, 1, dsp, 0, 0)
+        Memory.free(dsp)
+        vkCmdPushConstants(cmd, self.pipeline_layout, 32, 0, FROG_CULL_PUSH_SIZE, push_ptr)
+        groups: i32 = (instance_count + 63) / 64
+        vkCmdDispatch(cmd, groups, 1, 1)
+
+        # Barrier: compute SHADER_WRITE -> vertex VERTEX_ATTRIBUTE_READ.
+        # VkMemoryBarrier = sType(4) pad(4) pNext(8) srcMask(4) dstMask(4) = 24B
+        mb: i64 = Memory.malloc_zeroed(24)
+        Memory.write_i32(mb, 46)                         # sType = MEMORY_BARRIER
+        Memory.write_i32(mb + 16, 64)                    # src = SHADER_WRITE (0x40)
+        Memory.write_i32(mb + 20, 8)                     # dst = VERTEX_ATTRIBUTE_READ (0x8)
+        # srcStage = COMPUTE_SHADER(0x800), dstStage = VERTEX_INPUT(0x4)
+        vkCmdPipelineBarrier(cmd, 2048, 4, 0, 1, mb, 0, 0, 0, 0)
+        Memory.free(mb)
+
+# Extract 6 frustum planes from a column-major view*projection matrix into
+# `out` (6 x vec4 = 96 bytes). Gribb/Hartmann method. Planes are normalized.
+# Matrix layout: m[col*4 + row], i.e. element(row,col) = read_f32(vp + (col*4+row)*4).
+fun frog_cull_extract_planes(vp: i64, out: i64):
+    # rows of the matrix: r[row][col] = m[col*4+row]
+    # We need rows 0..3. Build plane = row3 +/- row{0,1,2}.
+    ri: i32 = 0
+    # helper inline via reads
+    m00: f32 = Memory.read_f32(vp + 0)
+    m10: f32 = Memory.read_f32(vp + 4)
+    m20: f32 = Memory.read_f32(vp + 8)
+    m30: f32 = Memory.read_f32(vp + 12)
+    m01: f32 = Memory.read_f32(vp + 16)
+    m11: f32 = Memory.read_f32(vp + 20)
+    m21: f32 = Memory.read_f32(vp + 24)
+    m31: f32 = Memory.read_f32(vp + 28)
+    m02: f32 = Memory.read_f32(vp + 32)
+    m12: f32 = Memory.read_f32(vp + 36)
+    m22: f32 = Memory.read_f32(vp + 40)
+    m32: f32 = Memory.read_f32(vp + 44)
+    m03: f32 = Memory.read_f32(vp + 48)
+    m13: f32 = Memory.read_f32(vp + 52)
+    m23: f32 = Memory.read_f32(vp + 56)
+    m33: f32 = Memory.read_f32(vp + 60)
+
+    # row0 = (m00,m01,m02,m03), row1=(m10..), row2=(m20..), row3=(m30..)
+    # Note: with column-major storage, row R component C = m[C][R] = element above.
+    # left = row3 + row0
+    frog_cull_write_plane(out, 0, m30 + m00, m31 + m01, m32 + m02, m33 + m03)
+    # right = row3 - row0
+    frog_cull_write_plane(out, 1, m30 - m00, m31 - m01, m32 - m02, m33 - m03)
+    # bottom = row3 + row1
+    frog_cull_write_plane(out, 2, m30 + m10, m31 + m11, m32 + m12, m33 + m13)
+    # top = row3 - row1
+    frog_cull_write_plane(out, 3, m30 - m10, m31 - m11, m32 - m12, m33 - m13)
+    # near = row3 + row2
+    frog_cull_write_plane(out, 4, m30 + m20, m31 + m21, m32 + m22, m33 + m23)
+    # far = row3 - row2
+    frog_cull_write_plane(out, 5, m30 - m20, m31 - m21, m32 - m22, m33 - m23)
+
+fun frog_cull_write_plane(out: i64, idx: i32, a: f32, b: f32, c: f32, d: f32):
+    len: f32 = @sqrt(a * a + b * b + c * c)
+    if len < 0.000001:
+        len = 1.0
+    inv: f32 = 1.0 / len
+    base: i64 = (idx as i64) * 16
+    Memory.write_f32(out + base + 0, a * inv)
+    Memory.write_f32(out + base + 4, b * inv)
+    Memory.write_f32(out + base + 8, c * inv)
+    Memory.write_f32(out + base + 12, d * inv)

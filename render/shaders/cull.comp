@@ -1,0 +1,86 @@
+#version 450
+
+// GPU-driven frustum culling.
+// One invocation per instance. Visible instances are compacted into
+// the output instance buffer and counted; the CPU then issues a single
+// indexed draw using that count as instanceCount.
+//
+// Layout must match the CPU-side GpuCullInstance struct (80 bytes):
+//   mat4 model       (64 bytes, columns 0..3)
+//   vec4 boundsSphere (center.xyz, radius)  (16 bytes)
+
+layout(local_size_x = 64) in;
+
+struct CullInstance {
+    vec4 col0;
+    vec4 col1;
+    vec4 col2;
+    vec4 col3;
+    vec4 bounds; // xyz = local-space center, w = local-space radius
+};
+
+// Input: all candidate instances.
+layout(std430, binding = 0) readonly buffer InInstances {
+    CullInstance inInstances[];
+};
+
+// Output: compacted visible instances (model matrix only, 64 bytes each,
+// matching the per-instance vertex buffer the graphics pass consumes).
+layout(std430, binding = 1) writeonly buffer OutInstances {
+    vec4 outColumns[]; // 4 vec4 per visible instance
+};
+
+// Output: visible count (single u32). Cleared to 0 by the CPU each frame.
+layout(std430, binding = 2) buffer DrawCount {
+    uint visibleCount;
+};
+
+layout(push_constant) uniform CullPush {
+    vec4 planes[6];   // frustum planes (xyz = normal, w = d), world space
+    uint instanceCount;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+} push;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= push.instanceCount) {
+        return;
+    }
+
+    CullInstance inst = inInstances[idx];
+    mat4 model = mat4(inst.col0, inst.col1, inst.col2, inst.col3);
+
+    // World-space center: model * (local center, 1).
+    vec4 centerLocal = vec4(inst.bounds.xyz, 1.0);
+    vec3 centerWorld = (model * centerLocal).xyz;
+
+    // Approximate world radius: scale local radius by the largest column
+    // magnitude (max axis scale). Cheap and conservative.
+    float sx = length(inst.col0.xyz);
+    float sy = length(inst.col1.xyz);
+    float sz = length(inst.col2.xyz);
+    float maxScale = max(sx, max(sy, sz));
+    float radius = inst.bounds.w * maxScale;
+
+    // Test the sphere against all 6 frustum planes. If fully outside any
+    // plane (signed distance < -radius), the instance is culled.
+    bool visible = true;
+    for (int i = 0; i < 6; i++) {
+        vec4 p = push.planes[i];
+        float dist = dot(p.xyz, centerWorld) + p.w;
+        if (dist < -radius) {
+            visible = false;
+        }
+    }
+
+    if (visible) {
+        uint slot = atomicAdd(visibleCount, 1u);
+        uint base = slot * 4u;
+        outColumns[base + 0u] = inst.col0;
+        outColumns[base + 1u] = inst.col1;
+        outColumns[base + 2u] = inst.col2;
+        outColumns[base + 3u] = inst.col3;
+    }
+}

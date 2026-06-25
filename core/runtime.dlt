@@ -9,6 +9,7 @@
     swapchain: Swapchain = Swapchain()
     render_pass: RenderPass = RenderPass()
     renderer: Renderer = Renderer.create()
+    cull: GpuCullPipeline = GpuCullPipeline()
     width: i32 = 0
     height: i32 = 0
     ready_flag: i32 = 0
@@ -86,6 +87,18 @@ attach EngineRuntime:
         renderer: Renderer = Renderer.create()
         renderer.init(ctx.vk_device, ctx.vk_physical_device, ctx.vk_graphics_queue, ctx.vk_present_queue)
         runtime.renderer = renderer
+
+        # GPU-driven culling: create the compute pipeline (Phase 0). This
+        # does NOT yet feed the graphics pass — it only proves the compute
+        # pipeline + descriptor layout build on the real device. Failure is
+        # non-fatal: the engine falls back to CPU culling.
+        cull: GpuCullPipeline = GpuCullPipeline()
+        if cull.init(ctx.vk_device, ctx.vk_physical_device) == 1:
+            print("[frog.cull] GPU culling pipeline ready")
+        else:
+            print("[frog.cull] GPU culling pipeline FAILED to init (CPU fallback)")
+        runtime.cull = cull
+
         runtime.ready_flag = 1
         return runtime
 
@@ -346,6 +359,7 @@ attach EngineRuntime:
             return
         self.release_mouse()
         vkDeviceWaitIdle(self.ctx.vk_device)
+        self.cull.cleanup()
         self.renderer.cleanup()
         self.render_pass.cleanup(self.ctx.vk_device)
         self.swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
