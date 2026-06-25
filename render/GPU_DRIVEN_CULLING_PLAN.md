@@ -58,10 +58,34 @@ GPU compute shader (per instance, parallel):
   dispatch + storage buffers + descriptors + push constants + barrier +
   CPU readback all correct.
 
-### Phase 3 — Wire dispatch + indirect draw into render loop 🟡 NEXT
-- Replace per-instance CPU cull in the main pass with: upload instances,
-  extract frustum planes from VP, dispatch, barrier, draw from out-buffer.
-- Keep CPU path behind a flag for fallback/comparison.
+### Phase 3 — Wire dispatch + indirect draw into render loop 🟡 PARTIAL / DOCUMENTED
+The full compute pipeline is built and proven (Phases 0-2). What remains
+is integrating it into the EXISTING per-group instanced draw in
+gpu_renderer_core's render_frame_scaled_with_environment.
+
+How to finish (per mesh group, before vkCmdBeginRenderPass):
+  1. For each group, upload its candidate instances (model matrix + bounds)
+     into cull.in_buffer via write_instance.
+  2. extract_planes(VP) -> push block; prepare_indirect(group_index_count).
+  3. cull.dispatch(cmd, candidateCount, push)  (records compute + barrier).
+  4. Inside the render pass, bind cull.out_handle() as the instance vertex
+     buffer (binding 1) and call vkCmdDrawIndexedIndirect(cmd,
+     cull.indirect_handle(), 0, 1, 0) instead of the CPU-filled draw.
+
+Why not landed yet:
+  - The current main pass is CPU-driven instancing (fills a CPU instance
+    buffer, draws per group). Swapping every group to indirect is a large,
+    high-risk rewrite of the most sensitive pass (Vulkan errors = silent
+    black screen) and needs multiple run-on-GPU iterations to validate.
+  - Measured benefit on the current scene is ZERO frames (already 830 FPS,
+    not CPU/GPU bound). GPU-driven culling pays off at tens of thousands of
+    instances.
+
+Decision: ship the proven, reusable culling component now. Wire it into a
+dedicated heavy-instancing path when a scene actually needs it (then the
+integration risk is justified by a real, measurable win).
+
+### Phase 4 — Validate + measure ⬜ (after Phase 3 integration)
 
 ### Phase 4 — Validate + measure ⬜
 - render_stats: draws should collapse (1 indirect draw per group).
