@@ -312,8 +312,10 @@ attach GpuCullPipeline:
         self.out_buffer = Memory.read_ptr(bp)
         self.out_memory = Memory.read_ptr(mp)
 
-        # count buffer: 4 bytes, STORAGE(0x20). Host-mapped so CPU resets it.
-        if _frog_cull_make_buffer(self.device, self.phys_device, 4, 32, bp, mp, map_pp) == 0:
+        # indirect command buffer: 20 bytes (VkDrawIndexedIndirectCommand),
+        # usage INDIRECT(0x100) | STORAGE(0x20) = 0x120 = 288. Host-mapped so
+        # the CPU can pre-fill indexCount and zero instanceCount each frame.
+        if _frog_cull_make_buffer(self.device, self.phys_device, 20, 288, bp, mp, map_pp) == 0:
             Memory.free(bp)
             Memory.free(mp)
             Memory.free(map_pp)
@@ -424,10 +426,36 @@ attach GpuCullPipeline:
         self.desc_set = 0
         self.capacity = 0
 
+    # Prepare the indirect draw command for this frame's group:
+    # write indexCount + firstIndex/vertexOffset/firstInstance, and zero
+    # instanceCount (the compute shader atomic-increments it per visible).
+    fun prepare_indirect(self, index_count: i32):
+        if self.count_mapped == 0:
+            return
+        Memory.write_i32(self.count_mapped + 0, index_count)   # indexCount
+        Memory.write_i32(self.count_mapped + 4, 0)             # instanceCount = 0
+        Memory.write_i32(self.count_mapped + 8, 0)             # firstIndex
+        Memory.write_i32(self.count_mapped + 12, 0)            # vertexOffset
+        Memory.write_i32(self.count_mapped + 16, 0)            # firstInstance
+
+    # Visible count the GPU computed (instanceCount field), read after the
+    # dispatch completes. Only valid once the command buffer has executed.
+    fun visible_count(self) -> i32:
+        if self.count_mapped == 0:
+            return 0
+        return Memory.read_i32(self.count_mapped + 4)
+
+    # Handles for the graphics pass.
+    fun out_handle(self) -> i64:
+        return self.out_buffer
+
+    fun indirect_handle(self) -> i64:
+        return self.count_buffer
+
     # Reset the visible-count buffer to 0 (CPU write, host-coherent).
     fun reset_count(self):
         if self.count_mapped != 0:
-            Memory.write_i32(self.count_mapped, 0)
+            Memory.write_i32(self.count_mapped + 4, 0)
 
     # Write one candidate instance (model matrix 64B + bounds 16B) into the
     # input buffer at slot `idx`. model_ptr = 64-byte column-major matrix.
@@ -464,14 +492,15 @@ attach GpuCullPipeline:
         groups: i32 = (instance_count + 63) / 64
         vkCmdDispatch(cmd, groups, 1, 1)
 
-        # Barrier: compute SHADER_WRITE -> vertex VERTEX_ATTRIBUTE_READ.
-        # VkMemoryBarrier = sType(4) pad(4) pNext(8) srcMask(4) dstMask(4) = 24B
+        # Barrier: compute SHADER_WRITE -> {vertex attribute read, indirect
+        # command read}. src=SHADER_WRITE(0x40); dst=VERTEX_ATTRIBUTE_READ(0x8)
+        # | INDIRECT_COMMAND_READ(0x2) = 0xA. srcStage=COMPUTE(0x800),
+        # dstStage=DRAW_INDIRECT(0x2) | VERTEX_INPUT(0x4) = 0x6.
         mb: i64 = Memory.malloc_zeroed(24)
         Memory.write_i32(mb, 46)                         # sType = MEMORY_BARRIER
-        Memory.write_i32(mb + 16, 64)                    # src = SHADER_WRITE (0x40)
-        Memory.write_i32(mb + 20, 8)                     # dst = VERTEX_ATTRIBUTE_READ (0x8)
-        # srcStage = COMPUTE_SHADER(0x800), dstStage = VERTEX_INPUT(0x4)
-        vkCmdPipelineBarrier(cmd, 2048, 4, 0, 1, mb, 0, 0, 0, 0)
+        Memory.write_i32(mb + 16, 64)                    # src = SHADER_WRITE
+        Memory.write_i32(mb + 20, 10)                    # dst = VERTEX_ATTR | INDIRECT
+        vkCmdPipelineBarrier(cmd, 2048, 6, 0, 1, mb, 0, 0, 0, 0)
         Memory.free(mb)
 
     # One-shot self-test: upload a few instances, dispatch the cull compute
@@ -514,7 +543,7 @@ attach GpuCullPipeline:
         Memory.write_f32(push + 80 + 12, 100000.0)
         Memory.write_i32(push + 96, 4)
 
-        self.reset_count()
+        self.prepare_indirect(36)
         cmd: i64 = gpu_tex_begin_oneshot(self.device, cmd_pool)
         if cmd == 0:
             Memory.free(push)
@@ -524,9 +553,7 @@ attach GpuCullPipeline:
         gpu_tex_end_oneshot(self.device, cmd_pool, gfx_queue, cmd)
         Memory.free(push)
 
-        visible: i32 = 0
-        if self.count_mapped != 0:
-            visible = Memory.read_i32(self.count_mapped)
+        visible: i32 = self.visible_count()
         print(@"[frog.cull] self_test visible={visible} (expected 2)")
 
 # Extract 6 frustum planes from a column-major view*projection matrix into
