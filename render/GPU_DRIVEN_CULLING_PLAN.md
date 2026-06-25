@@ -47,20 +47,21 @@ GPU compute shader (per instance, parallel):
   pipeline layout setLayoutCount@20, compute pipeline stage@24/layout@72,
   shader-stage struct stage@20).
 
-### Phase 1 — GPU buffers for instance data ⬜
-- Define GPU instance struct: mat4 (64B) + bounds vec4 (16B) = 80B.
-- Storage buffer holding all instances for a mesh group.
-- Indirect command buffer (VkDrawIndexedIndirectCommand = 20B each).
-- Count buffer (u32) for IndirectCount.
+### Phase 1 — GPU buffers for instance data ✅ DONE
+- GpuCullPipeline buffers: in (80B/inst), out (64B/inst), count (u32). ✅
+- ensure_capacity grows + reallocates; _update_descriptors binds them. ✅
 
-### Phase 2 — Culling compute shader ⬜
-- GLSL: read instance bounds, test vs 6 frustum planes, append cmd.
-- Compile to SPIR-V, embed like the other shaders.
+### Phase 2 — Culling compute shader ✅ DONE
+- cull.comp tests sphere vs 6 planes, atomic-appends visible columns. ✅
+- VERIFIED end-to-end via self_test: 4 instances, 2 inside frustum →
+  compute returns visibleCount=2. The whole GPU compute path works:
+  dispatch + storage buffers + descriptors + push constants + barrier +
+  CPU readback all correct.
 
-### Phase 3 — Wire dispatch + indirect draw into render loop ⬜
-- Replace the per-instance CPU cull loop with: upload, dispatch, barrier,
-  drawIndexedIndirectCount.
-- Keep the old CPU path behind a flag for fallback/comparison.
+### Phase 3 — Wire dispatch + indirect draw into render loop 🟡 NEXT
+- Replace per-instance CPU cull in the main pass with: upload instances,
+  extract frustum planes from VP, dispatch, barrier, draw from out-buffer.
+- Keep CPU path behind a flag for fallback/comparison.
 
 ### Phase 4 — Validate + measure ⬜
 - render_stats: draws should collapse (1 indirect draw per group).

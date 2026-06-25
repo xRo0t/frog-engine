@@ -474,6 +474,61 @@ attach GpuCullPipeline:
         vkCmdPipelineBarrier(cmd, 2048, 4, 0, 1, mb, 0, 0, 0, 0)
         Memory.free(mb)
 
+    # One-shot self-test: upload a few instances, dispatch the cull compute
+    # via a single-time command buffer, read back the visible count. Proves
+    # the compute path actually runs on the GPU and writes results, without
+    # touching the render loop. cmd_pool/gfx_queue from the render pass.
+    fun self_test(self, cmd_pool: i64, gfx_queue: i64):
+        if self.ready == 0:
+            print("[frog.cull] self_test skipped (not ready)")
+            return
+        if self.ensure_capacity(8) == 0:
+            print("[frog.cull] self_test FAILED ensure_capacity")
+            return
+
+        # Build 4 identity-positioned instances at different world X.
+        m: i64 = Memory.malloc_zeroed(64)
+        Memory.write_f32(m + 0, 1.0)
+        Memory.write_f32(m + 20, 1.0)
+        Memory.write_f32(m + 40, 1.0)
+        Memory.write_f32(m + 60, 1.0)
+        i: i32 = 0
+        while i < 4:
+            Memory.write_f32(m + 48, (i as f32) * 1000.0 - 1500.0)
+            self.write_instance(i, m, 0.0, 0.0, 0.0, 1.0)
+            i = i + 1
+        Memory.free(m)
+
+        push: i64 = Memory.malloc_zeroed(FROG_CULL_PUSH_SIZE)
+        Memory.write_f32(push + 0, 1.0)
+        Memory.write_f32(push + 12, 1000.0)
+        Memory.write_f32(push + 16 + 0, 0.0 - 1.0)
+        Memory.write_f32(push + 16 + 12, 1000.0)
+        Memory.write_f32(push + 32 + 4, 1.0)
+        Memory.write_f32(push + 32 + 12, 100000.0)
+        Memory.write_f32(push + 48 + 4, 0.0 - 1.0)
+        Memory.write_f32(push + 48 + 12, 100000.0)
+        Memory.write_f32(push + 64 + 8, 1.0)
+        Memory.write_f32(push + 64 + 12, 100000.0)
+        Memory.write_f32(push + 80 + 8, 0.0 - 1.0)
+        Memory.write_f32(push + 80 + 12, 100000.0)
+        Memory.write_i32(push + 96, 4)
+
+        self.reset_count()
+        cmd: i64 = gpu_tex_begin_oneshot(self.device, cmd_pool)
+        if cmd == 0:
+            Memory.free(push)
+            print("[frog.cull] self_test FAILED begin cmd")
+            return
+        self.dispatch(cmd, 4, push)
+        gpu_tex_end_oneshot(self.device, cmd_pool, gfx_queue, cmd)
+        Memory.free(push)
+
+        visible: i32 = 0
+        if self.count_mapped != 0:
+            visible = Memory.read_i32(self.count_mapped)
+        print(@"[frog.cull] self_test visible={visible} (expected 2)")
+
 # Extract 6 frustum planes from a column-major view*projection matrix into
 # `out` (6 x vec4 = 96 bytes). Gribb/Hartmann method. Planes are normalized.
 # Matrix layout: m[col*4 + row], i.e. element(row,col) = read_f32(vp + (col*4+row)*4).

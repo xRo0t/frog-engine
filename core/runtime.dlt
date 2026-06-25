@@ -95,6 +95,7 @@ attach EngineRuntime:
         cull: GpuCullPipeline = GpuCullPipeline()
         if cull.init(ctx.vk_device, ctx.vk_physical_device) == 1:
             print("[frog.cull] GPU culling pipeline ready")
+            cull.self_test(render_pass.vk_command_pool, ctx.vk_graphics_queue)
         else:
             print("[frog.cull] GPU culling pipeline FAILED to init (CPU fallback)")
         runtime.cull = cull
