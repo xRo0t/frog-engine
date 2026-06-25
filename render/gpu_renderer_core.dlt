@@ -250,6 +250,11 @@ struct GpuRendererCore:
     scratch_camera_view:  i64 = 0
     scratch_camera_proj:  i64 = 0
     instance_culling_enabled: i32 = 0
+    # GPU-driven culling: when enabled, the main pass culls + draws each
+    # group via compute + vkCmdDrawIndexedIndirect instead of CPU culling.
+    # 0 = CPU path (default, safe). Set via set_gpu_culling.
+    gpu_culling_enabled: i32 = 0
+    gpu_cull_ptr: i64 = 0    # borrowed GpuCullPipeline (owned by runtime)
     debug_render_stats_enabled: i32 = 0
     debug_frame_count: i32 = 0
     debug_draw_calls: i32 = 0
@@ -415,6 +420,16 @@ attach GpuRendererCore:
             self.instance_culling_enabled = 0
         else:
             self.instance_culling_enabled = 1
+
+    # Enable GPU-driven culling for the main pass. cull_ptr is a borrowed
+    # GpuCullPipeline (owned by the runtime). When enabled and the pipeline
+    # is ready, each mesh group culls + draws on the GPU via indirect draw.
+    fun set_gpu_culling(self, enabled: i32, cull_ptr: i64):
+        self.gpu_cull_ptr = cull_ptr
+        if enabled == 0:
+            self.gpu_culling_enabled = 0
+        else:
+            self.gpu_culling_enabled = 1
 
     fun set_directional_light(self, light_ptr: i64):
         if self.render_state == 0:
