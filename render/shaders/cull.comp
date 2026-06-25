@@ -2,36 +2,52 @@
 
 // GPU-driven frustum culling with indirect draw output.
 // One invocation per candidate instance. Visible instances are compacted
-// into the output instance buffer; the visible count is written into the
-// instanceCount field of a VkDrawIndexedIndirectCommand so the graphics
-// pass can issue a single vkCmdDrawIndexedIndirect with NO CPU readback.
+// (full 96-byte graphics instance record) into the output buffer; the
+// visible count is written into the instanceCount field of a
+// VkDrawIndexedIndirectCommand so the graphics pass issues ONE
+// vkCmdDrawIndexedIndirect per group with NO CPU readback.
 //
-// CullInstance input layout (80 bytes):
-//   mat4 model        (64 bytes, columns 0..3)
-//   vec4 bounds       (local center.xyz, local radius)
+// Candidate layout (112 bytes = 96 instance + 16 bounds):
+//   [0..63]   mat4 model (4 columns)
+//   [64..79]  vec4 material params
+//   [80..95]  vec4 uv transform
+//   [96..111] vec4 bounds (local center.xyz, local radius)
+//
+// Output layout (96 bytes, matches FROG_GPU_INSTANCE_STRIDE):
+//   [0..63] model  [64..79] material  [80..95] uv
 
 layout(local_size_x = 64) in;
 
-struct CullInstance {
+struct Candidate {
     vec4 col0;
     vec4 col1;
     vec4 col2;
     vec4 col3;
+    vec4 material;
+    vec4 uv;
     vec4 bounds;
 };
 
+struct OutInstance {
+    vec4 col0;
+    vec4 col1;
+    vec4 col2;
+    vec4 col3;
+    vec4 material;
+    vec4 uv;
+};
+
 layout(std430, binding = 0) readonly buffer InInstances {
-    CullInstance inInstances[];
+    Candidate inInstances[];
 };
 
-// Compacted visible instances: 4 vec4 (model columns) per visible instance.
 layout(std430, binding = 1) writeonly buffer OutInstances {
-    vec4 outColumns[];
+    OutInstance outInstances[];
 };
 
-// VkDrawIndexedIndirectCommand: {indexCount, instanceCount, firstIndex,
-// vertexOffset, firstInstance}. The CPU pre-fills indexCount/firstIndex/etc.
-// and zeroes instanceCount; the compute atomic-increments instanceCount.
+// VkDrawIndexedIndirectCommand {indexCount, instanceCount, firstIndex,
+// vertexOffset, firstInstance}. CPU pre-fills indexCount + zeroes
+// instanceCount; compute atomic-increments instanceCount per visible.
 layout(std430, binding = 2) buffer IndirectCmd {
     uint indexCount;
     uint instanceCount;
@@ -54,7 +70,7 @@ void main() {
         return;
     }
 
-    CullInstance inst = inInstances[idx];
+    Candidate inst = inInstances[idx];
     mat4 model = mat4(inst.col0, inst.col1, inst.col2, inst.col3);
     vec3 centerWorld = (model * vec4(inst.bounds.xyz, 1.0)).xyz;
 
@@ -75,10 +91,11 @@ void main() {
 
     if (visible) {
         uint slot = atomicAdd(instanceCount, 1u);
-        uint base = slot * 4u;
-        outColumns[base + 0u] = inst.col0;
-        outColumns[base + 1u] = inst.col1;
-        outColumns[base + 2u] = inst.col2;
-        outColumns[base + 3u] = inst.col3;
+        outInstances[slot].col0 = inst.col0;
+        outInstances[slot].col1 = inst.col1;
+        outInstances[slot].col2 = inst.col2;
+        outInstances[slot].col3 = inst.col3;
+        outInstances[slot].material = inst.material;
+        outInstances[slot].uv = inst.uv;
     }
 }

@@ -14,13 +14,16 @@
 # The graphics integration lives in gpu_renderer_core.dlt.
 ##############################
 
-# A candidate instance as seen by the compute shader: 80 bytes.
-#   [0..63]  model matrix (4 columns x vec4)
-#   [64..79] bounds sphere (center.xyz, radius)
-FROG_CULL_INSTANCE_STRIDE: i32 = 80
-# A compacted output instance: just the 64-byte model matrix (4 x vec4),
-# matching what the graphics per-instance vertex buffer expects.
-FROG_CULL_OUT_STRIDE: i32 = 64
+# A candidate instance as seen by the compute shader: 112 bytes.
+#   [0..63]   model matrix (4 columns x vec4)
+#   [64..79]  material params (vec4)
+#   [80..95]  uv transform (vec4)
+#   [96..111] bounds sphere (center.xyz, radius)
+FROG_CULL_INSTANCE_STRIDE: i32 = 112
+# A compacted output instance: the full 96-byte graphics instance record
+# (model + material + uv), matching FROG_GPU_INSTANCE_STRIDE so the
+# graphics pass binds it directly as the per-instance vertex buffer.
+FROG_CULL_OUT_STRIDE: i32 = 96
 # Push-constant block: 6 planes (vec4) + 4 u32 = 96 + 16 = 112 bytes.
 FROG_CULL_PUSH_SIZE: i32 = 112
 
@@ -458,7 +461,9 @@ attach GpuCullPipeline:
             Memory.write_i32(self.count_mapped + 4, 0)
 
     # Write one candidate instance (model matrix 64B + bounds 16B) into the
-    # input buffer at slot `idx`. model_ptr = 64-byte column-major matrix.
+    # Write a candidate from a 64-byte model matrix + bounds (material/uv
+    # zeroed). Used by self_test. Layout: [0..63]model [64..79]material
+    # [80..95]uv [96..111]bounds.
     fun write_instance(self, idx: i32, model_ptr: i64, cx: f32, cy: f32, cz: f32, radius: f32):
         if self.in_mapped == 0:
             return
@@ -468,10 +473,28 @@ attach GpuCullPipeline:
             return
         dst: i64 = self.in_mapped + (idx as i64) * (FROG_CULL_INSTANCE_STRIDE as i64)
         Memory.copy(dst, model_ptr, 64)
-        Memory.write_f32(dst + 64, cx)
-        Memory.write_f32(dst + 68, cy)
-        Memory.write_f32(dst + 72, cz)
-        Memory.write_f32(dst + 76, radius)
+        Memory.set(dst + 64, 0, 32)         # zero material + uv
+        Memory.write_f32(dst + 96, cx)
+        Memory.write_f32(dst + 100, cy)
+        Memory.write_f32(dst + 104, cz)
+        Memory.write_f32(dst + 108, radius)
+
+    # Write a candidate from a full 96-byte graphics instance record
+    # (model+material+uv at inst_ptr) plus its bounding sphere. Used by the
+    # render-loop integration so culled output is draw-ready.
+    fun write_full_instance(self, idx: i32, inst_ptr: i64, cx: f32, cy: f32, cz: f32, radius: f32):
+        if self.in_mapped == 0:
+            return
+        if idx < 0:
+            return
+        if idx >= self.capacity:
+            return
+        dst: i64 = self.in_mapped + (idx as i64) * (FROG_CULL_INSTANCE_STRIDE as i64)
+        Memory.copy(dst, inst_ptr, 96)
+        Memory.write_f32(dst + 96, cx)
+        Memory.write_f32(dst + 100, cy)
+        Memory.write_f32(dst + 104, cz)
+        Memory.write_f32(dst + 108, radius)
 
     # Record the culling dispatch into `cmd`. push_ptr points at a filled
     # FROG_CULL_PUSH_SIZE block (6 planes + instanceCount + pad). After this
