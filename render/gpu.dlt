@@ -19,6 +19,11 @@ fun gpu_set_transform(ren: GpuRendererCore, mesh_id: i32, x: f32, y: f32, z: f32
     m.write_to_ptr(mat_ptr)
     if Memory.read_ptr(ren.model_matrices + mesh_id * 8) == 0:
         ren.set_model_matrix(mesh_id, mat_ptr)
+    else:
+        # In-place matrix update: the GPU cull candidate buffer caches this
+        # matrix, so mark it stale or the GPU-drawn mesh stays at the old
+        # transform while CPU-side collision/shadow move.
+        ren._mark_cull_dirty()
 
 # Set a mesh's model matrix directly from a 64-byte (16 x f32) column-major
 # matrix at `src`. Used for view-locked objects (e.g. an FPS viewmodel) where
@@ -40,6 +45,8 @@ fun gpu_set_model_matrix_raw(ren: GpuRendererCore, mesh_id: i32, src: i64):
     Memory.copy(mat_ptr, src, 64)
     if Memory.read_ptr(ren.model_matrices + mesh_id * 8) == 0:
         ren.set_model_matrix(mesh_id, mat_ptr)
+    else:
+        ren._mark_cull_dirty()
 
 fun gpu_camera_view_into(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32, m: i64):
     if m == 0:
