@@ -99,14 +99,25 @@ attach EngineRuntime:
         else:
             print("[frog.cull] GPU culling pipeline FAILED to init (CPU fallback)")
         runtime.cull = cull
-        # Phase 3 step 1: point the renderer at the runtime-owned cull
-        # pipeline and enable per-frame GPU cull verification. This only
-        # prints visible counts for comparison; it does NOT change rendering.
-        if runtime.cull.ready == 1:
-            runtime.renderer.core.set_gpu_culling(1, runtime.cull as i64)
+        # NOTE: do NOT bind the cull pointer to the renderer here. `runtime`
+        # is a local that gets copied by value into g_engine_runtime on
+        # return, which would leave the renderer holding a dangling pointer to
+        # this local's `cull`. Engine.start() calls bind_cull() AFTER the
+        # final runtime is in place, so gpu_cull_ptr points at the persistent
+        # g_engine_runtime.cull.
+        runtime.renderer.core.set_culling_mode(FROG_CULL_MODE_CPU)
 
         runtime.ready_flag = 1
         return runtime
+
+    # Bind the (now stably-located) cull pipeline to the renderer. Must be
+    # called after this runtime is stored in its final home (g_engine_runtime),
+    # so the renderer's borrowed pointer stays valid across frames.
+    fun bind_cull(self):
+        if self.ready_flag == 0:
+            return
+        if self.cull.ready == 1:
+            self.renderer.core.set_gpu_culling(1, self.cull as i64)
 
     fun ready(self) -> i32:
         return self.ready_flag
@@ -243,6 +254,14 @@ attach EngineRuntime:
 
     fun set_instance_culling(self, enabled: i32):
         self.renderer.set_instance_culling(enabled)
+
+    # Select the culling strategy for the main pass:
+    #   FROG_CULL_MODE_CPU (default), _GPU, or _AUTO.
+    fun set_culling_mode(self, mode: i32):
+        self.renderer.set_culling_mode(mode)
+
+    fun set_culling_auto_threshold(self, threshold: i32):
+        self.renderer.set_culling_auto_threshold(threshold)
 
     fun set_directional_light(self, light_ptr: i64):
         self.renderer.set_directional_light(light_ptr)

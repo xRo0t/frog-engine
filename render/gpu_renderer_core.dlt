@@ -1,5 +1,5 @@
-##############################
-# Frog Engine — GpuRendererCore
+﻿##############################
+# Frog Engine â€” GpuRendererCore
 # ECS-aware Vulkan renderer
 # Queries Scene for renderable entities
 ##############################
@@ -255,6 +255,31 @@ struct GpuRendererCore:
     # 0 = CPU path (default, safe). Set via set_gpu_culling.
     gpu_culling_enabled: i32 = 0
     gpu_cull_ptr: i64 = 0    # borrowed GpuCullPipeline (owned by runtime)
+    gpu_cull_verify_enabled: i32 = 0   # debug: print GPU vs CPU visible counts
+    # Phase 3 step 2: actually DRAW from the GPU-culled output (indirect).
+    # Separate flag so verification (above) and drawing can be toggled apart.
+    gpu_draw_enabled: i32 = 0
+    # Culling mode selection (CPU vs GPU-driven). 0 = CPU (default/safe),
+    # 1 = GPU forced, 2 = Auto (GPU when instance count >= threshold).
+    # The mode resolves to gpu_draw_enabled at render time.
+    culling_mode: i32 = 0
+    culling_auto_threshold: i32 = 2000
+    # Per-frame group tracking shared between the pre-cull pass and the
+    # indirect draw pass. Each slot describes one drawable mesh group.
+    gpu_grp_mi: i64 = 0        # i32[]: representative mesh index of the group
+    gpu_grp_outbase: i64 = 0   # i32[]: first output slot for the group
+    gpu_grp_count: i64 = 0     # i32[]: candidate count for the group
+    gpu_grp_indexed: i64 = 0   # i32[]: 1 if the group draws indexed
+    gpu_grp_cmd: i64 = 0       # i32[]: absolute indirect-command index
+    gpu_grp_inbase: i64 = 0    # i32[]: first INPUT candidate index (persistent)
+    gpu_grp_draw: i64 = 0      # i32[]: index/vertex count for the draw
+    gpu_grp_capacity: i32 = 0
+    gpu_grp_n: i32 = 0
+    gpu_slot_grpn: i64 = 0     # i32[FROG_CULL_SLOTS]: group count last written per slot
+    gpu_slot_cmdbase: i64 = 0  # i32[FROG_CULL_SLOTS]: cmd base index per slot
+    gpu_cull_push: i64 = 0     # 112B push-constant scratch (planes + group fields)
+    gpu_cull_rec: i64 = 0      # 96B instance-record scratch
+    gpu_cull_slot: i32 = 0     # frame slot the current precull wrote into
     debug_render_stats_enabled: i32 = 0
     debug_frame_count: i32 = 0
     debug_draw_calls: i32 = 0
@@ -402,6 +427,21 @@ attach GpuRendererCore:
         Memory.write_i64(self.scratch_off_arr, 0)
         Memory.write_i64(self.scratch_inst_off_arr, 0)
         self.instance_culling_enabled = 0
+        # GPU-driven draw: per-frame group tracking arrays (mi / outBase /
+        # candidate count). Sized to FROG_CULL_MAX_GROUPS.
+        self.gpu_grp_capacity = FROG_CULL_MAX_GROUPS
+        self.gpu_grp_mi = Memory.malloc_zeroed((FROG_CULL_MAX_GROUPS as i64) * 4)
+        self.gpu_grp_outbase = Memory.malloc_zeroed((FROG_CULL_MAX_GROUPS as i64) * 4)
+        self.gpu_grp_count = Memory.malloc_zeroed((FROG_CULL_MAX_GROUPS as i64) * 4)
+        self.gpu_grp_indexed = Memory.malloc_zeroed((FROG_CULL_MAX_GROUPS as i64) * 4)
+        self.gpu_grp_cmd = Memory.malloc_zeroed((FROG_CULL_MAX_GROUPS as i64) * 4)
+        self.gpu_grp_inbase = Memory.malloc_zeroed((FROG_CULL_MAX_GROUPS as i64) * 4)
+        self.gpu_grp_draw = Memory.malloc_zeroed((FROG_CULL_MAX_GROUPS as i64) * 4)
+        self.gpu_grp_n = 0
+        self.gpu_cull_push = Memory.malloc_zeroed(FROG_CULL_PUSH_SIZE)
+        self.gpu_cull_rec = Memory.malloc_zeroed(96)
+        self.gpu_slot_grpn = Memory.malloc_zeroed((FROG_CULL_SLOTS as i64) * 4)
+        self.gpu_slot_cmdbase = Memory.malloc_zeroed((FROG_CULL_SLOTS as i64) * 4)
         self.retire_capacity = 0
         self.retire_count = 0
         self.pooled_capacity = 2048
@@ -430,6 +470,61 @@ attach GpuRendererCore:
             self.gpu_culling_enabled = 0
         else:
             self.gpu_culling_enabled = 1
+
+    # Phase 3 step 2: toggle the GPU-driven indirect DRAW path for the main
+    # pass. Requires set_gpu_culling to have provided the pipeline. Default
+    # off; the CPU draw path stays the safe fallback.
+    fun set_gpu_draw(self, enabled: i32):
+        if enabled == 0:
+            self.gpu_draw_enabled = 0
+        else:
+            self.gpu_draw_enabled = 1
+
+    # Public culling-mode API. mode: 0 = CPU, 1 = GPU, 2 = Auto.
+    # GPU/Auto require a ready GpuCullPipeline (set_gpu_culling). If the
+    # pipeline is not ready, falls back to CPU with a warning.
+    fun set_culling_mode(self, mode: i32):
+        m: i32 = mode
+        if m < 0:
+            m = 0
+        if m > 2:
+            m = 0
+        if m != 0:
+            ready: i32 = 0
+            if self.gpu_cull_ptr != 0:
+                cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
+                ready = cull.ready
+            if ready == 0:
+                print("[frog.cull] GPU culling not ready; CPU fallback")
+                m = 0
+        self.culling_mode = m
+
+    # Threshold (instance count) above which Auto mode uses the GPU path.
+    fun set_culling_auto_threshold(self, threshold: i32):
+        if threshold < 1:
+            self.culling_auto_threshold = 1
+        else:
+            self.culling_auto_threshold = threshold
+
+    # Resolve culling_mode to the effective gpu_draw_enabled for this frame.
+    # CPU(0) -> 0; GPU(1) -> 1; Auto(2) -> 1 when vb_count >= threshold.
+    fun _resolve_culling_mode(self):
+        if self.culling_mode == 0:
+            self.gpu_draw_enabled = 0
+        elif self.culling_mode == 1:
+            self.gpu_draw_enabled = 1
+        else:
+            if self.vb_count >= self.culling_auto_threshold:
+                self.gpu_draw_enabled = 1
+            else:
+                self.gpu_draw_enabled = 0
+
+    # Debug: enable per-frame GPU-vs-CPU visible-count printing (CPU mode).
+    fun set_gpu_cull_verify(self, enabled: i32):
+        if enabled == 0:
+            self.gpu_cull_verify_enabled = 0
+        else:
+            self.gpu_cull_verify_enabled = 1
 
     # PHASE 3 STEP 1 (verification, no rendering change): run the GPU cull
     # over the whole scene in parallel with the CPU and print how many
@@ -479,17 +574,287 @@ attach GpuRendererCore:
         frog_cull_extract_planes(vp_mat, push)
         Memory.write_i32(push + 96, cand)
 
-        cull.prepare_indirect(36)
+        cull.prepare_group_cmd(0, 36, 0)
         cmd: i64 = gpu_tex_begin_oneshot(self.device, cmd_pool)
         if cmd == 0:
             Memory.free(push)
             return
-        cull.dispatch(cmd, cand, push)
+        cull.dispatch_group(cmd, cand, 0, 0, 0, push)
+        cull.barrier_after_dispatches(cmd)
         gpu_tex_end_oneshot(self.device, cmd_pool, self.gfx_queue, cmd)
         Memory.free(push)
 
-        gpu_visible: i32 = cull.visible_count()
+        gpu_visible: i32 = cull.group_visible_count(0)
         print(@"[frog.cull] scene cull: candidates={cand} gpu_visible={gpu_visible}")
+
+    # GPU-driven culling pre-pass. Persistent-input architecture:
+    #   - The candidate records are uploaded to the GPU ONCE (and re-packed
+    #     only when the scene is marked dirty), NOT every frame. This removes
+    #     the per-frame CPU pack/copy of all instances (the real bottleneck
+    #     at high instance counts).
+    #   - Per frame we only: fill each group's output range, prepare its
+    #     indirect command, and record the cull dispatch (reading the
+    #     persistent input). Output + indirect are slot-partitioned.
+    # `slot` selects the output/command partition. vp_mat is proj*view.
+    fun gpu_precull_main(self, cmd: i64, vp_mat: i64, slot: i32) -> i32:
+        if self.gpu_cull_ptr == 0:
+            return 0
+        if vp_mat == 0:
+            return 0
+        cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
+        if cull.ready == 0:
+            return 0
+        if self.vb_count <= 0:
+            return 0
+        if cull.ensure_capacity(self.vb_count) == 0:
+            return 0
+
+        self.gpu_cull_slot = slot
+
+        # (Re)build the persistent candidate buffer + group metadata only when
+        # the scene changed. ensure_capacity sets dirty on (re)allocation.
+        if cull.is_dirty() == 1:
+            self._gpu_cull_rebuild(cull)
+            cull.clear_dirty(self.gpu_grp_n)
+
+        cmd_base0: i32 = cull.slot_cmd_base(slot)   # this slot's command base
+        out_base0: i32 = cull.slot_out_base(slot)   # this slot's output base
+
+        # Frustum planes (cheap, per frame).
+        push: i64 = self.gpu_cull_push
+        Memory.set(push, 0, FROG_CULL_PUSH_SIZE)
+        frog_cull_extract_planes(vp_mat, push)
+
+        # Ensure the CPU's per-frame writes to the host-mapped input + indirect
+        # buffers are visible to the compute pass before it dispatches (fixes
+        # NVIDIA-only flicker from a host-write/compute-read race).
+        cull.barrier_before_dispatches(cmd)
+
+        # Per frame: dispatch each cached group reading the persistent input.
+        out_cursor: i32 = out_base0
+        g: i32 = 0
+        while g < self.gpu_grp_n:
+            in_base: i32 = Memory.read_i32(self.gpu_grp_inbase + g * 4)
+            group_n: i32 = Memory.read_i32(self.gpu_grp_count + g * 4)
+            indexed: i32 = Memory.read_i32(self.gpu_grp_indexed + g * 4)
+            draw_count: i32 = Memory.read_i32(self.gpu_grp_draw + g * 4)
+            cmd_index: i32 = cmd_base0 + g
+            out_base: i32 = out_cursor
+            cull.prepare_group_cmd(cmd_index, draw_count, indexed)
+            # NOTE: no full out_buffer clear here. The indirect draw reads only
+            # instanceCount visible records (slots 0..count-1, written densely
+            # by the compute compaction), so stale tail data is never drawn.
+            # prepare_group_cmd already zeroes instanceCount. (vkCmdFillBuffer
+            # of the whole output was ~9.8MB/frame at 100K â€” removed.)
+            cull.dispatch_group(cmd, group_n, in_base, out_base, cmd_index, push)
+            # Cache this slot's per-group draw bindings for gpu_draw_main.
+            Memory.write_i32(self.gpu_grp_outbase + g * 4, out_base)
+            Memory.write_i32(self.gpu_grp_cmd + g * 4, cmd_index)
+            out_cursor = out_cursor + group_n
+            g = g + 1
+
+        cull.barrier_after_dispatches(cmd)
+        Memory.write_i32(self.gpu_slot_grpn + slot * 4, self.gpu_grp_n)
+        Memory.write_i32(self.gpu_slot_cmdbase + slot * 4, cmd_base0)
+        return self.gpu_grp_n
+
+    # Rebuild the persistent candidate input buffer + group metadata from the
+    # current mesh registry. Runs ONLY when the scene is dirty (instances
+    # added/removed/moved), NOT every frame. Mirrors the CPU grouping keys so
+    # the GPU output matches the CPU draw path visually.
+    fun _gpu_cull_rebuild(self, cull: GpuCullPipeline):
+        self.gpu_grp_n = 0
+        in_cursor: i32 = 0          # next slot in the persistent input buffer
+        grp: i32 = 0
+        mi: i32 = 0
+        while mi < self.vb_count:
+            vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
+            vc: i32 = Memory.read_i32(self.vb_vert_counts + mi * 4)
+            ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
+            ic: i32 = Memory.read_i32(self.ib_index_counts + mi * 4)
+            model_ptr: i64 = 0
+            if self.model_matrices != 0:
+                model_ptr = Memory.read_ptr(self.model_matrices + mi * 8)
+            if vb_handle == 0 or vc <= 0 or model_ptr == 0:
+                mi = mi + 1
+            else:
+                indexed: i32 = 0
+                if ib_handle != 0:
+                    if ic > 0:
+                        indexed = 1
+                group_in_base: i32 = in_cursor
+                group_n: i32 = 0
+                g_tex0: i32 = self._grp_tex(self.mesh_tex_ids, mi)
+                g_emi0: i32 = self._grp_tex(self.mesh_emissive_tex_ids, mi)
+                g_nrm0: i32 = self._grp_tex(self.mesh_normal_tex_ids, mi)
+                g_mr0: i32 = self._grp_tex(self.mesh_metallic_roughness_tex_ids, mi)
+                g_occ0: i32 = self._grp_tex(self.mesh_occlusion_tex_ids, mi)
+                gi: i32 = mi
+                group_span: i32 = 0
+                while gi < self.vb_count:
+                    g_vb: i64 = Memory.read_ptr(self.vb_handles + gi * 8)
+                    g_vc: i32 = Memory.read_i32(self.vb_vert_counts + gi * 4)
+                    g_ib: i64 = Memory.read_ptr(self.ib_handles + gi * 8)
+                    g_ic: i32 = Memory.read_i32(self.ib_index_counts + gi * 4)
+                    g_model: i64 = Memory.read_ptr(self.model_matrices + gi * 8)
+                    if g_vb != vb_handle:
+                        gi = self.vb_count
+                    elif g_vc != vc:
+                        gi = self.vb_count
+                    elif g_ib != ib_handle:
+                        gi = self.vb_count
+                    elif g_ic != ic:
+                        gi = self.vb_count
+                    elif self._grp_tex(self.mesh_tex_ids, gi) != g_tex0:
+                        gi = self.vb_count
+                    elif self._grp_tex(self.mesh_emissive_tex_ids, gi) != g_emi0:
+                        gi = self.vb_count
+                    elif self._grp_tex(self.mesh_normal_tex_ids, gi) != g_nrm0:
+                        gi = self.vb_count
+                    elif self._grp_tex(self.mesh_metallic_roughness_tex_ids, gi) != g_mr0:
+                        gi = self.vb_count
+                    elif self._grp_tex(self.mesh_occlusion_tex_ids, gi) != g_occ0:
+                        gi = self.vb_count
+                    elif g_model == 0:
+                        gi = self.vb_count
+                    else:
+                        vis: i32 = 1
+                        if self.vb_visible != 0:
+                            if Memory.read_i32(self.vb_visible + gi * 4) == 0:
+                                vis = 0
+                        if vis == 1:
+                            self._cull_upload_instance(cull, in_cursor, gi, g_model)
+                            in_cursor = in_cursor + 1
+                            group_n = group_n + 1
+                        group_span = group_span + 1
+                        gi = gi + 1
+
+                if group_n > 0:
+                    if grp < FROG_CULL_MAX_GROUPS:
+                        draw_count: i32 = ic
+                        if indexed == 0:
+                            draw_count = vc
+                        Memory.write_i32(self.gpu_grp_mi + grp * 4, mi)
+                        Memory.write_i32(self.gpu_grp_inbase + grp * 4, group_in_base)
+                        Memory.write_i32(self.gpu_grp_count + grp * 4, group_n)
+                        Memory.write_i32(self.gpu_grp_indexed + grp * 4, indexed)
+                        Memory.write_i32(self.gpu_grp_draw + grp * 4, draw_count)
+                        grp = grp + 1
+                if group_span > 0:
+                    mi = mi + group_span
+                else:
+                    mi = mi + 1
+        self.gpu_grp_n = grp
+
+    # Read texture-id array `arr` at index i (returns -1 when array unset).
+    fun _grp_tex(self, arr: i64, i: i32) -> i32:
+        if arr == 0:
+            return 0 - 1
+        return Memory.read_i32(arr + i * 4)
+
+    # Mark the persistent GPU cull input as stale (scene changed: instance
+    # added/removed/moved/visibility toggled), so the next GPU precull rebuilds
+    # the candidate buffer. No-op when no cull pipeline is attached.
+    fun _mark_cull_dirty(self):
+        if self.gpu_cull_ptr != 0:
+            cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
+            cull.mark_dirty()
+
+    fun _mark_cull_dirty_struct(self):
+        if self.gpu_cull_ptr != 0:
+            cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
+            cull.mark_dirty()
+
+    # Upload mesh `gi`'s instance record (model + material + uv) and bounding
+    # sphere into the cull input buffer at slot `dst_idx`.
+    fun _cull_upload_instance(self, cull: GpuCullPipeline, dst_idx: i32, gi: i32, g_model: i64):
+        bx: f32 = 0.0
+        by: f32 = 0.0
+        bz: f32 = 0.0
+        br: f32 = 8.0
+        if self.mesh_bound_rs != 0:
+            bx = Memory.read_f32(self.mesh_bound_xs + gi * 4)
+            by = Memory.read_f32(self.mesh_bound_ys + gi * 4)
+            bz = Memory.read_f32(self.mesh_bound_zs + gi * 4)
+            br = Memory.read_f32(self.mesh_bound_rs + gi * 4)
+            if br <= 0.0:
+                br = 8.0
+        rec: i64 = self.gpu_cull_rec
+        Memory.copy(rec, g_model, 64)
+        # Material + uv: mirror the CPU path exactly.
+        if self.mesh_material_params != 0:
+            Memory.copy(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET, self.mesh_material_params + gi * 32, 32)
+        else:
+            Memory.write_f32(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET, 0.0)
+            Memory.write_f32(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 4, 1.0)
+            Memory.write_f32(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 8, 0.0)
+            Memory.write_f32(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 12, 0.0)
+            Memory.write_f32(rec + FROG_GPU_INSTANCE_UV_OFFSET, 1.0)
+            Memory.write_f32(rec + FROG_GPU_INSTANCE_UV_OFFSET + 4, 1.0)
+            Memory.write_f32(rec + FROG_GPU_INSTANCE_UV_OFFSET + 8, 0.0)
+            Memory.write_f32(rec + FROG_GPU_INSTANCE_UV_OFFSET + 12, 0.0)
+        # Shadow-receive bit packed into material.w (matches CPU path).
+        receive_shadow: i32 = 1
+        if self.mesh_shadow_flags != 0:
+            shadow_flags: i32 = Memory.read_i32(self.mesh_shadow_flags + gi * 4)
+            receive_shadow = (shadow_flags / 2) - (shadow_flags / 4) * 2
+        if receive_shadow == 1:
+            packed_material: f32 = Memory.read_f32(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 12)
+            Memory.write_f32(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 12, packed_material + 65536.0)
+        cull.write_full_instance(dst_idx, rec, bx, by, bz, br)
+
+    # In-pass indirect draw. For each prepared group, bind the GPU-culled
+    # output buffer (at the group's byte offset) as the instance vertex
+    # buffer and issue an indexed or non-indexed indirect draw. Must run
+    # INSIDE the active render pass with the main pipeline bound.
+    fun gpu_draw_main(self, cmd: i64, rp: RenderPass):
+        if self.gpu_cull_ptr == 0:
+            return
+        cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
+        out_buf: i64 = cull.out_handle()
+        ind_buf: i64 = cull.indirect_handle()
+        if out_buf == 0 or ind_buf == 0:
+            return
+        last_vb: i64 = 0
+        last_index_bound: i64 = 0
+        last_desc: i64 = 0
+        g: i32 = 0
+        while g < self.gpu_grp_n:
+            mi: i32 = Memory.read_i32(self.gpu_grp_mi + g * 4)
+            out_base: i32 = Memory.read_i32(self.gpu_grp_outbase + g * 4)
+            indexed: i32 = Memory.read_i32(self.gpu_grp_indexed + g * 4)
+            cmd_index: i32 = Memory.read_i32(self.gpu_grp_cmd + g * 4)
+            vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
+            ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
+
+            if vb_handle != last_vb:
+                Memory.write_ptr(self.scratch_vb_arr, vb_handle)
+                vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
+                last_vb = vb_handle
+
+            # Instance buffer = GPU-culled output. Bind at the group's byte
+            # offset (out_base * stride) and keep the indirect command's
+            # firstInstance=0, so we don't need drawIndirectFirstInstance.
+            Memory.write_ptr(self.scratch_inst_vb_arr, out_buf)
+            Memory.write_i64(self.scratch_inst_off_arr, (out_base as i64) * (FROG_CULL_OUT_STRIDE as i64))
+            vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
+
+            grp_desc: i64 = self.mesh_descriptor_set(rp, mi)
+            if grp_desc != 0:
+                if grp_desc != last_desc:
+                    Memory.write_ptr(self.scratch_desc_arr, grp_desc)
+                    vkCmdBindDescriptorSets(cmd, 0, rp.vk_pipeline_layout, 0, 1, self.scratch_desc_arr, 0, 0)
+                    last_desc = grp_desc
+
+            cmd_off: i64 = cull.group_cmd_offset(cmd_index)
+            if indexed == 1:
+                if ib_handle != last_index_bound:
+                    vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
+                    last_index_bound = ib_handle
+                vkCmdDrawIndexedIndirect(cmd, ind_buf, cmd_off, 1, 20)
+            else:
+                vkCmdDrawIndirect(cmd, ind_buf, cmd_off, 1, 16)
+            g = g + 1
 
     fun set_directional_light(self, light_ptr: i64):
         if self.render_state == 0:
@@ -1684,6 +2049,7 @@ attach GpuRendererCore:
             Memory.write_f32(self.mesh_shadow_distances + idx * 4, Memory.read_f32(self.mesh_shadow_distances + src_vb_idx * 4))
         self._copy_mesh_bounds(idx, src_vb_idx)
         self.vb_count = idx + 1
+        self._mark_cull_dirty_struct()
         return idx
 
     fun set_instance_visible(self, mesh_id: i32, on: i32):
@@ -1697,6 +2063,7 @@ attach GpuRendererCore:
         if on == 0:
             v = 0
         Memory.write_i32(self.vb_visible + mesh_id * 4, v)
+        self._mark_cull_dirty()
 
     fun set_model_matrix(self, vb_idx: i32, mat_ptr: i64) -> void:
         if vb_idx < 0:
@@ -1710,6 +2077,7 @@ attach GpuRendererCore:
             if old_ptr != mat_ptr:
                 Memory.free(old_ptr)
         Memory.write_ptr(self.model_matrices + vb_idx * 8, mat_ptr)
+        self._mark_cull_dirty()
 
     # Register an uploaded GpuTexture, creating its descriptor set via the render
     # pass. Returns the texture id (index into the registry) or -1 on failure.
@@ -2530,21 +2898,24 @@ attach GpuRendererCore:
             return
         self._ensure_shadow_target(rp)
 
+        # Resolve CPU vs GPU-driven culling for this frame (mode-driven).
+        self._resolve_culling_mode()
+
         current_fence: i64 = Memory.read_ptr(rp.in_flight_fences + self.current_frame * 8)
         Memory.write_ptr(rp.frame_fence_arr, current_fence)
         vkWaitForFences(device, 1, rp.frame_fence_arr, 1, 0 - 1)
 
-        # PHASE 3 STEP 1: GPU cull verification (no render change). Runs the
-        # GPU cull over the whole scene and prints the visible count for
-        # comparison with the CPU. Safe here: previous frame's GPU work is
-        # done (we just waited on its fence). Only when explicitly enabled.
-        if self.gpu_culling_enabled == 1:
-            verify_vp: i64 = self.scratch_vp_matrix
-            if verify_vp != 0:
-                if cam_view != 0:
-                    if cam_proj != 0:
-                        _frog_multiply_4x4_into(cam_proj, cam_view, verify_vp)
-                        self.gpu_cull_verify(rp.vk_command_pool, verify_vp)
+        # GPU cull verification path (no render change): prints visible
+        # counts for comparison with the CPU. Off by default; opt-in only via
+        # set_gpu_cull_verify(1) for debugging.
+        if self.gpu_cull_verify_enabled == 1:
+            if self.gpu_draw_enabled == 0:
+                verify_vp: i64 = self.scratch_vp_matrix
+                if verify_vp != 0:
+                    if cam_view != 0:
+                        if cam_proj != 0:
+                            _frog_multiply_4x4_into(cam_proj, cam_view, verify_vp)
+                            self.gpu_cull_verify(rp.vk_command_pool, verify_vp)
 
         # Acquire next image (reset fence AFTER successful acquire to avoid deadlock)
         Memory.write_i32(rp.frame_img_idx_ptr, 0)
@@ -3003,6 +3374,19 @@ attach GpuRendererCore:
                 shadow_enabled = 0
                 Memory.write_f32(shadow_global_mapped + 128, 0.0)
 
+        # GPU-driven culling pre-pass: record the cull compute dispatches
+        # into THIS frame command buffer, before the render pass begins. The
+        # compute writes a compacted instance buffer + indirect commands that
+        # the in-pass draw consumes. Slot-partitioned for frames-in-flight.
+        if self.gpu_draw_enabled == 1:
+            if self.vb_count > 0:
+                if cam_view != 0:
+                    if cam_proj != 0:
+                        precull_vp: i64 = self.scratch_vp_matrix
+                        if precull_vp != 0:
+                            _frog_multiply_4x4_into(cam_proj, cam_view, precull_vp)
+                            self.gpu_precull_main(cmd, precull_vp, frame_slot)
+
         # Begin render pass
         rpi: i64 = self.scratch_render_info
         if rpi == 0:
@@ -3148,6 +3532,12 @@ attach GpuRendererCore:
                 frame_visible_instances: i32 = 0
 
                 mi: i32 = 0
+                if self.gpu_draw_enabled == 1:
+                    # GPU-driven path: the pre-cull pass already compacted
+                    # visible instances + filled indirect commands. Draw them
+                    # and skip the CPU per-instance loop entirely.
+                    self.gpu_draw_main(cmd, rp)
+                    mi = self.vb_count
                 while mi < self.vb_count:
                     vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
                     vc: i32 = Memory.read_i32(self.vb_vert_counts + mi * 4)
@@ -3656,3 +4046,4 @@ fun _frog_multiply_4x4_into(a: i64, b: i64, out: i64) -> void:
             Memory.write_f32(out + co + ro, val)
             r = r + 1
         col = col + 1
+

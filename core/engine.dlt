@@ -53,6 +53,8 @@ static g_engine_frame_pacing_sum_ms: f32 = 0.0
 static g_engine_frame_pacing_min_ms: f32 = 999999.0
 static g_engine_frame_pacing_max_ms: f32 = 0.0
 static g_engine_frustum_culling_enabled: i32 = 0
+static g_engine_culling_mode: i32 = 0
+static g_engine_culling_auto_threshold: i32 = 2000
 static g_engine_current_camera_ptr: i64 = 0
 static g_engine_has_window_mode: i32 = 0
 static g_engine_window_mode_kind: i32 = WINDOW_MODE_WINDOWED
@@ -79,6 +81,8 @@ attach DisplayWindow:
         g_engine_frame_pacing_interval = 120
         Debug.reset_frame_pacing()
         g_engine_frustum_culling_enabled = 0
+        g_engine_culling_mode = 0
+        g_engine_culling_auto_threshold = 2000
         g_engine_current_camera_ptr = 0
         g_engine_has_window_mode = 0
         g_engine_window_mode_kind = WINDOW_MODE_WINDOWED
@@ -174,6 +178,31 @@ attach Properties:
 
     static fun frustum_culling() -> i32:
         return g_engine_frustum_culling_enabled
+
+    # Select the main-pass culling strategy:
+    #   FROG_CULL_MODE_CPU (0, default), FROG_CULL_MODE_GPU (1),
+    #   FROG_CULL_MODE_AUTO (2). GPU/Auto need a ready GPU cull pipeline;
+    #   otherwise the engine falls back to CPU.
+    static fun set_culling_mode(mode: i32):
+        m: i32 = mode
+        if m < 0:
+            m = 0
+        if m > 2:
+            m = 0
+        g_engine_culling_mode = m
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_culling_mode(m)
+
+    static fun culling_mode() -> i32:
+        return g_engine_culling_mode
+
+    static fun set_culling_auto_threshold(threshold: i32):
+        t: i32 = threshold
+        if t < 1:
+            t = 1
+        g_engine_culling_auto_threshold = t
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_culling_auto_threshold(t)
 
 attach GpuPreference:
 
@@ -383,9 +412,12 @@ attach Engine:
             return 1
         g_engine_runtime = EngineRuntime.create_with_options(g_engine_title, g_engine_width, g_engine_height, g_engine_vsync_enabled, g_engine_gpu_preference, g_engine_present_mode_preference)
         if g_engine_runtime.ready() == 1:
+            g_engine_runtime.bind_cull()
             g_engine_runtime.set_render_stats(g_engine_render_stats_enabled)
             g_engine_runtime.set_collision_debug(g_engine_collision_debug_enabled)
             g_engine_runtime.set_instance_culling(g_engine_frustum_culling_enabled)
+            g_engine_runtime.set_culling_auto_threshold(g_engine_culling_auto_threshold)
+            g_engine_runtime.set_culling_mode(g_engine_culling_mode)
             if g_engine_has_window_mode == 1:
                 mode: WindowMode = WindowMode(kind=g_engine_window_mode_kind, width=g_engine_window_mode_width, height=g_engine_window_mode_height)
                 g_engine_runtime.set_window_mode(mode)

@@ -26,8 +26,28 @@ FROG_CULL_INSTANCE_STRIDE: i32 = 112
 FROG_CULL_OUT_STRIDE: i32 = 96
 # Push-constant block: 6 planes (vec4) + 4 u32 = 96 + 16 = 112 bytes.
 FROG_CULL_PUSH_SIZE: i32 = 112
+# Max distinct mesh groups per frame (size of the indirect-command array).
+FROG_CULL_MAX_GROUPS: i32 = 4096
+# Frames-in-flight slots the cull buffers are partitioned into, so the
+# compute pass for frame N never writes memory frame N-1 is still reading.
+FROG_CULL_SLOTS: i32 = 2
 
-struct GpuCullPipeline:
+# Culling mode selectors (Engine.set_culling_mode).
+#   CPU  = CPU-side per-instance culling + draw (default, safe, best for
+#          small scenes / few hundred meshes).
+#   GPU  = GPU-driven compute cull + indirect draw (best for heavy
+#          instancing: thousands of identical instances).
+#   AUTO = pick GPU when the instance count >= the auto threshold.
+FROG_CULL_MODE_CPU: i32 = 0
+FROG_CULL_MODE_GPU: i32 = 1
+FROG_CULL_MODE_AUTO: i32 = 2
+
+# @heap: this pipeline holds OS/GPU state (buffers, descriptor sets, slot
+# capacity) that is mutated through a borrowed pointer (gpu_cull_ptr) stored
+# in the renderer. It MUST be heap-allocated so `ptr as GpuCullPipeline`
+# references the SAME object — otherwise mutations like ensure_capacity's
+# slot_cap/buffer (re)allocation are lost on a per-frame value copy.
+@heap struct GpuCullPipeline:
     device: i64 = 0
     phys_device: i64 = 0
     desc_set_layout: i64 = 0
@@ -47,6 +67,14 @@ struct GpuCullPipeline:
     count_memory: i64 = 0
     count_mapped: i64 = 0
     capacity: i32 = 0
+    # Per-slot partition sizes (capacity instances / FROG_CULL_MAX_GROUPS cmds
+    # per slot). The compute pass for frame `slot` writes only its partition.
+    slot_cap: i32 = 0
+    # Persistent-input bookkeeping: the candidate buffer is uploaded once and
+    # only re-uploaded when in_dirty is set (scene changed). in_count is how
+    # many candidates currently live in the input buffer.
+    in_dirty: i32 = 1
+    in_count: i32 = 0
 
 # Find a host-visible + host-coherent memory type index for the given
 # memory-requirement bits. Returns -1 on failure. Mirrors the search in
@@ -275,13 +303,15 @@ attach GpuCullPipeline:
         return 1
 
     # Phase 1: ensure the three buffers can hold `count` instances.
-    # Reallocates (grows) when needed. Returns 1 on success.
+    # Reallocates (grows) when needed. `count` is the PER-FRAME instance
+    # budget; the buffers hold FROG_CULL_SLOTS partitions of that size so
+    # frames in flight never clobber each other. Returns 1 on success.
     fun ensure_capacity(self, count: i32) -> i32:
         if self.ready == 0:
             return 0
-        if count <= self.capacity:
+        if count <= self.slot_cap:
             return 1
-        new_cap: i32 = self.capacity
+        new_cap: i32 = self.slot_cap
         if new_cap < 256:
             new_cap = 256
         while new_cap < count:
@@ -290,8 +320,14 @@ attach GpuCullPipeline:
         # Free old buffers if any.
         self._free_buffers()
 
+        slots: i64 = FROG_CULL_SLOTS as i64
+        # Input (candidates) is READ-ONLY on the GPU and identical every
+        # frame, so it is a SINGLE region (not slot-partitioned) uploaded
+        # once via the dirty flag — no per-frame re-upload.
         in_size: i64 = (new_cap as i64) * (FROG_CULL_INSTANCE_STRIDE as i64)
-        out_size: i64 = (new_cap as i64) * (FROG_CULL_OUT_STRIDE as i64)
+        # Output + indirect commands ARE written per frame by compute and
+        # read by the draw, so they stay slot-partitioned for frames-in-flight.
+        out_size: i64 = (new_cap as i64) * (FROG_CULL_OUT_STRIDE as i64) * slots
         # usage: STORAGE_BUFFER(0x20) | VERTEX_BUFFER(0x80) for out so the
         # graphics pass can bind it as an instance vertex buffer.
         bp: i64 = Memory.malloc_zeroed(8)
@@ -315,10 +351,13 @@ attach GpuCullPipeline:
         self.out_buffer = Memory.read_ptr(bp)
         self.out_memory = Memory.read_ptr(mp)
 
-        # indirect command buffer: 20 bytes (VkDrawIndexedIndirectCommand),
-        # usage INDIRECT(0x100) | STORAGE(0x20) = 0x120 = 288. Host-mapped so
-        # the CPU can pre-fill indexCount and zero instanceCount each frame.
-        if _frog_cull_make_buffer(self.device, self.phys_device, 20, 288, bp, mp, map_pp) == 0:
+        # Indirect command buffer: an ARRAY of VkDrawIndexedIndirectCommand
+        # (20 bytes each; non-indexed draws use the first 16 bytes), one per
+        # mesh group PER SLOT. usage INDIRECT(0x100) | STORAGE(0x20) = 288.
+        # Host-mapped so the CPU pre-fills indexCount/firstInstance and zeroes
+        # instanceCount per group each frame.
+        indirect_size: i64 = (FROG_CULL_MAX_GROUPS as i64) * 20 * slots
+        if _frog_cull_make_buffer(self.device, self.phys_device, indirect_size, 288, bp, mp, map_pp) == 0:
             Memory.free(bp)
             Memory.free(mp)
             Memory.free(map_pp)
@@ -331,9 +370,40 @@ attach GpuCullPipeline:
         Memory.free(mp)
         Memory.free(map_pp)
 
-        self.capacity = new_cap
+        self.slot_cap = new_cap
+        self.capacity = new_cap * FROG_CULL_SLOTS
+        self.in_dirty = 1
         self._update_descriptors()
         return 1
+
+    # Per-frame instance budget (one slot's worth).
+    fun slot_capacity(self) -> i32:
+        return self.slot_cap
+
+    # The candidate input buffer is a SINGLE shared region (uploaded once,
+    # not slot-partitioned), so its base is always 0.
+    fun slot_in_base(self, slot: i32) -> i32:
+        return 0
+
+    # First indirect-command index for frame `slot`.
+    fun slot_cmd_base(self, slot: i32) -> i32:
+        return slot * FROG_CULL_MAX_GROUPS
+
+    # First OUTPUT-instance slot for frame `slot` (output stays partitioned).
+    fun slot_out_base(self, slot: i32) -> i32:
+        return slot * self.slot_cap
+
+    # Mark the persistent candidate buffer as needing a re-upload (scene
+    # changed: instances added/removed/transformed).
+    fun mark_dirty(self):
+        self.in_dirty = 1
+
+    fun is_dirty(self) -> i32:
+        return self.in_dirty
+
+    fun clear_dirty(self, count: i32):
+        self.in_dirty = 0
+        self.in_count = count
 
     # Allocate (once) the descriptor set and point its 3 bindings at the
     # current buffers. Called after (re)allocation.
@@ -428,6 +498,9 @@ attach GpuCullPipeline:
         self.ready = 0
         self.desc_set = 0
         self.capacity = 0
+        self.slot_cap = 0
+        self.in_dirty = 1
+        self.in_count = 0
 
     # Prepare the indirect draw command for this frame's group:
     # write indexCount + firstIndex/vertexOffset/firstInstance, and zero
@@ -447,6 +520,92 @@ attach GpuCullPipeline:
         if self.count_mapped == 0:
             return 0
         return Memory.read_i32(self.count_mapped + 4)
+
+    # --- Multi-group indirect API ---------------------------------------
+    # Byte offset of group g's VkDrawIndexedIndirectCommand in count_buffer.
+    fun group_cmd_offset(self, g: i32) -> i64:
+        return (g as i64) * 20
+
+    # Pre-fill group g's indirect command. For indexed draws the layout is
+    # VkDrawIndexedIndirectCommand {indexCount, instanceCount, firstIndex,
+    # vertexOffset, firstInstance}; for non-indexed it's VkDrawIndirectCommand
+    # {vertexCount, instanceCount, firstVertex, firstInstance} (16B, first
+    # 16 of the 20B slot). instanceCount (offset +4) is the same in both and
+    # is zeroed for the compute shader to atomic-increment. firstInstance is
+    # kept 0 — the graphics pass binds the instance vertex buffer at the
+    # group's byte offset, so we never need drawIndirectFirstInstance.
+    fun prepare_group_cmd(self, g: i32, count: i32, indexed: i32):
+        if self.count_mapped == 0:
+            return
+        if g < 0:
+            return
+        if g >= FROG_CULL_MAX_GROUPS * FROG_CULL_SLOTS:
+            return
+        base: i64 = self.count_mapped + self.group_cmd_offset(g)
+        Memory.write_i32(base + 0, count)         # indexCount / vertexCount
+        Memory.write_i32(base + 4, 0)             # instanceCount = 0
+        Memory.write_i32(base + 8, 0)             # firstIndex / firstVertex
+        Memory.write_i32(base + 12, 0)            # vertexOffset / firstInstance
+        Memory.write_i32(base + 16, 0)            # firstInstance (indexed only)
+
+    # Visible count the GPU computed for group g.
+    fun group_visible_count(self, g: i32) -> i32:
+        if self.count_mapped == 0:
+            return 0
+        return Memory.read_i32(self.count_mapped + self.group_cmd_offset(g) + 4)
+
+    # Record a cull dispatch for one group into `cmd`. push_ptr is a filled
+    # FROG_CULL_PUSH_SIZE block where the 6 planes are already written; this
+    # fills candidateCount/inBase/outBase/cmdIndex (offsets 96/100/104/108).
+    fun dispatch_group(self, cmd: i64, candidate_count: i32, in_base: i32, out_base: i32, cmd_index: i32, push_ptr: i64):
+        if self.ready == 0:
+            return
+        if candidate_count <= 0:
+            return
+        Memory.write_i32(push_ptr + 96, candidate_count)
+        Memory.write_i32(push_ptr + 100, in_base)
+        Memory.write_i32(push_ptr + 104, out_base)
+        Memory.write_i32(push_ptr + 108, cmd_index)
+        vkCmdBindPipeline(cmd, 1, self.pipeline)
+        dsp: i64 = Memory.malloc_zeroed(8)
+        Memory.write_ptr(dsp, self.desc_set)
+        vkCmdBindDescriptorSets(cmd, 1, self.pipeline_layout, 0, 1, dsp, 0, 0)
+        Memory.free(dsp)
+        vkCmdPushConstants(cmd, self.pipeline_layout, 32, 0, FROG_CULL_PUSH_SIZE, push_ptr)
+        groups: i32 = (candidate_count + 63) / 64
+        vkCmdDispatch(cmd, groups, 1, 1)
+
+    # Insert a HOST-write -> COMPUTE barrier so the compute pass observes the
+    # CPU's per-frame writes to the host-mapped input/indirect buffers before
+    # it reads/atomic-updates them. Without this, a fast GPU (NVIDIA) may
+    # start the dispatch before the host writes are guaranteed visible,
+    # producing unstable instanceCount -> flicker. (Intel's slower scheduling
+    # happened to hide it.)
+    # src=HOST_WRITE(0x4000), dst=SHADER_READ(0x20)|SHADER_WRITE(0x40)=0x60.
+    # srcStage=HOST(0x4000), dstStage=COMPUTE(0x800).
+    fun barrier_before_dispatches(self, cmd: i64):
+        bb: i64 = Memory.malloc_zeroed(112)
+        # [0] in_buffer: HOST_WRITE -> SHADER_READ
+        Memory.write_i32(bb, 44)
+        Memory.write_i32(bb + 16, 16384)                 # src = HOST_WRITE
+        Memory.write_i32(bb + 20, 32)                    # dst = SHADER_READ
+        Memory.write_i32(bb + 24, 0 - 1)
+        Memory.write_i32(bb + 28, 0 - 1)
+        Memory.write_ptr(bb + 32, self.in_buffer)
+        Memory.write_i64(bb + 40, 0)
+        Memory.write_i64(bb + 48, 0 - 1)                 # VK_WHOLE_SIZE
+        # [1] count_buffer: HOST_WRITE -> SHADER_READ|SHADER_WRITE
+        Memory.write_i32(bb + 56, 44)
+        Memory.write_i32(bb + 56 + 16, 16384)            # src = HOST_WRITE
+        Memory.write_i32(bb + 56 + 20, 96)               # dst = SHADER_READ|SHADER_WRITE
+        Memory.write_i32(bb + 56 + 24, 0 - 1)
+        Memory.write_i32(bb + 56 + 28, 0 - 1)
+        Memory.write_ptr(bb + 56 + 32, self.count_buffer)
+        Memory.write_i64(bb + 56 + 40, 0)
+        Memory.write_i64(bb + 56 + 48, 0 - 1)            # VK_WHOLE_SIZE
+        # srcStage=HOST(0x4000), dstStage=COMPUTE(0x800).
+        vkCmdPipelineBarrier(cmd, 16384, 2048, 0, 0, 0, 2, bb, 0, 0)
+        Memory.free(bb)
 
     # Handles for the graphics pass.
     fun out_handle(self) -> i64:
@@ -496,6 +655,39 @@ attach GpuCullPipeline:
         Memory.write_f32(dst + 104, cz)
         Memory.write_f32(dst + 108, radius)
 
+    # Zero a group's slice of the out_buffer (count records of 96B each,
+    # starting at out_base) plus its indirect command before the dispatch.
+    # Without this, stale compacted records from a previous frame linger in
+    # the [visible..candidate) tail of the group's region; combined with the
+    # non-deterministic atomicAdd compaction this makes MOVING objects (whose
+    # record content changes each frame) flicker. A transfer->compute buffer
+    # barrier follows so the dispatch observes the zeroed memory.
+    fun fill_out_range(self, cmd: i64, out_base: i32, count: i32):
+        if count <= 0:
+            return
+        if self.out_buffer == 0:
+            return
+        out_off: i64 = (out_base as i64) * (FROG_CULL_OUT_STRIDE as i64)
+        out_size: i64 = (count as i64) * (FROG_CULL_OUT_STRIDE as i64)
+        vkCmdFillBuffer(cmd, self.out_buffer, out_off, out_size, 0)
+
+        # Two transfer->compute VkBufferMemoryBarrier (each 56 bytes):
+        #   0 sType=44, 16 srcAccess, 20 dstAccess, 24 srcQF, 28 dstQF,
+        #   32 buffer, 40 offset, 48 size.
+        # src=TRANSFER_WRITE(0x1000); dst=SHADER_READ(0x20)|SHADER_WRITE(0x40)=0x60.
+        bb: i64 = Memory.malloc_zeroed(112)
+        Memory.write_i32(bb, 44)                         # sType = BUFFER_MEMORY_BARRIER
+        Memory.write_i32(bb + 16, 4096)                  # src = TRANSFER_WRITE
+        Memory.write_i32(bb + 20, 96)                    # dst = SHADER_READ|SHADER_WRITE
+        Memory.write_i32(bb + 24, 0 - 1)                 # srcQueueFamily = IGNORED
+        Memory.write_i32(bb + 28, 0 - 1)                 # dstQueueFamily = IGNORED
+        Memory.write_ptr(bb + 32, self.out_buffer)
+        Memory.write_i64(bb + 40, out_off)
+        Memory.write_i64(bb + 48, out_size)
+        # srcStage=TRANSFER(0x1000), dstStage=COMPUTE(0x800).
+        vkCmdPipelineBarrier(cmd, 4096, 2048, 0, 0, 0, 1, bb, 0, 0)
+        Memory.free(bb)
+
     # Record the culling dispatch into `cmd`. push_ptr points at a filled
     # FROG_CULL_PUSH_SIZE block (6 planes + instanceCount + pad). After this
     # the out_buffer holds compacted visible instance columns and the count
@@ -526,7 +718,37 @@ attach GpuCullPipeline:
         vkCmdPipelineBarrier(cmd, 2048, 6, 0, 1, mb, 0, 0, 0, 0)
         Memory.free(mb)
 
-    # One-shot self-test: upload a few instances, dispatch the cull compute
+    # Insert compute->{vertex,indirect} barriers after a batch of
+    # dispatch_group calls, so the graphics pass sees all culled output.
+    # Uses explicit VkBufferMemoryBarrier on the out_buffer (the instance
+    # vertex source) and count_buffer (the indirect commands) so the sync is
+    # scoped precisely instead of a coarse global memory barrier.
+    fun barrier_after_dispatches(self, cmd: i64):
+        # Two VkBufferMemoryBarrier (56 bytes each, packed back-to-back):
+        #   0 sType=44, 16 srcAccess, 20 dstAccess, 24 srcQF, 28 dstQF,
+        #   32 buffer, 40 offset, 48 size.
+        bb: i64 = Memory.malloc_zeroed(112)
+        # [0] out_buffer: SHADER_WRITE(0x40) -> VERTEX_ATTRIBUTE_READ(0x4)
+        Memory.write_i32(bb, 44)
+        Memory.write_i32(bb + 16, 64)                    # src = SHADER_WRITE (0x40)
+        Memory.write_i32(bb + 20, 4)                     # dst = VERTEX_ATTRIBUTE_READ (0x4)
+        Memory.write_i32(bb + 24, 0 - 1)
+        Memory.write_i32(bb + 28, 0 - 1)
+        Memory.write_ptr(bb + 32, self.out_buffer)
+        Memory.write_i64(bb + 40, 0)
+        Memory.write_i64(bb + 48, 0 - 1)                 # VK_WHOLE_SIZE
+        # [1] count_buffer: SHADER_WRITE(0x40) -> INDIRECT_COMMAND_READ(0x1)
+        Memory.write_i32(bb + 56, 44)
+        Memory.write_i32(bb + 56 + 16, 64)               # src = SHADER_WRITE (0x40)
+        Memory.write_i32(bb + 56 + 20, 1)                # dst = INDIRECT_COMMAND_READ (0x1)
+        Memory.write_i32(bb + 56 + 24, 0 - 1)
+        Memory.write_i32(bb + 56 + 28, 0 - 1)
+        Memory.write_ptr(bb + 56 + 32, self.count_buffer)
+        Memory.write_i64(bb + 56 + 40, 0)
+        Memory.write_i64(bb + 56 + 48, 0 - 1)            # VK_WHOLE_SIZE
+        # srcStage=COMPUTE(0x800), dstStage=DRAW_INDIRECT(0x2)|VERTEX_INPUT(0x4)=0x6.
+        vkCmdPipelineBarrier(cmd, 2048, 6, 0, 0, 0, 2, bb, 0, 0)
+        Memory.free(bb)
     # via a single-time command buffer, read back the visible count. Proves
     # the compute path actually runs on the GPU and writes results, without
     # touching the render loop. cmd_pool/gfx_queue from the render pass.
@@ -566,17 +788,18 @@ attach GpuCullPipeline:
         Memory.write_f32(push + 80 + 12, 100000.0)
         Memory.write_i32(push + 96, 4)
 
-        self.prepare_indirect(36)
+        self.prepare_group_cmd(0, 36, 0)
         cmd: i64 = gpu_tex_begin_oneshot(self.device, cmd_pool)
         if cmd == 0:
             Memory.free(push)
             print("[frog.cull] self_test FAILED begin cmd")
             return
-        self.dispatch(cmd, 4, push)
+        self.dispatch_group(cmd, 4, 0, 0, 0, push)
+        self.barrier_after_dispatches(cmd)
         gpu_tex_end_oneshot(self.device, cmd_pool, gfx_queue, cmd)
         Memory.free(push)
 
-        visible: i32 = self.visible_count()
+        visible: i32 = self.group_visible_count(0)
         print(@"[frog.cull] self_test visible={visible} (expected 2)")
 
 # Extract 6 frustum planes from a column-major view*projection matrix into

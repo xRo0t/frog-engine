@@ -1,20 +1,17 @@
 #version 450
 
-// GPU-driven frustum culling with indirect draw output.
-// One invocation per candidate instance. Visible instances are compacted
-// (full 96-byte graphics instance record) into the output buffer; the
-// visible count is written into the instanceCount field of a
-// VkDrawIndexedIndirectCommand so the graphics pass issues ONE
-// vkCmdDrawIndexedIndirect per group with NO CPU readback.
+// GPU-driven frustum culling with indirect draw output (multi-group).
+// One invocation per candidate. Visible candidates are compacted (full
+// 96-byte graphics instance record) into the shared output buffer at
+// [outBase + local_slot], and the per-group VkDrawIndexedIndirectCommand
+// (cmds[cmdIndex]) instanceCount is atomic-incremented.
 //
-// Candidate layout (112 bytes = 96 instance + 16 bounds):
-//   [0..63]   mat4 model (4 columns)
-//   [64..79]  vec4 material params
-//   [80..95]  vec4 uv transform
-//   [96..111] vec4 bounds (local center.xyz, local radius)
+// The CPU pre-fills each cmd with indexCount + firstInstance=outBase and
+// zeroes instanceCount, so vkCmdDrawIndexedIndirect reads the group's
+// slice of the shared output buffer.
 //
-// Output layout (96 bytes, matches FROG_GPU_INSTANCE_STRIDE):
-//   [0..63] model  [64..79] material  [80..95] uv
+// Candidate layout (112 bytes): model 64 + material 16 + uv 16 + bounds 16.
+// Output layout (96 bytes): model + material + uv (= FROG_GPU_INSTANCE_STRIDE).
 
 layout(local_size_x = 64) in;
 
@@ -37,6 +34,14 @@ struct OutInstance {
     vec4 uv;
 };
 
+struct DrawCmd {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+
 layout(std430, binding = 0) readonly buffer InInstances {
     Candidate inInstances[];
 };
@@ -45,30 +50,24 @@ layout(std430, binding = 1) writeonly buffer OutInstances {
     OutInstance outInstances[];
 };
 
-// VkDrawIndexedIndirectCommand {indexCount, instanceCount, firstIndex,
-// vertexOffset, firstInstance}. CPU pre-fills indexCount + zeroes
-// instanceCount; compute atomic-increments instanceCount per visible.
-layout(std430, binding = 2) buffer IndirectCmd {
-    uint indexCount;
-    uint instanceCount;
-    uint firstIndex;
-    int  vertexOffset;
-    uint firstInstance;
+layout(std430, binding = 2) buffer IndirectCmds {
+    DrawCmd cmds[];
 };
 
 layout(push_constant) uniform CullPush {
     vec4 planes[6];
-    uint candidateCount;
-    uint pad0;
-    uint pad1;
-    uint pad2;
+    uint candidateCount;  // candidates for THIS group
+    uint inBase;          // first candidate index (shared input buffer)
+    uint outBase;         // first output slot (shared output buffer)
+    uint cmdIndex;        // which indirect command this group writes
 } push;
 
 void main() {
-    uint idx = gl_GlobalInvocationID.x;
-    if (idx >= push.candidateCount) {
+    uint local = gl_GlobalInvocationID.x;
+    if (local >= push.candidateCount) {
         return;
     }
+    uint idx = push.inBase + local;
 
     Candidate inst = inInstances[idx];
     mat4 model = mat4(inst.col0, inst.col1, inst.col2, inst.col3);
@@ -78,7 +77,13 @@ void main() {
     float sy = length(inst.col1.xyz);
     float sz = length(inst.col2.xyz);
     float maxScale = max(sx, max(sy, sz));
-    float radius = inst.bounds.w * maxScale;
+    if (maxScale < 0.001) {
+        maxScale = 1.0;
+    }
+    // Match the CPU path's generous margin (frog_renderer_core
+    // _frog_instance_visible) so moving objects near the frustum edge are
+    // not culled one frame and kept the next (which looked like flicker).
+    float radius = inst.bounds.w * maxScale * 2.25 + 2.0;
 
     bool visible = true;
     for (int i = 0; i < 6; i++) {
@@ -90,7 +95,8 @@ void main() {
     }
 
     if (visible) {
-        uint slot = atomicAdd(instanceCount, 1u);
+        uint local_slot = atomicAdd(cmds[push.cmdIndex].instanceCount, 1u);
+        uint slot = push.outBase + local_slot;
         outInstances[slot].col0 = inst.col0;
         outInstances[slot].col1 = inst.col1;
         outInstances[slot].col2 = inst.col2;
