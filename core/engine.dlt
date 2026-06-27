@@ -522,3 +522,15 @@ attach Engine:
 
     static fun shutdown():
         g_engine_runtime.shutdown()
+
+# Engine_Parallel_For (R10.1): thin delegation to the std data-parallel
+# scheduler. The engine adds NO scheduler of its own — it forwards to
+# std parallel_for so engine code (e.g. CPU frustum culling) can run
+# across the runtime Core_Count with the same serial-fallback behavior.
+#
+# This delegates to std parallel_for (R10.1). On a no-OS-threads target
+# the underlying pool has zero workers, so parallel_for degrades to a
+# plain in-order serial loop automatically (R10.3) — same observable
+# result, no engine-side special-casing.
+fun engine_parallel_for(count: i32, body: @heap fun(i32)):
+    parallel_for(count, body)

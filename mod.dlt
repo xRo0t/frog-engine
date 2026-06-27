@@ -86,3 +86,4 @@ export Scene, GameObject, ObjectBench
 export Ray3D, RaycastHit, Raycast3D, Physics
 export SoftwareRenderer
 export init_engine_timer, engine_time_seconds
+export engine_parallel_for

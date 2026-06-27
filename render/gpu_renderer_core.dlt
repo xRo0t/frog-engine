@@ -191,6 +191,31 @@ fun _frog_shadow_instance_visible(vp: i64, model: i64, bound_x: f32, bound_y: f3
         return 0
     return 1
 
+fun _frog_cull_one(self_addr: i64, vp: i64, gi: i32, res: i64):
+    core: GpuRendererCore = self_addr as GpuRendererCore
+    visible: i32 = 1
+    if core.vb_visible != 0:
+        if Memory.read_i32(core.vb_visible + gi * 4) == 0:
+            visible = 0
+    if visible == 1:
+        if core.instance_culling_enabled == 1:
+            g_model: i64 = 0
+            if core.model_matrices != 0:
+                g_model = Memory.read_ptr(core.model_matrices + gi * 8)
+            bound_x: f32 = 0.0
+            bound_y: f32 = 0.0
+            bound_z: f32 = 0.0
+            bound_r: f32 = 8.0
+            if core.mesh_bound_rs != 0:
+                bound_x = Memory.read_f32(core.mesh_bound_xs + gi * 4)
+                bound_y = Memory.read_f32(core.mesh_bound_ys + gi * 4)
+                bound_z = Memory.read_f32(core.mesh_bound_zs + gi * 4)
+                bound_r = Memory.read_f32(core.mesh_bound_rs + gi * 4)
+                if bound_r <= 0.0:
+                    bound_r = 8.0
+            visible = _frog_instance_visible(vp, g_model, bound_x, bound_y, bound_z, bound_r)
+    Memory.write_i32(res + (gi as i64) * 4, visible)
+
 struct GpuRendererCore:
     device:            i64 = 0
     phys_device:       i64 = 0
@@ -211,6 +236,7 @@ struct GpuRendererCore:
     mesh_bound_zs:     i64 = 0
     mesh_bound_rs:     i64 = 0
     vb_visible:        i64 = 0    # i32[] per instance: 1 = drawn, 0 = hidden
+    vb_cull_result:    i64 = 0    # i32[] per instance: parallel cull pre-pass result (1 = visible, 0 = culled)
     instance_buffer:   i64 = 0
     instance_memory:   i64 = 0
     # Per-frame instance buffers (one per frame-in-flight) to avoid a
@@ -372,6 +398,7 @@ attach GpuRendererCore:
         while vvi < self.vb_capacity:
             Memory.write_i32(self.vb_visible + vvi * 4, 1)
             vvi = vvi + 1
+        self.vb_cull_result = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.vb_count = 0
         # Texture registry
         self.tex_capacity = 256
@@ -944,6 +971,7 @@ attach GpuRendererCore:
         while vvi2 < new_cap:
             Memory.write_i32(new_visible + vvi2 * 4, 1)
             vvi2 = vvi2 + 1
+        new_cull_result: i64 = Memory.malloc_zeroed(new_cap * 4)
         Memory.copy(new_handles, self.vb_handles, self.vb_capacity * 8)
         Memory.copy(new_memories, self.vb_memories, self.vb_capacity * 8)
         Memory.copy(new_alloc_sizes, self.vb_alloc_sizes, self.vb_capacity * 8)
@@ -958,6 +986,7 @@ attach GpuRendererCore:
         Memory.copy(new_bound_zs, self.mesh_bound_zs, self.vb_capacity * 4)
         Memory.copy(new_bound_rs, self.mesh_bound_rs, self.vb_capacity * 4)
         Memory.copy(new_visible, self.vb_visible, self.vb_capacity * 4)
+        Memory.copy(new_cull_result, self.vb_cull_result, self.vb_capacity * 4)
         if self.mesh_tex_ids != 0:
             Memory.copy(new_mesh_tex, self.mesh_tex_ids, self.vb_capacity * 4)
         if self.mesh_emissive_tex_ids != 0:
@@ -990,6 +1019,7 @@ attach GpuRendererCore:
         Memory.free(self.mesh_bound_zs)
         Memory.free(self.mesh_bound_rs)
         Memory.free(self.vb_visible)
+        Memory.free(self.vb_cull_result)
         if self.mesh_tex_ids != 0:
             Memory.free(self.mesh_tex_ids)
         if self.mesh_emissive_tex_ids != 0:
@@ -1022,6 +1052,7 @@ attach GpuRendererCore:
         self.mesh_bound_zs = new_bound_zs
         self.mesh_bound_rs = new_bound_rs
         self.vb_visible = new_visible
+        self.vb_cull_result = new_cull_result
         self.mesh_tex_ids = new_mesh_tex
         self.mesh_emissive_tex_ids = new_mesh_emissive_tex
         self.mesh_normal_tex_ids = new_mesh_normal_tex
@@ -3531,6 +3562,14 @@ attach GpuRendererCore:
                 frame_indexed_draw_calls: i32 = 0
                 frame_visible_instances: i32 = 0
 
+                if self.vb_cull_result != 0:
+                    if self.gpu_draw_enabled == 0:
+                        cull_self_addr: i64 = self as i64
+                        cull_vp: i64 = vp_mat
+                        cull_res: i64 = self.vb_cull_result
+                        cull_body: @heap fun(i32) = fun(gi: i32) _frog_cull_one(cull_self_addr, cull_vp, gi, cull_res)
+                        engine_parallel_for(self.vb_count, cull_body)
+
                 mi: i32 = 0
                 if self.gpu_draw_enabled == 1:
                     # GPU-driven path: the pre-cull pass already compacted
@@ -3619,23 +3658,9 @@ attach GpuRendererCore:
                                 break
                             else:
                                 visible: i32 = 1
-                                if self.vb_visible != 0:
-                                    if Memory.read_i32(self.vb_visible + gi * 4) == 0:
+                                if self.vb_cull_result != 0:
+                                    if Memory.read_i32(self.vb_cull_result + gi * 4) == 0:
                                         visible = 0
-                                if visible == 1:
-                                    if self.instance_culling_enabled == 1:
-                                        bound_x: f32 = 0.0
-                                        bound_y: f32 = 0.0
-                                        bound_z: f32 = 0.0
-                                        bound_r: f32 = 8.0
-                                        if self.mesh_bound_rs != 0:
-                                            bound_x = Memory.read_f32(self.mesh_bound_xs + gi * 4)
-                                            bound_y = Memory.read_f32(self.mesh_bound_ys + gi * 4)
-                                            bound_z = Memory.read_f32(self.mesh_bound_zs + gi * 4)
-                                            bound_r = Memory.read_f32(self.mesh_bound_rs + gi * 4)
-                                            if bound_r <= 0.0:
-                                                bound_r = 8.0
-                                        visible = _frog_instance_visible(vp_mat, g_model, bound_x, bound_y, bound_z, bound_r)
                                 if visible == 1:
                                     instance_dst: i64 = mapped_instances + ((instance_write as i64) * (FROG_GPU_INSTANCE_STRIDE as i64))
                                     Memory.copy(instance_dst, g_model, 64)
