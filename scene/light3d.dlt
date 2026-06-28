@@ -21,7 +21,7 @@ struct ShadowSettings:
     filter_radius: f32 = 0.0
     adaptive: i32 = 1
 
-const FROG_MAX_POINT_LIGHTS: i32 = 8
+imm FROG_MAX_POINT_LIGHTS: i32 = 8
 
 @heap struct DirectionalLight3D extends Node3D:
     color: Color = Color()

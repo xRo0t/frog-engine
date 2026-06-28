@@ -3,11 +3,11 @@
 # Binary runtime geometry for glTF source assets.
 ##############################
 
-const FROG_MODEL_MAGIC: i32 = 0x4D475246
-const FROG_MODEL_VERSION: i32 = 1
-const FROG_MODEL_HEADER_SIZE: i64 = 16
-const FROG_MODEL_LOD_ENTRY_SIZE: i64 = 8
-const FROG_MODEL_PART_ENTRY_SIZE: i64 = 32
+imm FROG_MODEL_MAGIC: i32 = 0x4D475246
+imm FROG_MODEL_VERSION: i32 = 1
+imm FROG_MODEL_HEADER_SIZE: i64 = 16
+imm FROG_MODEL_LOD_ENTRY_SIZE: i64 = 8
+imm FROG_MODEL_PART_ENTRY_SIZE: i64 = 32
 
 struct FrogModelLoader:
     _placeholder: i32 = 0

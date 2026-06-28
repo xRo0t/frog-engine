@@ -4,10 +4,10 @@
 # game code.
 ##############################
 
-const MESH3D_SHAPE_NONE: i32 = 0
-const MESH3D_SHAPE_CUBE: i32 = 1
-const MESH3D_SHAPE_PLANE: i32 = 2
-const MESH3D_SHAPE_MODEL: i32 = 3
+imm MESH3D_SHAPE_NONE: i32 = 0
+imm MESH3D_SHAPE_CUBE: i32 = 1
+imm MESH3D_SHAPE_PLANE: i32 = 2
+imm MESH3D_SHAPE_MODEL: i32 = 3
 
 struct Mesh3DShape:
     _placeholder: i32 = 0

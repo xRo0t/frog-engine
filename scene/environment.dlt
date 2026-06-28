@@ -3,26 +3,26 @@
 # Per-scene render environment: clear color, fog, and future sky/lighting.
 ##############################
 
-const FOG_MODE_NONE: i32 = 0
-const FOG_MODE_LINEAR: i32 = 1
-const FOG_MODE_EXPONENTIAL: i32 = 2
-const FOG_MODE_EXPONENTIAL_SQUARED: i32 = 3
+imm FOG_MODE_NONE: i32 = 0
+imm FOG_MODE_LINEAR: i32 = 1
+imm FOG_MODE_EXPONENTIAL: i32 = 2
+imm FOG_MODE_EXPONENTIAL_SQUARED: i32 = 3
 
-const FOG_SHAPE_DEPTH: i32 = 0
-const FOG_SHAPE_SPHERICAL: i32 = 1
+imm FOG_SHAPE_DEPTH: i32 = 0
+imm FOG_SHAPE_SPHERICAL: i32 = 1
 
-const TONE_MAPPING_NONE: i32 = 0
-const TONE_MAPPING_ACES: i32 = 1
-const TONE_MAPPING_REINHARD: i32 = 2
+imm TONE_MAPPING_NONE: i32 = 0
+imm TONE_MAPPING_ACES: i32 = 1
+imm TONE_MAPPING_REINHARD: i32 = 2
 
-const SKY_MODE_NONE: i32 = 0
-const SKY_MODE_GRADIENT: i32 = 1
-const SKY_OBJECT_SHAPE_CIRCLE: i32 = 1
-const SKY_OBJECT_SHAPE_QUAD: i32 = 2
-const SKY_OBJECT_SHAPE_STARS: i32 = 3
-const SKY_MAX_OBJECTS: i32 = 8
-const SKY_OBJECT_STRIDE: i32 = 80
-const SKY_TEXTURE_SIZE_CAPACITY: i32 = 4096
+imm SKY_MODE_NONE: i32 = 0
+imm SKY_MODE_GRADIENT: i32 = 1
+imm SKY_OBJECT_SHAPE_CIRCLE: i32 = 1
+imm SKY_OBJECT_SHAPE_QUAD: i32 = 2
+imm SKY_OBJECT_SHAPE_STARS: i32 = 3
+imm SKY_MAX_OBJECTS: i32 = 8
+imm SKY_OBJECT_STRIDE: i32 = 80
+imm SKY_TEXTURE_SIZE_CAPACITY: i32 = 4096
 
 static g_sky_texture_sizes: i64 = 0
 

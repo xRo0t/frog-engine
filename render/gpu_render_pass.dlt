@@ -4,7 +4,7 @@
 # Framebuffers, command pool/buffers
 ##############################
 
-const FROG_HDR_COLOR_FORMAT: i32 = 97
+imm FROG_HDR_COLOR_FORMAT: i32 = 97
 
 struct RenderPass:
     vk_render_pass:       i64 = 0
