@@ -63,10 +63,11 @@ attach VulkanContext:
 
         vkGetPhysicalDeviceFeatures2(self.vk_physical_device, feats2)
 
-        di:  i32 = Memory.read_i32(vk12 + 52)      # descriptorIndexing
-        nui: i32 = Memory.read_i32(vk12 + 72)      # nonuniform sampled image
-        pb:  i32 = Memory.read_i32(vk12 + 124)     # partially bound
-        rda: i32 = Memory.read_i32(vk12 + 132)     # runtime descriptor array
+        di:  i32 = Memory.read_i32(vk12 + 52)      # descriptorIndexing (aggregate)
+        nui: i32 = Memory.read_i32(vk12 + 72)      # shaderSampledImageArrayNonUniformIndexing
+        pb:  i32 = Memory.read_i32(vk12 + 124)     # descriptorBindingPartiallyBound
+        rda: i32 = Memory.read_i32(vk12 + 132)     # runtimeDescriptorArray
+        uab: i32 = Memory.read_i32(vk12 + 100)     # descriptorBindingSampledImageUpdateAfterBind
         dic: i32 = Memory.read_i32(vk12 + 20)      # drawIndirectCount
         dyn: i32 = Memory.read_i32(dynr + 16)      # dynamicRendering
 
@@ -74,12 +75,17 @@ attach VulkanContext:
         Memory.free(dynr)
         Memory.free(feats2)
 
-        # Bindless needs the full quartet; indirect-count just its flag.
+        # Bindless requires the SPECIFIC sub-features the bindless table uses,
+        # NOT the aggregate `descriptorIndexing` flag — many drivers leave the
+        # aggregate at 0 while still supporting the individual features we need
+        # (nonuniform sampled-image indexing + partially-bound + runtime array +
+        # sampled-image update-after-bind). Relying on the aggregate is what
+        # made bindless detect as 0 on hardware that fully supports it.
         bindless: i32 = 0
-        if di != 0:
-            if nui != 0:
-                if pb != 0:
-                    if rda != 0:
+        if nui != 0:
+            if pb != 0:
+                if rda != 0:
+                    if uab != 0:
                         bindless = 1
         c.descriptor_indexing = bindless
         if dic != 0:
@@ -89,6 +95,8 @@ attach VulkanContext:
         if bindless == 1:
             c.max_descriptor_array = 65536
         self.caps = c
+        # Diagnostic: show each bindless sub-feature so a 0 result is debuggable.
+        print(@"[frog.caps.di] aggregate={di} nonuniform={nui} partial_bound={pb} runtime_array={rda} update_after_bind={uab}")
 
 
     fun init(self, window_handle: i64) -> i32:
@@ -415,6 +423,7 @@ attach VulkanContext:
                 if cap_di == 1:
                     Memory.write_i32(feat_vk12 + 52, 1)    # descriptorIndexing
                     Memory.write_i32(feat_vk12 + 72, 1)    # nonuniform sampled image
+                    Memory.write_i32(feat_vk12 + 100, 1)   # sampled image update-after-bind
                     Memory.write_i32(feat_vk12 + 124, 1)   # partially bound
                     Memory.write_i32(feat_vk12 + 132, 1)   # runtime descriptor array
                 if cap_dyn == 1:
