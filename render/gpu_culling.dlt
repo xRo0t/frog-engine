@@ -75,6 +75,12 @@ FROG_CULL_MODE_AUTO: i32 = 2
     # many candidates currently live in the input buffer.
     in_dirty: i32 = 1
     in_count: i32 = 0
+    # Transform-only dirty: set when instances MOVED but the scene structure
+    # (grouping, materials, visibility, counts) is unchanged. Lets the
+    # renderer skip the full O(N) regroup/repack and instead just rewrite
+    # the model matrices of the existing candidate records in place — the
+    # common case for a swarm of moving objects.
+    xform_dirty: i32 = 0
 
 # Find a host-visible + host-coherent memory type index for the given
 # memory-requirement bits. Returns -1 on failure. Mirrors the search in
@@ -398,6 +404,17 @@ attach GpuCullPipeline:
     fun mark_dirty(self):
         self.in_dirty = 1
 
+    # Mark only the transforms stale (instances moved; structure intact).
+    # A full rebuild (in_dirty) supersedes this, so don't downgrade it.
+    fun mark_xform_dirty(self):
+        self.xform_dirty = 1
+
+    fun is_xform_dirty(self) -> i32:
+        return self.xform_dirty
+
+    fun clear_xform_dirty(self):
+        self.xform_dirty = 0
+
     fun is_dirty(self) -> i32:
         return self.in_dirty
 
@@ -654,6 +671,34 @@ attach GpuCullPipeline:
         Memory.write_f32(dst + 100, cy)
         Memory.write_f32(dst + 104, cz)
         Memory.write_f32(dst + 108, radius)
+
+    # Transform-only fast path: overwrite ONLY the 64-byte model matrix of
+    # the candidate already living at slot `idx`, leaving material/uv/bounds
+    # untouched. Used when an instance just moved (structure unchanged), so
+    # the renderer skips the full regroup/repack. The mapped buffer is
+    # host-coherent and each call targets a distinct slot, so this is safe
+    # to invoke concurrently across the thread pool (one slot per worker).
+    fun write_model_at(self, idx: i32, model_ptr: i64):
+        if self.in_mapped == 0:
+            return
+        if idx < 0:
+            return
+        if idx >= self.capacity:
+            return
+        dst: i64 = self.in_mapped + (idx as i64) * (FROG_CULL_INSTANCE_STRIDE as i64)
+        Memory.copy(dst, model_ptr, 64)
+
+    # Base address of candidate slot `idx` in the mapped input buffer (0 if
+    # unmapped / out of range). Lets a batched/parallel updater compute slot
+    # addresses without a method call per write.
+    fun in_slot_addr(self, idx: i32) -> i64:
+        if self.in_mapped == 0:
+            return 0
+        if idx < 0:
+            return 0
+        if idx >= self.capacity:
+            return 0
+        return self.in_mapped + (idx as i64) * (FROG_CULL_INSTANCE_STRIDE as i64)
 
     # Zero a group's slice of the out_buffer (count records of 96B each,
     # starting at out_base) plus its indirect command before the dispatch.

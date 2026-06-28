@@ -1,5 +1,5 @@
-﻿##############################
-# Frog Engine â€” GpuRendererCore
+##############################
+# Frog Engine — GpuRendererCore
 # ECS-aware Vulkan renderer
 # Queries Scene for renderable entities
 ##############################
@@ -16,8 +16,8 @@ struct GpuMeshBounds:
     center_z: f32 = 0.0
     radius: f32 = 1.0
 
-const FROG_POINT_LIGHT_SLOTS: i32 = 8
-const FROG_POINT_LIGHT_DATA_SIZE: i64 = 336
+imm FROG_POINT_LIGHT_SLOTS: i32 = 8
+imm FROG_POINT_LIGHT_DATA_SIZE: i64 = 336
 
 fun _frog_abs_f32(v: f32) -> f32:
     if v < 0.0:
@@ -216,6 +216,21 @@ fun _frog_cull_one(self_addr: i64, vp: i64, gi: i32, res: i64):
             visible = _frog_instance_visible(vp, g_model, bound_x, bound_y, bound_z, bound_r)
     Memory.write_i32(res + (gi as i64) * 4, visible)
 
+# Globals for the transform-only candidate refresh (parallel body reads
+# these; set by _gpu_cull_refresh_transforms before dispatching). The body
+# is a Pure_Mapping over candidate slot k -> writes only that slot's matrix.
+g_refresh_cand_gi: i64 = 0   # i32[]: candidate slot -> mesh index (gi)
+g_refresh_models:  i64 = 0   # ptr[]: per-mesh model matrix pointer
+g_refresh_cull:    i64 = 0   # GpuCullPipeline as i64
+
+# Refresh candidate slot k's model matrix in the GPU input buffer in place.
+fun _gpu_cull_refresh_one(k: i32):
+    gi: i32 = Memory.read_i32(g_refresh_cand_gi + (k as i64) * 4)
+    model_ptr: i64 = Memory.read_ptr(g_refresh_models + (gi as i64) * 8)
+    if model_ptr != 0:
+        cull: GpuCullPipeline = g_refresh_cull as GpuCullPipeline
+        cull.write_model_at(k, model_ptr)
+
 struct GpuRendererCore:
     device:            i64 = 0
     phys_device:       i64 = 0
@@ -300,6 +315,11 @@ struct GpuRendererCore:
     gpu_grp_inbase: i64 = 0    # i32[]: first INPUT candidate index (persistent)
     gpu_grp_draw: i64 = 0      # i32[]: index/vertex count for the draw
     gpu_grp_capacity: i32 = 0
+    # candidate-slot -> mesh index (gi) map, filled during _gpu_cull_rebuild.
+    # Lets the transform-only fast path rewrite each candidate's model matrix
+    # in place (no regroup) when instances merely moved. Sized like vb arrays.
+    gpu_cand_gi: i64 = 0       # i32[vb_capacity]
+    gpu_cand_n:  i32 = 0       # number of live candidate slots from last rebuild
     gpu_grp_n: i32 = 0
     gpu_slot_grpn: i64 = 0     # i32[FROG_CULL_SLOTS]: group count last written per slot
     gpu_slot_cmdbase: i64 = 0  # i32[FROG_CULL_SLOTS]: cmd base index per slot
@@ -465,6 +485,9 @@ attach GpuRendererCore:
         self.gpu_grp_inbase = Memory.malloc_zeroed((FROG_CULL_MAX_GROUPS as i64) * 4)
         self.gpu_grp_draw = Memory.malloc_zeroed((FROG_CULL_MAX_GROUPS as i64) * 4)
         self.gpu_grp_n = 0
+        # candidate-slot -> gi map, one entry per registered instance.
+        self.gpu_cand_gi = Memory.malloc_zeroed((self.vb_capacity as i64) * 4)
+        self.gpu_cand_n = 0
         self.gpu_cull_push = Memory.malloc_zeroed(FROG_CULL_PUSH_SIZE)
         self.gpu_cull_rec = Memory.malloc_zeroed(96)
         self.gpu_slot_grpn = Memory.malloc_zeroed((FROG_CULL_SLOTS as i64) * 4)
@@ -639,10 +662,17 @@ attach GpuRendererCore:
         self.gpu_cull_slot = slot
 
         # (Re)build the persistent candidate buffer + group metadata only when
-        # the scene changed. ensure_capacity sets dirty on (re)allocation.
+        # the scene STRUCTURE changed (instances added/removed/visibility/
+        # material). ensure_capacity sets dirty on (re)allocation. If only the
+        # transforms moved (xform_dirty), take the cheap in-place refresh that
+        # rewrites just the model matrices — no regroup/repack.
         if cull.is_dirty() == 1:
             self._gpu_cull_rebuild(cull)
             cull.clear_dirty(self.gpu_grp_n)
+            cull.clear_xform_dirty()
+        elif cull.is_xform_dirty() == 1:
+            self._gpu_cull_refresh_transforms(cull)
+            cull.clear_xform_dirty()
 
         cmd_base0: i32 = cull.slot_cmd_base(slot)   # this slot's command base
         out_base0: i32 = cull.slot_out_base(slot)   # this slot's output base
@@ -672,7 +702,7 @@ attach GpuRendererCore:
             # instanceCount visible records (slots 0..count-1, written densely
             # by the compute compaction), so stale tail data is never drawn.
             # prepare_group_cmd already zeroes instanceCount. (vkCmdFillBuffer
-            # of the whole output was ~9.8MB/frame at 100K â€” removed.)
+            # of the whole output was ~9.8MB/frame at 100K — removed.)
             cull.dispatch_group(cmd, group_n, in_base, out_base, cmd_index, push)
             # Cache this slot's per-group draw bindings for gpu_draw_main.
             Memory.write_i32(self.gpu_grp_outbase + g * 4, out_base)
@@ -690,6 +720,10 @@ attach GpuRendererCore:
     # added/removed/moved), NOT every frame. Mirrors the CPU grouping keys so
     # the GPU output matches the CPU draw path visually.
     fun _gpu_cull_rebuild(self, cull: GpuCullPipeline):
+        # Ensure the candidate->gi map can hold every registered instance
+        # (grows with the vb arrays).
+        if self.gpu_cand_gi == 0:
+            self.gpu_cand_gi = Memory.malloc_zeroed((self.vb_capacity as i64) * 4)
         self.gpu_grp_n = 0
         in_cursor: i32 = 0          # next slot in the persistent input buffer
         grp: i32 = 0
@@ -751,6 +785,7 @@ attach GpuRendererCore:
                                 vis = 0
                         if vis == 1:
                             self._cull_upload_instance(cull, in_cursor, gi, g_model)
+                            Memory.write_i32(self.gpu_cand_gi + in_cursor * 4, gi)
                             in_cursor = in_cursor + 1
                             group_n = group_n + 1
                         group_span = group_span + 1
@@ -772,6 +807,24 @@ attach GpuRendererCore:
                 else:
                     mi = mi + 1
         self.gpu_grp_n = grp
+        self.gpu_cand_n = in_cursor
+
+    # Transform-only refresh: instances merely MOVED (structure unchanged),
+    # so rewrite ONLY the 64-byte model matrix of each existing candidate
+    # in place — no regroup, no material/uv/bounds recompute. This is the
+    # hot path for a swarm of moving objects: O(N) tiny copies instead of
+    # the full O(N x grouping) rebuild. Parallelized across the thread pool
+    # (each candidate slot is independent -> race-free), so it also overlaps
+    # the CPU cost across cores while the GPU culls + draws.
+    fun _gpu_cull_refresh_transforms(self, cull: GpuCullPipeline):
+        n: i32 = self.gpu_cand_n
+        if n <= 0:
+            return
+        g_refresh_cand_gi = self.gpu_cand_gi
+        g_refresh_models = self.model_matrices
+        g_refresh_cull = cull as i64
+        body: @heap fun(i32) = fun(k: i32) _gpu_cull_refresh_one(k)
+        engine_parallel_for(n, body)
 
     # Read texture-id array `arr` at index i (returns -1 when array unset).
     fun _grp_tex(self, arr: i64, i: i32) -> i32:
@@ -779,14 +832,18 @@ attach GpuRendererCore:
             return 0 - 1
         return Memory.read_i32(arr + i * 4)
 
-    # Mark the persistent GPU cull input as stale (scene changed: instance
-    # added/removed/moved/visibility toggled), so the next GPU precull rebuilds
-    # the candidate buffer. No-op when no cull pipeline is attached.
+    # Mark the persistent GPU cull input as needing only a TRANSFORM refresh
+    # (an instance MOVED; structure intact). The next precull rewrites just
+    # the model matrices in place — cheap. Used by set_transform / set_model_
+    # matrix_raw on the movement hot path. No-op when no cull pipeline.
     fun _mark_cull_dirty(self):
         if self.gpu_cull_ptr != 0:
             cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
-            cull.mark_dirty()
+            cull.mark_xform_dirty()
 
+    # Mark the persistent GPU cull input as needing a FULL rebuild (scene
+    # STRUCTURE changed: instance added/removed, visibility/material change),
+    # so the next precull regroups + repacks the candidate buffer.
     fun _mark_cull_dirty_struct(self):
         if self.gpu_cull_ptr != 0:
             cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
@@ -1063,6 +1120,11 @@ attach GpuRendererCore:
         self.mesh_shadow_flags = new_shadow_flags
         self.mesh_shadow_distances = new_shadow_distances
         self.vb_capacity = new_cap
+        # Grow the candidate->gi map alongside the vb arrays.
+        new_cand_gi: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
+        if self.gpu_cand_gi != 0:
+            Memory.free(self.gpu_cand_gi)
+        self.gpu_cand_gi = new_cand_gi
 
     fun _take_pooled_buffer(self, data_size: i64, usage: i32) -> GpuBufferUpload:
         if self.pooled_count <= 0:
@@ -2094,7 +2156,7 @@ attach GpuRendererCore:
         if on == 0:
             v = 0
         Memory.write_i32(self.vb_visible + mesh_id * 4, v)
-        self._mark_cull_dirty()
+        self._mark_cull_dirty_struct()
 
     fun set_model_matrix(self, vb_idx: i32, mat_ptr: i64) -> void:
         if vb_idx < 0:
@@ -2108,7 +2170,14 @@ attach GpuRendererCore:
             if old_ptr != mat_ptr:
                 Memory.free(old_ptr)
         Memory.write_ptr(self.model_matrices + vb_idx * 8, mat_ptr)
-        self._mark_cull_dirty()
+        # If this instance had NO model before, it was skipped by the cull
+        # grouping (model_ptr==0) — now it participates, so the structure
+        # changed: full rebuild. If it already had one, only the transform
+        # binding changed: the cheap refresh suffices.
+        if old_ptr == 0:
+            self._mark_cull_dirty_struct()
+        else:
+            self._mark_cull_dirty()
 
     # Register an uploaded GpuTexture, creating its descriptor set via the render
     # pass. Returns the texture id (index into the registry) or -1 on failure.
