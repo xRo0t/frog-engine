@@ -6,6 +6,18 @@
 
 import sys.linux.vulkan_surface
 
+# GPU capability tier — detected once at startup (Requirement 5). Mirrors
+# the Windows context. On Linux the detection is currently minimal (the
+# Linux renderer is largely a facade); fields default to 0 so every
+# subsystem takes the classic path until full Linux detection lands.
+struct GpuCaps:
+    api_version:          i32 = 0
+    descriptor_indexing:  i32 = 0
+    draw_indirect_count:  i32 = 0
+    dynamic_rendering:    i32 = 0
+    max_descriptor_array: i32 = 0
+    timestamp_valid_bits: i32 = 0
+
 struct VulkanContext:
     vk_instance:        i64 = 0
     vk_physical_device: i64 = 0
@@ -16,6 +28,7 @@ struct VulkanContext:
     graphics_family:    i32 = -1
     present_family:     i32 = -1
     initialized:        i32 = 0
+    caps:               GpuCaps = GpuCaps()
 
 attach VulkanContext:
 

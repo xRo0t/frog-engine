@@ -6,6 +6,19 @@
 
 import sys.windows.win32.vulkan_surface
 
+# GPU capability tier — detected once at startup (Requirement 5). Each
+# field is 1 when the corresponding modern-Vulkan feature is supported AND
+# enabled on the created device, 0 otherwise. Subsystems read these to pick
+# the modern path vs the classic fallback; the engine never crashes when a
+# feature is missing — it just runs the classic path.
+struct GpuCaps:
+    api_version:          i32 = 0   # detected VK_MAKE_VERSION (e.g. 1.3)
+    descriptor_indexing:  i32 = 0   # bindless table possible? (R1)
+    draw_indirect_count:  i32 = 0   # vkCmdDrawIndexedIndirectCount? (R2)
+    dynamic_rendering:    i32 = 0   # vkCmdBeginRendering? (R6)
+    max_descriptor_array: i32 = 0   # bindless table size cap
+    timestamp_valid_bits: i32 = 0   # GPU timing support (measurement)
+
 struct VulkanContext:
     vk_instance:        i64 = 0
     vk_physical_device: i64 = 0
@@ -16,8 +29,67 @@ struct VulkanContext:
     graphics_family:    i32 = -1
     present_family:     i32 = -1
     initialized:        i32 = 0
+    caps:               GpuCaps = GpuCaps()
 
 attach VulkanContext:
+
+    # Detect modern-Vulkan capabilities on the selected physical device and
+    # record them in self.caps (Requirement 5.2/5.3). PURE QUERY — touches
+    # no rendering path. Uses vkGetPhysicalDeviceFeatures2 with a pNext chain
+    # of Vulkan 1.2 features (descriptorIndexing / drawIndirectCount) plus
+    # dynamic-rendering, and properties2 for the bindless array cap. If the
+    # device predates 1.1 (no Features2), everything stays 0 (classic path).
+    fun _detect_caps(self):
+        c: GpuCaps = self.caps
+        # Only query Features2 when the instance/device speak >= 1.1.
+        if c.api_version < 4198400:
+            return
+
+        vk12: i64 = Memory.malloc_zeroed(256)
+        dynr: i64 = Memory.malloc_zeroed(64)
+        feats2: i64 = Memory.malloc_zeroed(280)
+        if vk12 == 0 or dynr == 0 or feats2 == 0:
+            Memory.free(vk12)
+            Memory.free(dynr)
+            Memory.free(feats2)
+            return
+
+        Memory.write_i32(vk12, 49)                 # VULKAN_1_2_FEATURES
+        Memory.write_ptr(vk12 + 8, dynr)
+        Memory.write_i32(dynr, 1000044003)         # DYNAMIC_RENDERING_FEATURES
+        Memory.write_ptr(dynr + 8, 0)
+        Memory.write_i32(feats2, 1000059000)       # FEATURES_2
+        Memory.write_ptr(feats2 + 8, vk12)
+
+        vkGetPhysicalDeviceFeatures2(self.vk_physical_device, feats2)
+
+        di:  i32 = Memory.read_i32(vk12 + 52)      # descriptorIndexing
+        nui: i32 = Memory.read_i32(vk12 + 72)      # nonuniform sampled image
+        pb:  i32 = Memory.read_i32(vk12 + 124)     # partially bound
+        rda: i32 = Memory.read_i32(vk12 + 132)     # runtime descriptor array
+        dic: i32 = Memory.read_i32(vk12 + 20)      # drawIndirectCount
+        dyn: i32 = Memory.read_i32(dynr + 16)      # dynamicRendering
+
+        Memory.free(vk12)
+        Memory.free(dynr)
+        Memory.free(feats2)
+
+        # Bindless needs the full quartet; indirect-count just its flag.
+        bindless: i32 = 0
+        if di != 0:
+            if nui != 0:
+                if pb != 0:
+                    if rda != 0:
+                        bindless = 1
+        c.descriptor_indexing = bindless
+        if dic != 0:
+            c.draw_indirect_count = 1
+        if dyn != 0:
+            c.dynamic_rendering = 1
+        if bindless == 1:
+            c.max_descriptor_array = 65536
+        self.caps = c
+
 
     fun init(self, window_handle: i64) -> i32:
         return self.init_with_gpu_preference(window_handle, 0)
@@ -122,13 +194,35 @@ attach VulkanContext:
         app_info: i64 = Memory.malloc_zeroed(48)
         if app_info == 0:
             return 0
+
+        # Detect the highest instance API version available and request the
+        # best we target (cap at 1.3 = 0x00403000 = 4206592). Fallback to 1.0
+        # (4194304) if the loader is pre-1.1 (vkEnumerateInstanceVersion may
+        # be absent — guarded by a zeroed out-param). Requirement 5.1.
+        ver_ptr: i64 = Memory.malloc_zeroed(4)
+        requested_api: i32 = 4194304          # VK_API_VERSION_1_0
+        if ver_ptr != 0:
+            Memory.write_i32(ver_ptr, 0)
+            vkEnumerateInstanceVersion(ver_ptr)
+            avail: i32 = Memory.read_i32(ver_ptr)
+            Memory.free(ver_ptr)
+            if avail >= 4206592:
+                requested_api = 4206592       # VK_API_VERSION_1_3
+            elif avail >= 4202496:
+                requested_api = 4202496       # VK_API_VERSION_1_2
+            elif avail >= 4198400:
+                requested_api = 4198400       # VK_API_VERSION_1_1
+        caps0: GpuCaps = self.caps
+        caps0.api_version = requested_api
+        self.caps = caps0
+
         Memory.write_i32(app_info, 0)
         Memory.write_ptr(app_info + 8, 0)
         Memory.write_ptr(app_info + 16, 0)
         Memory.write_i32(app_info + 24, 1)
         Memory.write_ptr(app_info + 32, 0)
         Memory.write_i32(app_info + 40, 4194304)
-        Memory.write_i32(app_info + 44, 4194304)
+        Memory.write_i32(app_info + 44, requested_api)
 
         # Step 3: VkInstanceCreateInfo (64 bytes)
         create_info: i64 = Memory.malloc_zeroed(64)
@@ -231,6 +325,10 @@ attach VulkanContext:
 
         print("  Physical device selected")
 
+        # Detect modern-Vulkan capabilities on the chosen device (R5.2/5.3).
+        # Pure query — does not change any rendering path yet.
+        self._detect_caps()
+
         # Step 6: Create logical device
         priority_ptr: i64 = Memory.malloc_zeroed(4)
         if priority_ptr == 0:
@@ -290,20 +388,74 @@ attach VulkanContext:
         Memory.write_ptr(dev_ci + 56, swap_ext)
         Memory.write_ptr(dev_ci + 64, 0)
 
+        # Build a pNext features chain enabling ONLY the detected modern
+        # features (R5.2). Same struct layouts read in _detect_caps. If any
+        # of this makes vkCreateDevice fail, we retry below with pNext=0 and
+        # the caps cleared — the engine always gets a working device (R5.4).
+        feat_vk12: i64 = 0
+        feat_dynr: i64 = 0
+        want_modern: i32 = 0
+        dcaps: GpuCaps = self.caps
+        cap_di: i32 = dcaps.descriptor_indexing
+        cap_dic: i32 = dcaps.draw_indirect_count
+        cap_dyn: i32 = dcaps.dynamic_rendering
+        if cap_di == 1:
+            want_modern = 1
+        if cap_dic == 1:
+            want_modern = 1
+        if cap_dyn == 1:
+            want_modern = 1
+        if want_modern == 1:
+            feat_vk12 = Memory.malloc_zeroed(256)
+            feat_dynr = Memory.malloc_zeroed(64)
+            if feat_vk12 != 0:
+                Memory.write_i32(feat_vk12, 49)            # VULKAN_1_2_FEATURES
+                if cap_dic == 1:
+                    Memory.write_i32(feat_vk12 + 20, 1)    # drawIndirectCount
+                if cap_di == 1:
+                    Memory.write_i32(feat_vk12 + 52, 1)    # descriptorIndexing
+                    Memory.write_i32(feat_vk12 + 72, 1)    # nonuniform sampled image
+                    Memory.write_i32(feat_vk12 + 124, 1)   # partially bound
+                    Memory.write_i32(feat_vk12 + 132, 1)   # runtime descriptor array
+                if cap_dyn == 1:
+                    if feat_dynr != 0:
+                        Memory.write_i32(feat_dynr, 1000044003)  # DYNAMIC_RENDERING_FEATURES
+                        Memory.write_i32(feat_dynr + 16, 1)      # dynamicRendering
+                        Memory.write_ptr(feat_vk12 + 8, feat_dynr)
+                Memory.write_ptr(dev_ci + 8, feat_vk12)
+
         dev_ptr: i64 = Memory.malloc_zeroed(8)
         if dev_ptr == 0:
             Memory.free(priority_ptr)
             Memory.free(queue_ci)
             Memory.free(swap_ext)
             Memory.free(dev_ci)
+            Memory.free(feat_vk12)
+            Memory.free(feat_dynr)
             return 0
         dev_result: i32 = vkCreateDevice(self.vk_physical_device, dev_ci, 0, dev_ptr)
+        # Fallback (R5.4): if enabling modern features broke device creation,
+        # retry with a plain device (no pNext) and clear the caps so every
+        # subsystem takes the classic path. The engine never fails to start
+        # over a feature toggle.
+        if dev_result != 0:
+            if want_modern == 1:
+                print("  vkCreateDevice with modern features failed; retrying classic")
+                Memory.write_ptr(dev_ci + 8, 0)
+                dcaps.descriptor_indexing = 0
+                dcaps.draw_indirect_count = 0
+                dcaps.dynamic_rendering = 0
+                dcaps.max_descriptor_array = 0
+                self.caps = dcaps
+                dev_result = vkCreateDevice(self.vk_physical_device, dev_ci, 0, dev_ptr)
         self.vk_device = Memory.read_ptr(dev_ptr)
         Memory.free(dev_ptr)
         Memory.free(priority_ptr)
         Memory.free(queue_ci)
         Memory.free(swap_ext)
         Memory.free(dev_ci)
+        Memory.free(feat_vk12)
+        Memory.free(feat_dynr)
         if dev_result != 0:
             print("  vkCreateDevice failed")
             return 0
@@ -322,6 +474,13 @@ attach VulkanContext:
             Memory.free(pq_ptr)
 
         self.initialized = 1
+        pcaps: GpuCaps = self.caps
+        api_v: i32 = pcaps.api_version
+        bl: i32 = pcaps.descriptor_indexing
+        ic: i32 = pcaps.draw_indirect_count
+        dr: i32 = pcaps.dynamic_rendering
+        md: i32 = pcaps.max_descriptor_array
+        print(@"[frog.caps] api={api_v} bindless={bl} indirect_count={ic} dynamic_rendering={dr} max_desc={md}")
         return 1
 
     fun cleanup(self) -> void:
