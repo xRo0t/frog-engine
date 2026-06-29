@@ -273,6 +273,9 @@ attach EngineRuntime:
     fun set_shadow_min_size(self, threshold: f32):
         self.renderer.set_shadow_min_size(threshold)
 
+    fun set_shadow_cascade0_margin(self, margin: f32):
+        self.renderer.set_shadow_cascade0_margin(margin)
+
     fun set_collision_debug(self, enabled: i32):
         self.renderer.set_collision_debug(enabled)
 

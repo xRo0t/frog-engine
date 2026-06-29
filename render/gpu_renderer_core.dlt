@@ -24,6 +24,13 @@ imm FROG_POINT_LIGHT_DATA_SIZE: i64 = 336
 # scenes so casters that map to a sub-pixel shadow are skipped.
 static g_frog_shadow_min_size: f32 = 0.0
 
+# Cascade-0 priority cull (CSM overlap reduction). When > 0, a caster that is
+# fully contained inside cascade 0's box (with this NDC safety margin) is NOT
+# re-rendered into cascade 1, eliminating the double-draw in the cascade
+# overlap region. 0.0 disables (default). Risky under grazing light, so it's
+# opt-in; the margin keeps casters near the boundary in both cascades.
+static g_frog_shadow_cascade0_margin: f32 = 0.0
+
 fun _frog_abs_f32(v: f32) -> f32:
     if v < 0.0:
         return 0.0 - v
@@ -227,6 +234,67 @@ fun _frog_shadow_instance_visible(vp: i64, model: i64, bound_x: f32, bound_y: f3
         ndc_radius: f32 = world_radius * grad / denom
         if ndc_radius < g_frog_shadow_min_size:
             return 0
+    return 1
+
+# Returns 1 if the caster's bounding sphere is fully contained inside the
+# given cascade's NDC box (x,y in [-1,1], z in [0,1]) with a safety margin.
+# Used to skip re-drawing a near caster into the far cascade (CSM overlap
+# reduction). Conservative: any uncertainty -> 0 (keep the draw).
+fun _frog_shadow_fully_in_cascade(vp: i64, model: i64, bound_x: f32, bound_y: f32, bound_z: f32, bound_radius: f32, margin: f32) -> i32:
+    if vp == 0:
+        return 0
+    if model == 0:
+        return 0
+
+    x: f32 = Memory.read_f32(model + 0) * bound_x + Memory.read_f32(model + 16) * bound_y + Memory.read_f32(model + 32) * bound_z + Memory.read_f32(model + 48)
+    y: f32 = Memory.read_f32(model + 4) * bound_x + Memory.read_f32(model + 20) * bound_y + Memory.read_f32(model + 36) * bound_z + Memory.read_f32(model + 52)
+    z: f32 = Memory.read_f32(model + 8) * bound_x + Memory.read_f32(model + 24) * bound_y + Memory.read_f32(model + 40) * bound_z + Memory.read_f32(model + 56)
+
+    sx: f32 = @sqrt(Memory.read_f32(model + 0) * Memory.read_f32(model + 0) + Memory.read_f32(model + 4) * Memory.read_f32(model + 4) + Memory.read_f32(model + 8) * Memory.read_f32(model + 8))
+    sy: f32 = @sqrt(Memory.read_f32(model + 16) * Memory.read_f32(model + 16) + Memory.read_f32(model + 20) * Memory.read_f32(model + 20) + Memory.read_f32(model + 24) * Memory.read_f32(model + 24))
+    sz: f32 = @sqrt(Memory.read_f32(model + 32) * Memory.read_f32(model + 32) + Memory.read_f32(model + 36) * Memory.read_f32(model + 36) + Memory.read_f32(model + 40) * Memory.read_f32(model + 40))
+    max_scale: f32 = sx
+    if sy > max_scale:
+        max_scale = sy
+    if sz > max_scale:
+        max_scale = sz
+    if max_scale < 0.001:
+        max_scale = 1.0
+    world_radius: f32 = bound_radius * max_scale
+
+    cx: f32 = Memory.read_f32(vp + 0) * x + Memory.read_f32(vp + 16) * y + Memory.read_f32(vp + 32) * z + Memory.read_f32(vp + 48)
+    cy: f32 = Memory.read_f32(vp + 4) * x + Memory.read_f32(vp + 20) * y + Memory.read_f32(vp + 36) * z + Memory.read_f32(vp + 52)
+    cz: f32 = Memory.read_f32(vp + 8) * x + Memory.read_f32(vp + 24) * y + Memory.read_f32(vp + 40) * z + Memory.read_f32(vp + 56)
+
+    # NDC half-extent the sphere projects to along x and y (ortho gradients).
+    gx0: f32 = Memory.read_f32(vp + 0)
+    gx1: f32 = Memory.read_f32(vp + 16)
+    gx2: f32 = Memory.read_f32(vp + 32)
+    gy0: f32 = Memory.read_f32(vp + 4)
+    gy1: f32 = Memory.read_f32(vp + 20)
+    gy2: f32 = Memory.read_f32(vp + 36)
+    gz0: f32 = Memory.read_f32(vp + 8)
+    gz1: f32 = Memory.read_f32(vp + 24)
+    gz2: f32 = Memory.read_f32(vp + 40)
+    rx: f32 = world_radius * @sqrt(gx0 * gx0 + gx1 * gx1 + gx2 * gx2)
+    ry: f32 = world_radius * @sqrt(gy0 * gy0 + gy1 * gy1 + gy2 * gy2)
+    rz: f32 = world_radius * @sqrt(gz0 * gz0 + gz1 * gz1 + gz2 * gz2)
+
+    bx: f32 = 1.0 - margin
+    # x within [-bx+rx, bx-rx]
+    if cx - rx < 0.0 - bx:
+        return 0
+    if cx + rx > bx:
+        return 0
+    if cy - ry < 0.0 - bx:
+        return 0
+    if cy + ry > bx:
+        return 0
+    # z within [0, 1] (Vulkan depth)
+    if cz - rz < 0.0:
+        return 0
+    if cz + rz > 1.0:
+        return 0
     return 1
 
 fun _frog_cull_one(self_addr: i64, vp: i64, gi: i32, res: i64):
@@ -1556,6 +1624,15 @@ attach GpuRendererCore:
             g_frog_shadow_min_size = 0.0
         else:
             g_frog_shadow_min_size = threshold
+
+    # CSM cascade-0 priority cull: skip re-drawing near casters into the far
+    # cascade. margin is an NDC safety band (0 disables). Risky under grazing
+    # light, so opt-in.
+    fun set_shadow_cascade0_margin(self, margin: f32):
+        if margin < 0.0:
+            g_frog_shadow_cascade0_margin = 0.0
+        else:
+            g_frog_shadow_cascade0_margin = margin
 
     fun _debug_record_frame(self):
         if self.debug_render_stats_enabled == 0:
@@ -3862,6 +3939,15 @@ attach GpuRendererCore:
                                             elif object_shadow_distance < effective_shadow_distance:
                                                 effective_shadow_distance = object_shadow_distance
                                     visible = _frog_shadow_instance_visible(cascade_matrix, g_model, bound_x, bound_y, bound_z, bound_r, cam_x, cam_y, cam_z, effective_shadow_distance)
+                                    # CSM overlap reduction: if this is the far
+                                    # cascade and the caster is fully inside the
+                                    # near cascade's box, the near cascade already
+                                    # covers it — skip the redundant far draw.
+                                    if visible == 1:
+                                        if cascade_index == 1:
+                                            if g_frog_shadow_cascade0_margin > 0.0:
+                                                if _frog_shadow_fully_in_cascade(light_vp, g_model, bound_x, bound_y, bound_z, bound_r, g_frog_shadow_cascade0_margin) == 1:
+                                                    visible = 0
                                 else:
                                     visible = 0
                             if visible == 1:
