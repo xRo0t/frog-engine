@@ -115,7 +115,18 @@ attach EngineRuntime:
         # indexing or creation fails, bindless_enabled stays 0 -> classic path.
         bcaps: GpuCaps = ctx.caps
         runtime.renderer.core.set_bindless_caps(bcaps.descriptor_indexing, bcaps.max_descriptor_array, g_engine_bindless_flag)
-        runtime.renderer.core._bindless_init()
+        if runtime.renderer.core._bindless_init() == 1:
+            # Build the bindless graphics pipeline variant now that the table
+            # layout exists. If it fails, bindless_enabled is cleared so the
+            # classic pipeline/draw path stays in effect.
+            if render_pass._create_bindless_pipeline(ctx.vk_device, width, height, runtime.renderer.core.bindless_layout) == 1:
+                print("[frog.bindless] pipeline ready")
+            else:
+                runtime.renderer.core.bindless_enabled = 0
+                print("[frog.bindless] pipeline build failed; classic path")
+        # Re-copy render_pass into the runtime so the bindless pipeline fields
+        # (set on the local above) are reflected in the stored value-type copy.
+        runtime.render_pass = render_pass
 
         runtime.ready_flag = 1
         return runtime
