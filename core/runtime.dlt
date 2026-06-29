@@ -107,6 +107,16 @@ attach EngineRuntime:
         # g_engine_runtime.cull.
         runtime.renderer.core.set_culling_mode(FROG_CULL_MODE_CPU)
 
+        # Phase 1 (R1): wire the bindless texture table. Feed device support
+        # (from the detected GpuCaps) + the engine opt-in flag into the
+        # renderer, then create the table objects. This allocates a descriptor
+        # set layout/pool/set ONLY — it does NOT change any draw path yet
+        # (tasks 1.5/1.6 wire the draw). If the device lacks descriptor
+        # indexing or creation fails, bindless_enabled stays 0 -> classic path.
+        bcaps: GpuCaps = ctx.caps
+        runtime.renderer.core.set_bindless_caps(bcaps.descriptor_indexing, bcaps.max_descriptor_array, g_engine_bindless_flag)
+        runtime.renderer.core._bindless_init()
+
         runtime.ready_flag = 1
         return runtime
 

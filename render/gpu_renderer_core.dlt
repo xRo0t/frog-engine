@@ -546,6 +546,131 @@ attach GpuRendererCore:
         else:
             self.bindless_flag = 1
 
+    # Phase 1 task 1.2: create the bindless descriptor objects — ONE layout
+    # with a single binding (binding 0) of COMBINED_IMAGE_SAMPLER whose
+    # descriptorCount equals the table capacity, marked PARTIALLY_BOUND +
+    # UPDATE_AFTER_BIND so slots can be written lazily even after the set is
+    # bound. Allocates one pool + one set (the big table). Returns 1 on
+    # success and flips bindless_enabled to 1; returns 0 (and leaves
+    # bindless_enabled at 0 -> classic path) on any failure. Creates NO
+    # pipeline and is NOT yet wired into any draw — that lands in tasks 1.5/1.6.
+    fun _bindless_init(self) -> i32:
+        if self.bindless_supported == 0:
+            return 0
+        if self.bindless_flag == 0:
+            return 0
+        if self.bindless_capacity <= 0:
+            return 0
+        if self.device == 0:
+            return 0
+
+        cap: i32 = self.bindless_capacity
+
+        # VkDescriptorSetLayoutBinding (24 bytes): binding(0) type(4) count(8)
+        # stage(12) pImmutable(16). One binding only.
+        dsl_bind: i64 = Memory.malloc_zeroed(24)
+        # Per-binding flags array: PARTIALLY_BOUND(4) | UPDATE_AFTER_BIND(1) = 5.
+        bind_flags: i64 = Memory.malloc_zeroed(4)
+        # VkDescriptorSetLayoutBindingFlagsCreateInfo (sType 1000161000):
+        #  0 sType, 8 pNext, 16 bindingCount, 24 pBindingFlags
+        flags_ci: i64 = Memory.malloc_zeroed(32)
+        # VkDescriptorSetLayoutCreateInfo (sType 32):
+        #  0 sType, 8 pNext, 16 flags, 20 bindingCount, 24 pBindings
+        dsl_ci: i64 = Memory.malloc_zeroed(32)
+        dsl_out: i64 = Memory.malloc_zeroed(8)
+        if dsl_bind == 0 or bind_flags == 0 or flags_ci == 0 or dsl_ci == 0 or dsl_out == 0:
+            Memory.free(dsl_bind)
+            Memory.free(bind_flags)
+            Memory.free(flags_ci)
+            Memory.free(dsl_ci)
+            Memory.free(dsl_out)
+            return 0
+
+        Memory.write_i32(dsl_bind, 0)        # binding 0
+        Memory.write_i32(dsl_bind + 4, 1)    # COMBINED_IMAGE_SAMPLER
+        Memory.write_i32(dsl_bind + 8, cap)  # descriptorCount = table capacity
+        Memory.write_i32(dsl_bind + 12, 16)  # FRAGMENT stage
+
+        Memory.write_i32(bind_flags, 5)      # PARTIALLY_BOUND | UPDATE_AFTER_BIND
+
+        Memory.write_i32(flags_ci, 1000161000)   # BINDING_FLAGS_CREATE_INFO
+        Memory.write_i32(flags_ci + 16, 1)       # bindingCount
+        Memory.write_ptr(flags_ci + 24, bind_flags)
+
+        Memory.write_i32(dsl_ci, 32)
+        Memory.write_ptr(dsl_ci + 8, flags_ci)   # pNext = binding flags
+        Memory.write_i32(dsl_ci + 16, 2)         # UPDATE_AFTER_BIND_POOL flag
+        Memory.write_i32(dsl_ci + 20, 1)         # bindingCount
+        Memory.write_ptr(dsl_ci + 24, dsl_bind)
+
+        dsl_r: i32 = vkCreateDescriptorSetLayout(self.device, dsl_ci, 0, dsl_out)
+        layout: i64 = Memory.read_ptr(dsl_out)
+        Memory.free(dsl_out)
+        Memory.free(dsl_ci)
+        Memory.free(flags_ci)
+        Memory.free(bind_flags)
+        Memory.free(dsl_bind)
+        if dsl_r != 0:
+            print("[frog.bindless] layout creation failed; classic path")
+            return 0
+        self.bindless_layout = layout
+
+        # Pool: one COMBINED_IMAGE_SAMPLER pool sized for the whole table, with
+        # UPDATE_AFTER_BIND flag so descriptors can be written after binding.
+        dps: i64 = Memory.malloc_zeroed(8)
+        dp_ci: i64 = Memory.malloc_zeroed(40)
+        dp_out: i64 = Memory.malloc_zeroed(8)
+        if dps == 0 or dp_ci == 0 or dp_out == 0:
+            Memory.free(dps)
+            Memory.free(dp_ci)
+            Memory.free(dp_out)
+            return 0
+        Memory.write_i32(dps, 1)             # COMBINED_IMAGE_SAMPLER
+        Memory.write_i32(dps + 4, cap)       # descriptorCount
+        Memory.write_i32(dp_ci, 33)
+        Memory.write_i32(dp_ci + 16, 2)      # UPDATE_AFTER_BIND_BIT
+        Memory.write_i32(dp_ci + 20, 1)      # maxSets = 1 (the table)
+        Memory.write_i32(dp_ci + 24, 1)      # poolSizeCount
+        Memory.write_ptr(dp_ci + 32, dps)
+        dp_r: i32 = vkCreateDescriptorPool(self.device, dp_ci, 0, dp_out)
+        pool: i64 = Memory.read_ptr(dp_out)
+        Memory.free(dp_out)
+        Memory.free(dp_ci)
+        Memory.free(dps)
+        if dp_r != 0:
+            print("[frog.bindless] pool creation failed; classic path")
+            return 0
+        self.bindless_pool = pool
+
+        # Allocate the single big set. VkDescriptorSetAllocateInfo (sType 34):
+        #  0 sType, 8 pNext, 16 descriptorPool, 24 descriptorSetCount, 32 pSetLayouts
+        layout_arr: i64 = Memory.malloc_zeroed(8)
+        ai: i64 = Memory.malloc_zeroed(40)
+        set_out: i64 = Memory.malloc_zeroed(8)
+        if layout_arr == 0 or ai == 0 or set_out == 0:
+            Memory.free(layout_arr)
+            Memory.free(ai)
+            Memory.free(set_out)
+            return 0
+        Memory.write_ptr(layout_arr, self.bindless_layout)
+        Memory.write_i32(ai, 34)
+        Memory.write_ptr(ai + 16, self.bindless_pool)
+        Memory.write_i32(ai + 24, 1)
+        Memory.write_ptr(ai + 32, layout_arr)
+        ar: i32 = vkAllocateDescriptorSets(self.device, ai, set_out)
+        bset: i64 = Memory.read_ptr(set_out)
+        Memory.free(set_out)
+        Memory.free(ai)
+        Memory.free(layout_arr)
+        if ar != 0:
+            print("[frog.bindless] set allocation failed; classic path")
+            return 0
+        self.bindless_set = bset
+        self.bindless_count = 0
+        self.bindless_enabled = 1
+        print(@"[frog.bindless] table ready (capacity={cap})")
+        return 1
+
     # Enable GPU-driven culling for the main pass. cull_ptr is a borrowed
     # GpuCullPipeline (owned by the runtime). When enabled and the pipeline
     # is ready, each mesh group culls + draws on the GPU via indirect draw.
@@ -3849,6 +3974,16 @@ attach GpuRendererCore:
     fun cleanup(self) -> void:
         self.cleanup_collision_debug()
         self.destroy_render_scale_target()
+        # Phase 1: destroy the bindless table objects (pool frees its sets).
+        if self.bindless_pool != 0:
+            vkDestroyDescriptorPool(self.device, self.bindless_pool, 0)
+            self.bindless_pool = 0
+            self.bindless_set = 0
+        if self.bindless_layout != 0:
+            vkDestroyDescriptorSetLayout(self.device, self.bindless_layout, 0)
+            self.bindless_layout = 0
+        self.bindless_enabled = 0
+        self.bindless_count = 0
         if self.retire_buffers != 0:
             ri: i32 = 0
             while ri < self.retire_count:

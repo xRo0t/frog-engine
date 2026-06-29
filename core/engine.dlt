@@ -55,6 +55,7 @@ static g_engine_frame_pacing_max_ms: f32 = 0.0
 static g_engine_frustum_culling_enabled: i32 = 0
 static g_engine_culling_mode: i32 = 0
 static g_engine_culling_auto_threshold: i32 = 2000
+static g_engine_bindless_flag: i32 = 1
 static g_engine_current_camera_ptr: i64 = 0
 static g_engine_has_window_mode: i32 = 0
 static g_engine_window_mode_kind: i32 = WINDOW_MODE_WINDOWED
@@ -83,6 +84,7 @@ attach DisplayWindow:
         g_engine_frustum_culling_enabled = 0
         g_engine_culling_mode = 0
         g_engine_culling_auto_threshold = 2000
+        g_engine_bindless_flag = 1
         g_engine_current_camera_ptr = 0
         g_engine_has_window_mode = 0
         g_engine_window_mode_kind = WINDOW_MODE_WINDOWED
@@ -195,6 +197,20 @@ attach Properties:
 
     static fun culling_mode() -> i32:
         return g_engine_culling_mode
+
+    # Phase 1 (R1): opt into the bindless texture table. Default ON; takes
+    # effect at runtime init (the table is created only if the device supports
+    # descriptor indexing). Has no rendering effect until the bindless draw
+    # path lands (tasks 1.5/1.6) — for now it only allocates/validates the
+    # table. Set OFF to force the classic per-mesh descriptor path.
+    static fun set_bindless(enabled: i32):
+        if enabled == 0:
+            g_engine_bindless_flag = 0
+        else:
+            g_engine_bindless_flag = 1
+
+    static fun bindless() -> i32:
+        return g_engine_bindless_flag
 
     static fun set_culling_auto_threshold(threshold: i32):
         t: i32 = threshold
