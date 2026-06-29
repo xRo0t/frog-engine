@@ -342,6 +342,7 @@ struct GpuRendererCore:
     tex_images:     i64 = 0    # VkImage[]
     tex_memories:   i64 = 0    # VkDeviceMemory[]
     tex_desc_sets:  i64 = 0    # VkDescriptorSet[]
+    tex_bindless_slots: i64 = 0 # i32[]: bindless table slot per texture (-1 = none)
     tex_count:      i32 = 0
     tex_capacity:   i32 = 0
     mesh_tex_ids:   i64 = 0    # mesh_id -> texture_id (-1 = white fallback)
@@ -441,6 +442,11 @@ attach GpuRendererCore:
         self.tex_images = Memory.malloc_zeroed(self.tex_capacity * 8)
         self.tex_memories = Memory.malloc_zeroed(self.tex_capacity * 8)
         self.tex_desc_sets = Memory.malloc_zeroed(self.tex_capacity * 8)
+        self.tex_bindless_slots = Memory.malloc_zeroed(self.tex_capacity * 4)
+        tbsi: i32 = 0
+        while tbsi < self.tex_capacity:
+            Memory.write_i32(self.tex_bindless_slots + tbsi * 4, 0 - 1)
+            tbsi = tbsi + 1
         self.tex_count = 0
         # mesh_id -> texture_id, default -1 (white fallback)
         self.mesh_tex_ids = Memory.malloc_zeroed(self.vb_capacity * 4)
@@ -670,6 +676,51 @@ attach GpuRendererCore:
         self.bindless_enabled = 1
         print(@"[frog.bindless] table ready (capacity={cap})")
         return 1
+
+    # Phase 1 task 1.3: write a (view, sampler) pair into the next free slot
+    # of the bindless table and return its index. Uses dstArrayElement = slot
+    # with descriptorCount = 1, COMBINED_IMAGE_SAMPLER, layout
+    # SHADER_READ_ONLY_OPTIMAL. UPDATE_AFTER_BIND lets us write even while the
+    # set is bound. Returns -1 if bindless is disabled, the table is full, or
+    # the inputs are null — callers keep their classic descriptor as fallback.
+    fun _bindless_register(self, view: i64, sampler: i64) -> i32:
+        if self.bindless_enabled == 0:
+            return 0 - 1
+        if self.bindless_set == 0:
+            return 0 - 1
+        if view == 0:
+            return 0 - 1
+        if sampler == 0:
+            return 0 - 1
+        if self.bindless_count >= self.bindless_capacity:
+            return 0 - 1
+        slot: i32 = self.bindless_count
+
+        # VkDescriptorImageInfo (24): sampler(0) imageView(8) imageLayout(16).
+        img_info: i64 = Memory.malloc_zeroed(24)
+        # VkWriteDescriptorSet (64): sType(0) pNext(8) dstSet(16) dstBinding(24)
+        #  dstArrayElement(28) descriptorCount(32) descriptorType(36)
+        #  pImageInfo(40) pBufferInfo(48) pTexelBufferView(56).
+        wds: i64 = Memory.malloc_zeroed(64)
+        if img_info == 0 or wds == 0:
+            Memory.free(img_info)
+            Memory.free(wds)
+            return 0 - 1
+        Memory.write_ptr(img_info, sampler)
+        Memory.write_ptr(img_info + 8, view)
+        Memory.write_i32(img_info + 16, 5)       # SHADER_READ_ONLY_OPTIMAL
+        Memory.write_i32(wds, 35)                # WRITE_DESCRIPTOR_SET
+        Memory.write_ptr(wds + 16, self.bindless_set)
+        Memory.write_i32(wds + 24, 0)            # dstBinding = 0
+        Memory.write_i32(wds + 28, slot)         # dstArrayElement = slot
+        Memory.write_i32(wds + 32, 1)            # descriptorCount
+        Memory.write_i32(wds + 36, 1)            # COMBINED_IMAGE_SAMPLER
+        Memory.write_ptr(wds + 40, img_info)
+        vkUpdateDescriptorSets(self.device, 1, wds, 0, 0)
+        Memory.free(wds)
+        Memory.free(img_info)
+        self.bindless_count = slot + 1
+        return slot
 
     # Enable GPU-driven culling for the main pass. cull_ptr is a borrowed
     # GpuCullPipeline (owned by the runtime). When enabled and the pipeline
@@ -2355,6 +2406,17 @@ attach GpuRendererCore:
         Memory.write_ptr(self.tex_images + idx * 8, tex.image)
         Memory.write_ptr(self.tex_memories + idx * 8, tex.memory)
         Memory.write_ptr(self.tex_desc_sets + idx * 8, dset)
+        # Phase 1 task 1.3: ALSO register the texture in the bindless table
+        # (in parallel with the classic per-texture descriptor set above). The
+        # classic dset stays the active draw path until tasks 1.5/1.6; this
+        # just populates the table so the slot index is ready. No-op (-1) when
+        # bindless is disabled.
+        if self.tex_bindless_slots != 0:
+            bslot: i32 = self._bindless_register(tex.view, tex.sampler)
+            Memory.write_i32(self.tex_bindless_slots + idx * 4, bslot)
+            if self.bindless_enabled == 1:
+                if idx == 0:
+                    print(@"[frog.bindless] first texture -> slot {bslot}")
         self.tex_count = idx + 1
         return idx
 
