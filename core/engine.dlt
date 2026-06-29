@@ -44,6 +44,7 @@ static g_engine_target_fps: i32 = 0
 static g_engine_render_scale: f32 = 1.0
 static g_engine_gpu_preference: i32 = 0
 static g_engine_render_stats_enabled: i32 = 0
+static g_engine_gpu_timing_enabled: i32 = 0
 static g_engine_collision_debug_enabled: i32 = 0
 static g_engine_frame_pacing_enabled: i32 = 0
 static g_engine_frame_pacing_interval: i32 = 120
@@ -77,6 +78,7 @@ attach DisplayWindow:
         g_engine_render_scale = 1.0
         g_engine_gpu_preference = 0
         g_engine_render_stats_enabled = 0
+        g_engine_gpu_timing_enabled = 0
         g_engine_collision_debug_enabled = 0
         g_engine_frame_pacing_enabled = 0
         g_engine_frame_pacing_interval = 120
@@ -271,6 +273,19 @@ attach Debug:
     static fun render_stats_enabled() -> i32:
         return g_engine_render_stats_enabled
 
+    # GPU timestamp profiling: prints per-pass GPU ms (shadow/main/post).
+    # Off by default; turn on to find the real GPU bottleneck.
+    static fun gpu_timing(enabled: i32):
+        if enabled == 0:
+            g_engine_gpu_timing_enabled = 0
+        else:
+            g_engine_gpu_timing_enabled = 1
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_gpu_timing(g_engine_gpu_timing_enabled)
+
+    static fun gpu_timing_enabled() -> i32:
+        return g_engine_gpu_timing_enabled
+
     static fun collisions(enabled: i32):
         if enabled == 0:
             g_engine_collision_debug_enabled = 0
@@ -430,6 +445,7 @@ attach Engine:
         if g_engine_runtime.ready() == 1:
             g_engine_runtime.bind_cull()
             g_engine_runtime.set_render_stats(g_engine_render_stats_enabled)
+            g_engine_runtime.set_gpu_timing(g_engine_gpu_timing_enabled)
             g_engine_runtime.set_collision_debug(g_engine_collision_debug_enabled)
             g_engine_runtime.set_instance_culling(g_engine_frustum_culling_enabled)
             g_engine_runtime.set_culling_auto_threshold(g_engine_culling_auto_threshold)

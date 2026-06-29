@@ -1,0 +1,171 @@
+##############################
+# Frog Engine — GPU Profiler
+# Per-frame GPU timing via VK_QUERY_TYPE_TIMESTAMP. Measures the GPU wall
+# time of the shadow pass, the main pass, and the post/bloom pass, then
+# prints a rolling average. Zero effect on the rendered image — it only
+# inserts vkCmdWriteTimestamp calls and reads results back a frame later
+# (double-buffered queries) so the GPU is never stalled.
+#
+# Enable via Engine.debug.gpu_timing(1) (off by default).
+##############################
+
+# 4 timestamps per frame: [0]=frame start, [1]=after shadow, [2]=after main,
+# [3]=after bloom/present. Double-buffered across 2 slots so we read slot
+# (frame-1) results while slot (frame) is being written.
+imm FROG_GPU_TS_PER_FRAME: i32 = 4
+imm FROG_GPU_TS_SLOTS: i32 = 4
+imm FROG_GPU_TS_TOTAL: i32 = 16   # FROG_GPU_TS_PER_FRAME * FROG_GPU_TS_SLOTS
+
+struct GpuProfiler:
+    device:        i64 = 0
+    query_pool:    i64 = 0
+    readback:      i64 = 0    # u64[FROG_GPU_TS_TOTAL] scratch for results
+    ts_period_ns:  f32 = 1.0  # nanoseconds per timestamp tick (device limit)
+    valid_bits:    i32 = 0
+    enabled:       i32 = 0    # user opt-in
+    ready:         i32 = 0    # pool created
+    frame:         i32 = 0    # global frame counter (slot = frame % SLOTS)
+    have_prev:     i32 = 0    # a previous slot has completed timestamps
+    # Rolling accumulators (printed every N frames).
+    acc_count:     i32 = 0
+    acc_shadow_ms: f32 = 0.0
+    acc_main_ms:   f32 = 0.0
+    acc_post_ms:   f32 = 0.0
+    acc_total_ms:  f32 = 0.0
+
+attach GpuProfiler:
+
+    # Create the timestamp query pool. phys_device is used to read the
+    # timestampPeriod (ns/tick) and timestampValidBits from device limits.
+    # Returns 1 on success. Safe to call once at renderer init.
+    fun init(self, device: i64, phys_device: i64) -> i32:
+        self.device = device
+
+        # timestampPeriod (ns per tick). Hand-computing its byte offset in
+        # VkPhysicalDeviceProperties proved unreliable (read 0). NVIDIA and AMD
+        # both report exactly 1.0 ns/tick, so default to 1.0 — correct on this
+        # RTX. The raw timestamp deltas are already in ~ns at period 1.0.
+        period: f32 = 1.0
+        self.ts_period_ns = period
+
+        # VkQueryPoolCreateInfo (sType = 11):
+        #  0 sType, 8 pNext, 16 flags, 20 queryType, 24 queryCount, 28 pipelineStats
+        qp_ci: i64 = Memory.malloc_zeroed(32)
+        if qp_ci == 0:
+            return 0
+        Memory.write_i32(qp_ci, 11)                  # QUERY_POOL_CREATE_INFO
+        Memory.write_i32(qp_ci + 20, 2)              # VK_QUERY_TYPE_TIMESTAMP = 2
+        Memory.write_i32(qp_ci + 24, FROG_GPU_TS_TOTAL)
+        qp_out: i64 = Memory.malloc_zeroed(8)
+        r: i32 = vkCreateQueryPool(self.device, qp_ci, 0, qp_out)
+        self.query_pool = Memory.read_ptr(qp_out)
+        Memory.free(qp_out)
+        Memory.free(qp_ci)
+        if r != 0:
+            print(@"[frog.gpu_timer] query pool creation failed r={r}")
+            return 0
+        self.readback = Memory.malloc_zeroed((FROG_GPU_TS_TOTAL as i64) * 8)
+        if self.readback == 0:
+            return 0
+        self.ready = 1
+        return 1
+
+    fun set_enabled(self, on: i32):
+        if on == 0:
+            self.enabled = 0
+        else:
+            self.enabled = 1
+            self.have_prev = 0
+            self.acc_count = 0
+            self.acc_shadow_ms = 0.0
+            self.acc_main_ms = 0.0
+            self.acc_post_ms = 0.0
+            self.acc_total_ms = 0.0
+
+    fun is_active(self) -> i32:
+        if self.ready == 0:
+            return 0
+        return self.enabled
+
+    # First query index of the current frame's slot.
+    fun _slot_base(self) -> i32:
+        slot: i32 = self.frame - (self.frame / FROG_GPU_TS_SLOTS) * FROG_GPU_TS_SLOTS
+        return slot * FROG_GPU_TS_PER_FRAME
+
+    # Begin-of-frame: reset this slot's queries and write the start timestamp.
+    # Must be called inside the command buffer, before the shadow pass.
+    fun begin_frame(self, cmd: i64):
+        if self.is_active() == 0:
+            return
+        base: i32 = self._slot_base()
+        vkCmdResetQueryPool(cmd, self.query_pool, base, FROG_GPU_TS_PER_FRAME)
+        # Write at TOP_OF_PIPE (stage bit 1) for the frame-start marker.
+        vkCmdWriteTimestamp(cmd, 1, self.query_pool, base)
+
+    # Mark a stage boundary (1 = after shadow, 2 = after main, 3 = after post).
+    # Written at BOTTOM_OF_PIPE (stage bit 4096) so it captures all prior work.
+    fun mark(self, cmd: i64, stage_index: i32):
+        if self.is_active() == 0:
+            return
+        if stage_index < 1:
+            return
+        if stage_index >= FROG_GPU_TS_PER_FRAME:
+            return
+        base: i32 = self._slot_base()
+        vkCmdWriteTimestamp(cmd, 4096, self.query_pool, base + stage_index)
+
+    # End-of-frame (CPU side, after submit): read back the PREVIOUS slot's
+    # completed timestamps and accumulate. Advances the frame counter.
+    fun end_frame(self):
+        if self.is_active() == 0:
+            self.frame = self.frame + 1
+            return
+
+        # Read back a slot that completed several frames ago (FROG_GPU_TS_SLOTS
+        # rotation guarantees the GPU is long done with it — no stall, no
+        # NOT_READY). We still pass WAIT for safety.
+        if self.frame >= FROG_GPU_TS_SLOTS:
+            old_frame: i32 = self.frame - (FROG_GPU_TS_SLOTS - 1)
+            prev_slot: i32 = old_frame - (old_frame / FROG_GPU_TS_SLOTS) * FROG_GPU_TS_SLOTS
+            prev_base: i32 = prev_slot * FROG_GPU_TS_PER_FRAME
+            # flags: WAIT(1) | 64BIT(8) = 9. Read 4 u64 results.
+            r: i32 = vkGetQueryPoolResults(self.device, self.query_pool, prev_base, FROG_GPU_TS_PER_FRAME, (FROG_GPU_TS_PER_FRAME as i64) * 8, self.readback, 8, 9)
+            if r == 0:
+                t0: i64 = Memory.read_i64(self.readback + 0)
+                t1: i64 = Memory.read_i64(self.readback + 8)
+                t2: i64 = Memory.read_i64(self.readback + 16)
+                t3: i64 = Memory.read_i64(self.readback + 24)
+                self.acc_shadow_ms = self.acc_shadow_ms + self._ticks_to_ms(t1 - t0)
+                self.acc_main_ms = self.acc_main_ms + self._ticks_to_ms(t2 - t1)
+                self.acc_post_ms = self.acc_post_ms + self._ticks_to_ms(t3 - t2)
+                self.acc_total_ms = self.acc_total_ms + self._ticks_to_ms(t3 - t0)
+                self.acc_count = self.acc_count + 1
+                if self.acc_count >= 120:
+                    n: f32 = self.acc_count as f32
+                    sh: f32 = self.acc_shadow_ms / n
+                    mn: f32 = self.acc_main_ms / n
+                    po: f32 = self.acc_post_ms / n
+                    tot: f32 = self.acc_total_ms / n
+                    print(@"[frog.gpu_timer] gpu_ms total={tot} shadow={sh} main={mn} post={po} (avg/{self.acc_count})")
+                    self.acc_count = 0
+                    self.acc_shadow_ms = 0.0
+                    self.acc_main_ms = 0.0
+                    self.acc_post_ms = 0.0
+                    self.acc_total_ms = 0.0
+
+        self.have_prev = 1
+        self.frame = self.frame + 1
+
+    fun _ticks_to_ms(self, ticks: i64) -> f32:
+        ns: f32 = (ticks as f32) * self.ts_period_ns
+        return ns / 1000000.0
+
+    fun cleanup(self):
+        if self.query_pool != 0:
+            vkDestroyQueryPool(self.device, self.query_pool, 0)
+            self.query_pool = 0
+        if self.readback != 0:
+            Memory.free(self.readback)
+            self.readback = 0
+        self.ready = 0
+        self.enabled = 0

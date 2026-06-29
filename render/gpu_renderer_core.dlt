@@ -415,6 +415,8 @@ struct GpuRendererCore:
     # Shadow globals are 176 bytes: two cascade matrices, params, splits,
     # filter controls, and fade distance.
     render_state: i64 = 0
+    # GPU timing (optional, off by default). Measures shadow/main/post GPU ms.
+    profiler: GpuProfiler = GpuProfiler()
 
 attach GpuRendererCore:
 
@@ -532,6 +534,9 @@ attach GpuRendererCore:
         self.pooled_sizes = Memory.malloc_zeroed(self.pooled_capacity * 8)
         self.pooled_usages = Memory.malloc_zeroed(self.pooled_capacity * 4)
         self.frame_serial = 0
+        prof: GpuProfiler = GpuProfiler()
+        prof.init(device, phys_device)
+        self.profiler = prof
         self.initialized = 1
 
     fun set_instance_culling(self, enabled: i32):
@@ -1500,6 +1505,10 @@ attach GpuRendererCore:
             self.debug_draw_calls = 0
             self.debug_indexed_draw_calls = 0
             self.debug_visible_instances = 0
+
+    # Enable/disable GPU timestamp profiling (prints shadow/main/post GPU ms).
+    fun set_gpu_timing(self, enabled: i32):
+        self.profiler.set_enabled(enabled)
 
     fun _debug_record_frame(self):
         if self.debug_render_stats_enabled == 0:
@@ -3630,6 +3639,7 @@ attach GpuRendererCore:
 
         vkQueuePresentKHR(present_queue, pi)
 
+        self.profiler.end_frame()
         self.current_frame = (self.current_frame + 1) % rp.max_frames
         self.frame_serial = self.frame_serial + 1
         self._release_retired_buffers()
@@ -3996,6 +4006,7 @@ attach GpuRendererCore:
         br: i32 = vkBeginCommandBuffer(cmd, begin_info)
         if br != 0:
             return
+        self.profiler.begin_frame(cmd)
 
         if shadow_enabled == 1:
             if shadow_instances_ready == 1:
@@ -4026,6 +4037,9 @@ attach GpuRendererCore:
                         if precull_vp != 0:
                             _frog_multiply_4x4_into(cam_proj, cam_view, precull_vp)
                             self.gpu_precull_main(cmd, precull_vp, frame_slot)
+
+        # GPU-timer: boundary after shadow pass + GPU cull pre-pass.
+        self.profiler.mark(cmd, 1)
 
         # Begin render pass
         rpi: i64 = self.scratch_render_info
@@ -4380,14 +4394,19 @@ attach GpuRendererCore:
             self._record_collision_debug(cmd, rp, debug_vp, width, height)
 
         vkCmdEndRenderPass(cmd)
+        # GPU-timer: boundary after the main render pass (sky + scene draws).
+        self.profiler.mark(cmd, 2)
         if use_scaled == 1:
             if frog_bloom_pass_ready() != 0:
                 self._record_bloom_present(cmd, present_framebuffer, rp, scale_color_image, swap_image, swap_width, swap_height, env.bloom, env.tone_mapping)
+        # GPU-timer: boundary after post/bloom present (end of GPU frame work).
+        self.profiler.mark(cmd, 3)
         vkEndCommandBuffer(cmd)
 
     fun cleanup(self) -> void:
         self.cleanup_collision_debug()
         self.destroy_render_scale_target()
+        self.profiler.cleanup()
         # Phase 1: destroy the bindless table objects (pool frees its sets).
         if self.bindless_pool != 0:
             vkDestroyDescriptorPool(self.device, self.bindless_pool, 0)

@@ -416,6 +416,9 @@ attach Renderer:
     fun set_render_stats(self, enabled: i32):
         self.core.set_render_stats(enabled)
 
+    fun set_gpu_timing(self, enabled: i32):
+        self.core.set_gpu_timing(enabled)
+
     fun set_collision_debug(self, enabled: i32):
         self.core.set_collision_debug(enabled)
 
