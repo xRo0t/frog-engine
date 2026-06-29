@@ -67,6 +67,12 @@ FROG_CULL_MODE_AUTO: i32 = 2
     count_buffer: i64 = 0
     count_memory: i64 = 0
     count_mapped: i64 = 0
+    # R2: draw-count buffer for vkCmdDrawIndexedIndirectCountKHR. Holds one
+    # u32 per batch (the number of group-commands the GPU should execute for
+    # that batch). CPU-written, host-mapped, slot-partitioned like the cmds.
+    draw_count_buffer: i64 = 0
+    draw_count_memory: i64 = 0
+    draw_count_mapped: i64 = 0
     capacity: i32 = 0
     # Per-slot partition sizes (capacity instances / FROG_CULL_MAX_GROUPS cmds
     # per slot). The compute pass for frame `slot` writes only its partition.
@@ -373,6 +379,18 @@ attach GpuCullPipeline:
         self.count_memory = Memory.read_ptr(mp)
         self.count_mapped = Memory.read_ptr(map_pp)
 
+        # R2 draw-count buffer: one u32 per group slot (host-mapped). usage
+        # INDIRECT(0x100) so vkCmdDrawIndexedIndirectCountKHR can read it.
+        draw_count_size: i64 = (FROG_CULL_MAX_GROUPS as i64) * 4 * slots
+        if _frog_cull_make_buffer(self.device, self.phys_device, draw_count_size, 256, bp, mp, map_pp) == 0:
+            Memory.free(bp)
+            Memory.free(mp)
+            Memory.free(map_pp)
+            return 0
+        self.draw_count_buffer = Memory.read_ptr(bp)
+        self.draw_count_memory = Memory.read_ptr(mp)
+        self.draw_count_mapped = Memory.read_ptr(map_pp)
+
         Memory.free(bp)
         Memory.free(mp)
         Memory.free(map_pp)
@@ -495,6 +513,12 @@ attach GpuCullPipeline:
             self.count_buffer = 0
             self.count_memory = 0
             self.count_mapped = 0
+        if self.draw_count_buffer != 0:
+            vkDestroyBuffer(self.device, self.draw_count_buffer, 0)
+            vkFreeMemory(self.device, self.draw_count_memory, 0)
+            self.draw_count_buffer = 0
+            self.draw_count_memory = 0
+            self.draw_count_mapped = 0
 
     fun cleanup(self):
         self._free_buffers()
@@ -544,6 +568,25 @@ attach GpuCullPipeline:
     fun group_cmd_offset(self, g: i32) -> i64:
         return (g as i64) * 20
 
+    # R2: handle of the draw-count buffer (for vkCmdDrawIndexedIndirectCountKHR).
+    fun draw_count_handle(self) -> i64:
+        return self.draw_count_buffer
+
+    # R2: byte offset of batch b's u32 draw-count in the draw_count buffer.
+    fun draw_count_offset(self, b: i32) -> i64:
+        return (b as i64) * 4
+
+    # R2: write the number of group-commands the GPU should execute for batch
+    # b (host-mapped, host-coherent). The GPU reads this via indirect-count.
+    fun set_draw_count(self, b: i32, count: i32):
+        if self.draw_count_mapped == 0:
+            return
+        if b < 0:
+            return
+        if b >= FROG_CULL_MAX_GROUPS * FROG_CULL_SLOTS:
+            return
+        Memory.write_i32(self.draw_count_mapped + (b as i64) * 4, count)
+
     # Pre-fill group g's indirect command. For indexed draws the layout is
     # VkDrawIndexedIndirectCommand {indexCount, instanceCount, firstIndex,
     # vertexOffset, firstInstance}; for non-indexed it's VkDrawIndirectCommand
@@ -565,6 +608,19 @@ attach GpuCullPipeline:
         Memory.write_i32(base + 8, 0)             # firstIndex / firstVertex
         Memory.write_i32(base + 12, 0)            # vertexOffset / firstInstance
         Memory.write_i32(base + 16, 0)            # firstInstance (indexed only)
+
+    # R2: set group g's firstInstance field (offset +16 in
+    # VkDrawIndexedIndirectCommand). Lets the indirect-count draw bind the
+    # instance buffer once at the slot base and have each command index its
+    # own compacted slice. Requires the drawIndirectFirstInstance feature.
+    fun set_cmd_first_instance(self, g: i32, first_instance: i32):
+        if self.count_mapped == 0:
+            return
+        if g < 0:
+            return
+        if g >= FROG_CULL_MAX_GROUPS * FROG_CULL_SLOTS:
+            return
+        Memory.write_i32(self.count_mapped + self.group_cmd_offset(g) + 16, first_instance)
 
     # Visible count the GPU computed for group g.
     fun group_visible_count(self, g: i32) -> i32:

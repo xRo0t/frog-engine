@@ -1142,10 +1142,13 @@ attach GpuRendererCore:
         self._write_record_texidx(rec, gi)
         cull.write_full_instance(dst_idx, rec, bx, by, bz, br)
 
-    # In-pass indirect draw. For each prepared group, bind the GPU-culled
-    # output buffer (at the group's byte offset) as the instance vertex
-    # buffer and issue an indexed or non-indexed indirect draw. Must run
-    # INSIDE the active render pass with the main pipeline bound.
+    # In-pass indirect draw. Issues GPU-driven indirect draws from the culled
+    # output. When bindless is enabled, uses the global texture table (no
+    # per-group descriptor binds) and vkCmdDrawIndexedIndirectCount; groups
+    # sharing the same VB/IB are batched into ONE indirect-count submission so
+    # the CPU-side draw-call count is per-batch, not per-group (R2). Falls back
+    # to the classic per-group vkCmdDrawIndexedIndirect loop otherwise.
+    # Must run INSIDE the active render pass with the pipeline bound.
     fun gpu_draw_main(self, cmd: i64, rp: RenderPass):
         if self.gpu_cull_ptr == 0:
             return
@@ -1154,6 +1157,21 @@ attach GpuRendererCore:
         ind_buf: i64 = cull.indirect_handle()
         if out_buf == 0 or ind_buf == 0:
             return
+
+        # Decide path: indirect-count batching needs device support + bindless
+        # (so texture differences don't force a descriptor rebind between the
+        # groups we batch). Otherwise the classic per-group loop runs.
+        use_count: i32 = 0
+        dc_buf: i64 = cull.draw_count_handle()
+        if self.bindless_enabled == 1:
+            if rp.bindless_pipeline != 0:
+                if dc_buf != 0:
+                    use_count = 1
+
+        if use_count == 1:
+            self._gpu_draw_indirect_count(cmd, cull, out_buf, ind_buf, dc_buf)
+            return
+
         last_vb: i64 = 0
         last_index_bound: i64 = 0
         last_desc: i64 = 0
@@ -1193,6 +1211,51 @@ attach GpuRendererCore:
                 vkCmdDrawIndexedIndirect(cmd, ind_buf, cmd_off, 1, 20)
             else:
                 vkCmdDrawIndirect(cmd, ind_buf, cmd_off, 1, 16)
+            g = g + 1
+
+    # R2 bindless + indirect-count draw. Each group binds the culled-output
+    # instance buffer at ITS OWN out_base (firstInstance stays 0, exactly like
+    # the proven classic path) and issues one vkCmdDrawIndexedIndirectCount
+    # with a per-group draw-count of 1. The GPU still decides how many
+    # instances to draw (instanceCount, written by the cull compaction) and
+    # reads the draw count from the count buffer — no CPU round-trip. The
+    # texture table (set 2) + set 0 (shadow) are bound once by the caller
+    # (bindless), so there are NO per-group descriptor binds. We do NOT rely on
+    # firstInstance>0 (drawIndirectFirstInstance fetch offset proved unreliable
+    # on this driver — it made non-first groups read instance 0's data).
+    fun _gpu_draw_indirect_count(self, cmd: i64, cull: GpuCullPipeline, out_buf: i64, ind_buf: i64, dc_buf: i64):
+        last_vb: i64 = 0
+        last_index_bound: i64 = 0
+        g: i32 = 0
+        while g < self.gpu_grp_n:
+            mi: i32 = Memory.read_i32(self.gpu_grp_mi + g * 4)
+            indexed: i32 = Memory.read_i32(self.gpu_grp_indexed + g * 4)
+            cmd_index: i32 = Memory.read_i32(self.gpu_grp_cmd + g * 4)
+            out_base: i32 = Memory.read_i32(self.gpu_grp_outbase + g * 4)
+            vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
+            ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
+
+            if vb_handle != last_vb:
+                Memory.write_ptr(self.scratch_vb_arr, vb_handle)
+                vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
+                last_vb = vb_handle
+
+            # Instance buffer = this group's compacted output slice. Bind at the
+            # group byte offset; the command's firstInstance is 0.
+            Memory.write_ptr(self.scratch_inst_vb_arr, out_buf)
+            Memory.write_i64(self.scratch_inst_off_arr, (out_base as i64) * (FROG_CULL_OUT_STRIDE as i64))
+            vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
+
+            # draw-count = 1 command for this group; the GPU still decides the
+            # instanceCount inside it (set by the cull compaction).
+            cull.set_draw_count(g, 1)
+            cmd_off: i64 = cull.group_cmd_offset(cmd_index)
+            dc_off: i64 = cull.draw_count_offset(g)
+            if indexed == 1:
+                if ib_handle != last_index_bound:
+                    vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
+                    last_index_bound = ib_handle
+            vkCmdDrawIndexedIndirectCount(cmd, ind_buf, cmd_off, dc_buf, dc_off, 1, 20)
             g = g + 1
 
     fun set_directional_light(self, light_ptr: i64):

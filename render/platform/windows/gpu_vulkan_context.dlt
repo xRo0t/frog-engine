@@ -502,6 +502,21 @@ attach VulkanContext:
                     chain_head = feat_idx
             Memory.write_ptr(dev_ci + 8, chain_head)
 
+        # R2: enable the base features required by indirect-count drawing —
+        # multiDrawIndirect (drawCount may be > 1) and drawIndirectFirstInstance
+        # (each group command uses a nonzero firstInstance to index its slice
+        # of the shared culled-output buffer). VkPhysicalDeviceFeatures is a
+        # flat array of VkBool32; offsets: multiDrawIndirect @ 36,
+        # drawIndirectFirstInstance @ 40. Only set when the device reports
+        # drawIndirectCount support (paired capability).
+        feat_base: i64 = 0
+        if dcaps.draw_indirect_count == 1:
+            feat_base = Memory.malloc_zeroed(232)
+            if feat_base != 0:
+                Memory.write_i32(feat_base + 36, 1)   # multiDrawIndirect
+                Memory.write_i32(feat_base + 40, 1)   # drawIndirectFirstInstance
+                Memory.write_ptr(dev_ci + 64, feat_base)
+
         dev_ptr: i64 = Memory.malloc_zeroed(8)
         if dev_ptr == 0:
             Memory.free(priority_ptr)
@@ -510,6 +525,7 @@ attach VulkanContext:
             Memory.free(dev_ci)
             Memory.free(feat_idx)
             Memory.free(feat_dynr)
+            Memory.free(feat_base)
             return 0
         dev_result: i32 = vkCreateDevice(self.vk_physical_device, dev_ci, 0, dev_ptr)
         # Layered fallback (R5.4). If enabling modern features broke device
@@ -534,6 +550,7 @@ attach VulkanContext:
             if want_modern == 1:
                 print("  vkCreateDevice with modern features failed; retrying classic")
                 Memory.write_ptr(dev_ci + 8, 0)
+                Memory.write_ptr(dev_ci + 64, 0)
                 dcaps.descriptor_indexing = 0
                 dcaps.draw_indirect_count = 0
                 dcaps.dynamic_rendering = 0
@@ -548,6 +565,7 @@ attach VulkanContext:
         Memory.free(dev_ci)
         Memory.free(feat_idx)
         Memory.free(feat_dynr)
+        Memory.free(feat_base)
         if dev_result != 0:
             print("  vkCreateDevice failed")
             return 0
