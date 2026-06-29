@@ -355,6 +355,20 @@ struct GpuRendererCore:
     mesh_shadow_distances: i64 = 0 # mesh_id -> object shadow cutoff, 0 = inherit light distance
     white_desc_set: i64 = 0    # descriptor set for the 1x1 white fallback
     white_tex_id:   i32 = -1
+    # --- Phase 1: Bindless texture table (R1) ---
+    # One giant descriptor set holding ALL texture views, indexed per-instance
+    # in the shader. Eliminates the per-group vkCmdBindDescriptorSets. All
+    # fields stay 0 / disabled until _bindless_init runs AND the device
+    # actually supports descriptor indexing (caps). bindless_enabled gates
+    # every modern path; when 0 the classic per-mesh descriptor path runs.
+    bindless_layout:   i64 = 0   # VkDescriptorSetLayout (update-after-bind)
+    bindless_pool:     i64 = 0   # VkDescriptorPool (update-after-bind)
+    bindless_set:      i64 = 0   # VkDescriptorSet (the big table)
+    bindless_count:    i32 = 0   # number of slots written so far
+    bindless_capacity: i32 = 0   # table size cap (from caps.max_descriptor_array)
+    bindless_supported: i32 = 0  # device supports descriptor indexing (from caps)
+    bindless_flag:     i32 = 0   # user/runtime opt-in flag
+    bindless_enabled:  i32 = 0   # supported && flag && initialized
     # Offscreen render-scale target. When render_scale != 1, the scene is
     # rendered here, then blitted to the swapchain image for presentation.
     scale_color_image:  i64 = 0
@@ -510,6 +524,27 @@ attach GpuRendererCore:
             self.instance_culling_enabled = 0
         else:
             self.instance_culling_enabled = 1
+
+    # Phase 1 groundwork: record device bindless support (from GpuCaps) and
+    # the user/runtime opt-in flag. Does NOT create any Vulkan objects and
+    # does NOT change any rendering path — that lands in _bindless_init
+    # (task 1.2) gated behind these flags. bindless_enabled only flips to 1
+    # once _bindless_init succeeds.
+    fun set_bindless_caps(self, supported: i32, max_array: i32, flag: i32):
+        if supported == 0:
+            self.bindless_supported = 0
+        else:
+            self.bindless_supported = 1
+        cap: i32 = max_array
+        if cap > 65536:
+            cap = 65536
+        if cap < 0:
+            cap = 0
+        self.bindless_capacity = cap
+        if flag == 0:
+            self.bindless_flag = 0
+        else:
+            self.bindless_flag = 1
 
     # Enable GPU-driven culling for the main pass. cull_ptr is a borrowed
     # GpuCullPipeline (owned by the runtime). When enabled and the pipeline
