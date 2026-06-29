@@ -45,6 +45,7 @@ static g_engine_render_scale: f32 = 1.0
 static g_engine_gpu_preference: i32 = 0
 static g_engine_render_stats_enabled: i32 = 0
 static g_engine_gpu_timing_enabled: i32 = 0
+static g_engine_shadow_min_size: f32 = 0.0
 static g_engine_collision_debug_enabled: i32 = 0
 static g_engine_frame_pacing_enabled: i32 = 0
 static g_engine_frame_pacing_interval: i32 = 120
@@ -286,6 +287,20 @@ attach Debug:
     static fun gpu_timing_enabled() -> i32:
         return g_engine_gpu_timing_enabled
 
+    # Shadow caster size-cull (shadow LOD). Skips casters whose projected
+    # shadow footprint is below `threshold` (angular size). 0.0 disables.
+    # Bigger value culls more aggressively -> cheaper shadow pass.
+    static fun shadow_min_size(threshold: f32):
+        if threshold < 0.0:
+            g_engine_shadow_min_size = 0.0
+        else:
+            g_engine_shadow_min_size = threshold
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_shadow_min_size(g_engine_shadow_min_size)
+
+    static fun shadow_min_size_value() -> f32:
+        return g_engine_shadow_min_size
+
     static fun collisions(enabled: i32):
         if enabled == 0:
             g_engine_collision_debug_enabled = 0
@@ -446,6 +461,7 @@ attach Engine:
             g_engine_runtime.bind_cull()
             g_engine_runtime.set_render_stats(g_engine_render_stats_enabled)
             g_engine_runtime.set_gpu_timing(g_engine_gpu_timing_enabled)
+            g_engine_runtime.set_shadow_min_size(g_engine_shadow_min_size)
             g_engine_runtime.set_collision_debug(g_engine_collision_debug_enabled)
             g_engine_runtime.set_instance_culling(g_engine_frustum_culling_enabled)
             g_engine_runtime.set_culling_auto_threshold(g_engine_culling_auto_threshold)

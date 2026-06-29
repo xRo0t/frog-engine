@@ -19,6 +19,11 @@ struct GpuMeshBounds:
 imm FROG_POINT_LIGHT_SLOTS: i32 = 8
 imm FROG_POINT_LIGHT_DATA_SIZE: i64 = 336
 
+# Shadow caster size-cull threshold (angular: worldRadius / |clipW|).
+# 0.0 disables (default = prior behavior). The engine raises it for dense
+# scenes so casters that map to a sub-pixel shadow are skipped.
+static g_frog_shadow_min_size: f32 = 0.0
+
 fun _frog_abs_f32(v: f32) -> f32:
     if v < 0.0:
         return 0.0 - v
@@ -189,6 +194,39 @@ fun _frog_shadow_instance_visible(vp: i64, model: i64, bound_x: f32, bound_y: f3
         return 0
     if cz > _frog_abs_f32(cw) + bounds:
         return 0
+
+    # Shadow caster SIZE cull (shadow LOD): a caster whose projected footprint
+    # on the shadow map is only a few texels produces a sub-pixel shadow that's
+    # effectively invisible but still costs a full rasterized draw. We compute
+    # the caster's projected radius in NDC and reject it when it falls below a
+    # threshold. This works for the directional light's ORTHOGRAPHIC projection
+    # (where cw is constant) because we derive the screen-space scale from the
+    # vp matrix gradient rows rather than from perspective foreshortening.
+    #   ndc_dx_per_world = |(vp.m0, vp.m4, vp.m8)|   (d clipX / d world)
+    #   ndc_dy_per_world = |(vp.m1, vp.m5, vp.m9)|   (d clipY / d world)
+    #   projected_ndc_radius = world_radius * max(dx, dy) / |cw|
+    # NDC spans [-1, 1] (width 2), so a threshold of e.g. 0.01 means "cull
+    # casters whose shadow radius is under 0.5% of the shadow map dimension".
+    # g_frog_shadow_min_size = 0 disables the cull (default keeps prior behavior).
+    if g_frog_shadow_min_size > 0.0:
+        world_radius: f32 = bound_radius * max_scale
+        gx0: f32 = Memory.read_f32(vp + 0)
+        gx1: f32 = Memory.read_f32(vp + 16)
+        gx2: f32 = Memory.read_f32(vp + 32)
+        gy0: f32 = Memory.read_f32(vp + 4)
+        gy1: f32 = Memory.read_f32(vp + 20)
+        gy2: f32 = Memory.read_f32(vp + 36)
+        grad_x: f32 = @sqrt(gx0 * gx0 + gx1 * gx1 + gx2 * gx2)
+        grad_y: f32 = @sqrt(gy0 * gy0 + gy1 * gy1 + gy2 * gy2)
+        grad: f32 = grad_x
+        if grad_y > grad:
+            grad = grad_y
+        denom: f32 = _frog_abs_f32(cw)
+        if denom < 0.0001:
+            denom = 0.0001
+        ndc_radius: f32 = world_radius * grad / denom
+        if ndc_radius < g_frog_shadow_min_size:
+            return 0
     return 1
 
 fun _frog_cull_one(self_addr: i64, vp: i64, gi: i32, res: i64):
@@ -1509,6 +1547,15 @@ attach GpuRendererCore:
     # Enable/disable GPU timestamp profiling (prints shadow/main/post GPU ms).
     fun set_gpu_timing(self, enabled: i32):
         self.profiler.set_enabled(enabled)
+
+    # Shadow caster size-cull threshold (shadow LOD). Casters whose angular
+    # size (worldRadius / |clipW|) falls below this are skipped in the shadow
+    # pass. 0.0 disables (default). Cheap win for dense scenes.
+    fun set_shadow_min_size(self, threshold: f32):
+        if threshold < 0.0:
+            g_frog_shadow_min_size = 0.0
+        else:
+            g_frog_shadow_min_size = threshold
 
     fun _debug_record_frame(self):
         if self.debug_render_stats_enabled == 0:

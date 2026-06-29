@@ -270,6 +270,9 @@ attach EngineRuntime:
     fun set_gpu_timing(self, enabled: i32):
         self.renderer.set_gpu_timing(enabled)
 
+    fun set_shadow_min_size(self, threshold: f32):
+        self.renderer.set_shadow_min_size(threshold)
+
     fun set_collision_debug(self, enabled: i32):
         self.renderer.set_collision_debug(enabled)
 
