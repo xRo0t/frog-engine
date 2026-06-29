@@ -3784,10 +3784,40 @@ attach GpuRendererCore:
         self._record_sky(cmd, width, height, env.sky, cam_view, cam_proj)
 
         if rp.vk_pipeline != 0:
-            vkCmdBindPipeline(cmd, 0, rp.vk_pipeline)
+            # Phase 1 bindless: when enabled, draw with the bindless pipeline
+            # (set 2 = global texture table) instead of the classic per-mesh
+            # descriptor path. Sets 0 (material/shadow sampler) and 1 (lights)
+            # have the same shape in both layouts, so the lighting/shadow binds
+            # below are identical. The table set is bound ONCE here; per-group
+            # material descriptor binds are skipped in the draw loop.
+            use_bindless: i32 = 0
+            active_pipeline: i64 = rp.vk_pipeline
+            active_layout: i64 = rp.vk_pipeline_layout
+            if self.bindless_enabled == 1:
+                if rp.bindless_pipeline != 0:
+                    if self.bindless_set != 0:
+                        use_bindless = 1
+                        active_pipeline = rp.bindless_pipeline
+                        active_layout = rp.bindless_pipeline_layout
+            vkCmdBindPipeline(cmd, 0, active_pipeline)
 
             Memory.write_ptr(self.scratch_desc_arr, point_light_desc)
-            vkCmdBindDescriptorSets(cmd, 0, rp.vk_pipeline_layout, 1, 1, self.scratch_desc_arr, 0, 0)
+            vkCmdBindDescriptorSets(cmd, 0, active_layout, 1, 1, self.scratch_desc_arr, 0, 0)
+
+            # Bind the bindless texture table (set 2) once for the whole pass.
+            if use_bindless == 1:
+                Memory.write_ptr(self.scratch_desc_arr, self.bindless_set)
+                vkCmdBindDescriptorSets(cmd, 0, active_layout, 2, 1, self.scratch_desc_arr, 0, 0)
+                # Set 0 supplies the shadow sampler (binding 1), identical in
+                # every material set. The bindless shader only reads binding 1
+                # from set 0, so we bind one material set (white fallback) once
+                # and skip all per-group set-0 binds in the draw loop.
+                set0: i64 = self.white_desc_set
+                if set0 == 0:
+                    set0 = self.mesh_descriptor_set(rp, 0)
+                if set0 != 0:
+                    Memory.write_ptr(self.scratch_desc_arr, set0)
+                    vkCmdBindDescriptorSets(cmd, 0, active_layout, 0, 1, self.scratch_desc_arr, 0, 0)
 
             shadow_global_buffer: i64 = Memory.read_ptr(shadow_global_buffers + frame_slot * 8)
             if shadow_global_buffer != 0:
@@ -3887,7 +3917,7 @@ attach GpuRendererCore:
                                 Memory.write_f32(pc_data + 120, dz)
                                 Memory.write_f32(pc_data + 124, light.intensity)
 
-                        vkCmdPushConstants(cmd, rp.vk_pipeline_layout, 17, 0, 128, pc_data)
+                        vkCmdPushConstants(cmd, active_layout, 17, 0, 128, pc_data)
 
                 last_bound: i64 = 0
                 last_index_bound: i64 = 0
@@ -4034,12 +4064,15 @@ attach GpuRendererCore:
 
                             # Bind the texture descriptor set for this group
                             # (falls back to the 1x1 white texture when unset).
-                            grp_desc: i64 = self.mesh_descriptor_set(rp, mi)
-                            if grp_desc != 0:
-                                if grp_desc != last_desc:
-                                    Memory.write_ptr(self.scratch_desc_arr, grp_desc)
-                                    vkCmdBindDescriptorSets(cmd, 0, rp.vk_pipeline_layout, 0, 1, self.scratch_desc_arr, 0, 0)
-                                    last_desc = grp_desc
+                            # Skipped in bindless mode: the global table is bound
+                            # once and the per-instance index selects the texture.
+                            if use_bindless == 0:
+                                grp_desc: i64 = self.mesh_descriptor_set(rp, mi)
+                                if grp_desc != 0:
+                                    if grp_desc != last_desc:
+                                        Memory.write_ptr(self.scratch_desc_arr, grp_desc)
+                                        vkCmdBindDescriptorSets(cmd, 0, rp.vk_pipeline_layout, 0, 1, self.scratch_desc_arr, 0, 0)
+                                        last_desc = grp_desc
 
                             if ib_handle != 0:
                                 if ic > 0:
