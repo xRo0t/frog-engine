@@ -8,6 +8,13 @@ imm FROG_GPU_VERTEX_NORMAL_OFFSET: i32 = 12
 imm FROG_GPU_VERTEX_COLOR_OFFSET: i32 = 24
 imm FROG_GPU_VERTEX_UV_OFFSET: i32 = 36
 
-imm FROG_GPU_INSTANCE_STRIDE: i32 = 96
+imm FROG_GPU_INSTANCE_STRIDE: i32 = 128
 imm FROG_GPU_INSTANCE_MATERIAL_OFFSET: i32 = 64
 imm FROG_GPU_INSTANCE_UV_OFFSET: i32 = 80
+# Phase 1 bindless: texture-index block appended to the instance record.
+# Offset 96..127 (32 bytes = 8 i32). The first 5 ints are bindless table
+# slots for the material's textures; the last 3 are spare/padding so the
+# block is 16-byte aligned (two vec4 for std140/vertex-attribute use).
+#   96  albedo slot      100 emissive slot     104 normal slot
+#   108 metallic-rough.  112 occlusion slot    116..127 spare
+imm FROG_GPU_INSTANCE_TEXIDX_OFFSET: i32 = 96

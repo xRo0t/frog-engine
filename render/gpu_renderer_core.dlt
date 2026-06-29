@@ -324,7 +324,7 @@ struct GpuRendererCore:
     gpu_slot_grpn: i64 = 0     # i32[FROG_CULL_SLOTS]: group count last written per slot
     gpu_slot_cmdbase: i64 = 0  # i32[FROG_CULL_SLOTS]: cmd base index per slot
     gpu_cull_push: i64 = 0     # 112B push-constant scratch (planes + group fields)
-    gpu_cull_rec: i64 = 0      # 96B instance-record scratch
+    gpu_cull_rec: i64 = 0      # 128B instance-record scratch (model+material+uv+texidx)
     gpu_cull_slot: i32 = 0     # frame slot the current precull wrote into
     debug_render_stats_enabled: i32 = 0
     debug_frame_count: i32 = 0
@@ -509,7 +509,7 @@ attach GpuRendererCore:
         self.gpu_cand_gi = Memory.malloc_zeroed((self.vb_capacity as i64) * 4)
         self.gpu_cand_n = 0
         self.gpu_cull_push = Memory.malloc_zeroed(FROG_CULL_PUSH_SIZE)
-        self.gpu_cull_rec = Memory.malloc_zeroed(96)
+        self.gpu_cull_rec = Memory.malloc_zeroed(128)
         self.gpu_slot_grpn = Memory.malloc_zeroed((FROG_CULL_SLOTS as i64) * 4)
         self.gpu_slot_cmdbase = Memory.malloc_zeroed((FROG_CULL_SLOTS as i64) * 4)
         self.retire_capacity = 0
@@ -1060,6 +1060,49 @@ attach GpuRendererCore:
             cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
             cull.mark_dirty()
 
+    # Phase 1 bindless: resolve a mesh's 5 material texture ids to bindless
+    # table slots and write them into the instance record's texidx block
+    # (offset 96..). A texture id of -1 (no map) resolves to the white
+    # fallback's slot so the shader can always sample. When bindless is
+    # disabled the block stays 0 and the classic shader ignores it.
+    fun _write_record_texidx(self, rec: i64, gi: i32):
+        white_slot: i32 = 0
+        if self.white_tex_id >= 0:
+            if self.tex_bindless_slots != 0:
+                white_slot = Memory.read_i32(self.tex_bindless_slots + self.white_tex_id * 4)
+                if white_slot < 0:
+                    white_slot = 0
+        albedo: i32 = self._mesh_bindless_slot(self.mesh_tex_ids, gi, white_slot)
+        emissive: i32 = self._mesh_bindless_slot(self.mesh_emissive_tex_ids, gi, white_slot)
+        normal: i32 = self._mesh_bindless_slot(self.mesh_normal_tex_ids, gi, white_slot)
+        mr: i32 = self._mesh_bindless_slot(self.mesh_metallic_roughness_tex_ids, gi, white_slot)
+        occ: i32 = self._mesh_bindless_slot(self.mesh_occlusion_tex_ids, gi, white_slot)
+        Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET, albedo)
+        Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET + 4, emissive)
+        Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET + 8, normal)
+        Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET + 12, mr)
+        Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET + 16, occ)
+        Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET + 20, 0)
+        Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET + 24, 0)
+        Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET + 28, 0)
+
+    # Resolve mesh gi's texture id from a mesh->tex_id array into a bindless
+    # slot, falling back to `fallback_slot` when the id is missing/-1.
+    fun _mesh_bindless_slot(self, id_array: i64, gi: i32, fallback_slot: i32) -> i32:
+        if id_array == 0:
+            return fallback_slot
+        tex_id: i32 = Memory.read_i32(id_array + gi * 4)
+        if tex_id < 0:
+            return fallback_slot
+        if self.tex_bindless_slots == 0:
+            return fallback_slot
+        if tex_id >= self.tex_count:
+            return fallback_slot
+        slot: i32 = Memory.read_i32(self.tex_bindless_slots + tex_id * 4)
+        if slot < 0:
+            return fallback_slot
+        return slot
+
     # Upload mesh `gi`'s instance record (model + material + uv) and bounding
     # sphere into the cull input buffer at slot `dst_idx`.
     fun _cull_upload_instance(self, cull: GpuCullPipeline, dst_idx: i32, gi: i32, g_model: i64):
@@ -1096,6 +1139,7 @@ attach GpuRendererCore:
         if receive_shadow == 1:
             packed_material: f32 = Memory.read_f32(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 12)
             Memory.write_f32(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 12, packed_material + 65536.0)
+        self._write_record_texidx(rec, gi)
         cull.write_full_instance(dst_idx, rec, bx, by, bz, br)
 
     # In-pass indirect draw. For each prepared group, bind the GPU-culled
@@ -3973,6 +4017,7 @@ attach GpuRendererCore:
                                     if receive_shadow == 1:
                                         packed_material: f32 = Memory.read_f32(instance_dst + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 12)
                                         Memory.write_f32(instance_dst + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 12, packed_material + 65536.0)
+                                    self._write_record_texidx(instance_dst, gi)
                                     instance_write = instance_write + 1
                                     group_count = group_count + 1
                                 gi = gi + 1

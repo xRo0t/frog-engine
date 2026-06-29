@@ -10,8 +10,8 @@
 // zeroes instanceCount, so vkCmdDrawIndexedIndirect reads the group's
 // slice of the shared output buffer.
 //
-// Candidate layout (112 bytes): model 64 + material 16 + uv 16 + bounds 16.
-// Output layout (96 bytes): model + material + uv (= FROG_GPU_INSTANCE_STRIDE).
+// Candidate layout (144 bytes): model 64 + material 16 + uv 16 + texidx 32 + bounds 16.
+// Output layout (128 bytes): model + material + uv + texidx (= FROG_GPU_INSTANCE_STRIDE).
 
 layout(local_size_x = 64) in;
 
@@ -22,6 +22,8 @@ struct Candidate {
     vec4 col3;
     vec4 material;
     vec4 uv;
+    uvec4 texIndex0;   // albedo, emissive, normal, metallicRoughness
+    uvec4 texIndex1;   // occlusion, spare, spare, spare
     vec4 bounds;
 };
 
@@ -32,6 +34,8 @@ struct OutInstance {
     vec4 col3;
     vec4 material;
     vec4 uv;
+    uvec4 texIndex0;
+    uvec4 texIndex1;
 };
 
 struct DrawCmd {
@@ -103,5 +107,7 @@ void main() {
         outInstances[slot].col3 = inst.col3;
         outInstances[slot].material = inst.material;
         outInstances[slot].uv = inst.uv;
+        outInstances[slot].texIndex0 = inst.texIndex0;
+        outInstances[slot].texIndex1 = inst.texIndex1;
     }
 }
