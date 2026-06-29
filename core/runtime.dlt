@@ -121,6 +121,12 @@ attach EngineRuntime:
             # classic pipeline/draw path stays in effect.
             if render_pass._create_bindless_pipeline(ctx.vk_device, width, height, runtime.renderer.core.bindless_layout) == 1:
                 print("[frog.bindless] pipeline ready")
+                # Phase 2: also build the GPU-driven SSBO pipeline (batched
+                # indirect-count draw). Non-fatal if it fails — the per-group
+                # bindless indirect-count path stays as the fallback.
+                render_pass._create_ssbo_pipeline(ctx.vk_device, width, height, runtime.renderer.core.bindless_layout)
+                if render_pass.ssbo_pipeline != 0:
+                    runtime.renderer.core.ssbo_pipeline_ready = 1
             else:
                 runtime.renderer.core.bindless_enabled = 0
                 print("[frog.bindless] pipeline build failed; classic path")

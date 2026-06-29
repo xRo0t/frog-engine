@@ -29,6 +29,13 @@ struct RenderPass:
     bindless_pipeline_layout: i64 = 0
     bindless_vert_module:     i64 = 0
     bindless_frag_module:     i64 = 0
+    # Phase 2: GPU-driven SSBO pipeline. Reads the per-instance record from a
+    # storage buffer (set 3) via gl_InstanceIndex instead of vertex attributes,
+    # so multiple groups batch under one vkCmdDrawIndexedIndirectCount.
+    ssbo_pipeline:            i64 = 0
+    ssbo_pipeline_layout:     i64 = 0
+    ssbo_vert_module:         i64 = 0
+    ssbo_set_layout:          i64 = 0   # set 3: instance storage buffer
     # Sync
     image_available_sems: i64 = 0
     render_finished_sems: i64 = 0
@@ -1308,6 +1315,264 @@ attach RenderPass:
         Memory.free(ds)
         Memory.free(cba)
         Memory.free(cb)
+        Memory.free(pipe_ci)
+        if pipe_result != 0:
+            return 0
+        return 1
+
+    # Phase 2: GPU-driven SSBO pipeline. Like the bindless pipeline but the
+    # per-instance record comes from a storage buffer (set 3) indexed by
+    # gl_InstanceIndex, so the vertex input has NO per-instance binding — only
+    # binding 0 (geometry) and binding 2 (global shadow). This lets a single
+    # vkCmdDrawIndexedIndirectCount span many groups (gl_InstanceIndex carries
+    # firstInstance correctly, unlike attribute fetch). Reuses the bindless
+    # fragment shader. set layout: 0 material/shadow, 1 lights, 2 textures,
+    # 3 instance SSBO. Returns 1 on success.
+    fun _create_ssbo_pipeline(self, device: i64, width: i32, height: i32, bindless_set_layout: i64) -> i32:
+        if bindless_set_layout == 0:
+            return 0
+        if self.bindless_frag_module == 0:
+            return 0
+        sv: EmbeddedShader = get_textured_bindless_ssbo_vert_shader()
+        if sv.data == 0:
+            sv.release()
+            return 0
+        self.ssbo_vert_module = self._create_shader_module(device, sv.data, sv.size)
+        sv.release()
+        if self.ssbo_vert_module == 0:
+            return 0
+
+        # set 3 layout: one storage buffer, VERTEX stage.
+        sb_bind: i64 = Memory.malloc_zeroed(24)
+        sb_ci: i64 = Memory.malloc_zeroed(32)
+        sb_out: i64 = Memory.malloc_zeroed(8)
+        if sb_bind == 0 or sb_ci == 0 or sb_out == 0:
+            Memory.free(sb_bind)
+            Memory.free(sb_ci)
+            Memory.free(sb_out)
+            return 0
+        Memory.write_i32(sb_bind, 0)        # binding 0
+        Memory.write_i32(sb_bind + 4, 7)    # STORAGE_BUFFER
+        Memory.write_i32(sb_bind + 8, 1)    # count
+        Memory.write_i32(sb_bind + 12, 1)   # VERTEX stage
+        Memory.write_i32(sb_ci, 32)
+        Memory.write_i32(sb_ci + 20, 1)
+        Memory.write_ptr(sb_ci + 24, sb_bind)
+        sb_r: i32 = vkCreateDescriptorSetLayout(device, sb_ci, 0, sb_out)
+        self.ssbo_set_layout = Memory.read_ptr(sb_out)
+        Memory.free(sb_out)
+        Memory.free(sb_ci)
+        Memory.free(sb_bind)
+        if sb_r != 0:
+            return 0
+
+        # Pipeline layout: sets 0..3, same push-constant range.
+        pc_range: i64 = Memory.malloc_zeroed(12)
+        dsl_arr: i64 = Memory.malloc_zeroed(32)
+        pl_ci: i64 = Memory.malloc_zeroed(48)
+        pl_ptr: i64 = Memory.malloc_zeroed(8)
+        if pc_range == 0 or dsl_arr == 0 or pl_ci == 0 or pl_ptr == 0:
+            Memory.free(pc_range)
+            Memory.free(dsl_arr)
+            Memory.free(pl_ci)
+            Memory.free(pl_ptr)
+            return 0
+        Memory.write_i32(pc_range, 17)
+        Memory.write_i32(pc_range + 8, 128)
+        Memory.write_ptr(dsl_arr, self.desc_set_layout)
+        Memory.write_ptr(dsl_arr + 8, self.lighting_set_layout)
+        Memory.write_ptr(dsl_arr + 16, bindless_set_layout)
+        Memory.write_ptr(dsl_arr + 24, self.ssbo_set_layout)
+        Memory.write_i32(pl_ci, 30)
+        Memory.write_i32(pl_ci + 20, 4)
+        Memory.write_ptr(pl_ci + 24, dsl_arr)
+        Memory.write_i32(pl_ci + 32, 1)
+        Memory.write_ptr(pl_ci + 40, pc_range)
+        pl_r: i32 = vkCreatePipelineLayout(device, pl_ci, 0, pl_ptr)
+        self.ssbo_pipeline_layout = Memory.read_ptr(pl_ptr)
+        Memory.free(pl_ptr)
+        Memory.free(pl_ci)
+        Memory.free(dsl_arr)
+        Memory.free(pc_range)
+        if pl_r != 0:
+            return 0
+
+        entry: str = "main"
+        stages: i64 = Memory.malloc_zeroed(96)
+        if stages == 0:
+            return 0
+        Memory.write_i32(stages, 18)
+        Memory.write_i32(stages + 20, 1)
+        Memory.write_ptr(stages + 24, self.ssbo_vert_module)
+        Memory.write_ptr(stages + 32, entry)
+        Memory.write_i32(stages + 48, 18)
+        Memory.write_i32(stages + 68, 16)
+        Memory.write_ptr(stages + 72, self.bindless_frag_module)
+        Memory.write_ptr(stages + 80, entry)
+
+        # Vertex input: binding 0 (geometry) + binding 2 (global shadow). No
+        # per-instance binding 1.
+        bind: i64 = Memory.malloc_zeroed(24)
+        if bind == 0:
+            Memory.free(stages)
+            return 0
+        Memory.write_i32(bind, 0)
+        Memory.write_i32(bind + 4, FROG_GPU_VERTEX_STRIDE)
+        Memory.write_i32(bind + 8, 0)
+        Memory.write_i32(bind + 12, 2)
+        Memory.write_i32(bind + 16, 0)      # binding 2 stride 0 (global)
+        Memory.write_i32(bind + 20, 1)
+
+        # 15 attributes: geometry (0,1,2,7) + shadow (9..19, but loc 19
+        # uncounted like the others). We count loc 0,1,2,7 + 9..18 = 14, plus
+        # loc 19 written uncounted.
+        attrs: i64 = Memory.malloc_zeroed(256)
+        if attrs == 0:
+            Memory.free(stages)
+            Memory.free(bind)
+            return 0
+        Memory.write_i32(attrs, 0)
+        Memory.write_i32(attrs + 8, 106)
+        Memory.write_i32(attrs + 12, 0)
+        Memory.write_i32(attrs + 16, 1)
+        Memory.write_i32(attrs + 24, 106)
+        Memory.write_i32(attrs + 28, 12)
+        Memory.write_i32(attrs + 32, 2)
+        Memory.write_i32(attrs + 40, 106)
+        Memory.write_i32(attrs + 44, 24)
+        Memory.write_i32(attrs + 48, 7)
+        Memory.write_i32(attrs + 56, 103)
+        Memory.write_i32(attrs + 60, 36)
+        # shadow loc 9..18 from binding 2 (10 entries) at attrs index 4..13.
+        sai: i32 = 0
+        while sai < 10:
+            soff: i64 = 64 + (sai as i64) * 16
+            Memory.write_i32(attrs + soff, 9 + sai)
+            Memory.write_i32(attrs + soff + 4, 2)
+            Memory.write_i32(attrs + soff + 8, 109)
+            Memory.write_i32(attrs + soff + 12, sai * 16)
+            sai = sai + 1
+        # loc 19 shadowFilter: written, uncounted (count = 14).
+        Memory.write_i32(attrs + 224, 19)
+        Memory.write_i32(attrs + 228, 2)
+        Memory.write_i32(attrs + 232, 109)
+        Memory.write_i32(attrs + 236, 160)
+
+        vi_ci: i64 = Memory.malloc_zeroed(48)
+        if vi_ci == 0:
+            Memory.free(stages)
+            Memory.free(bind)
+            Memory.free(attrs)
+            return 0
+        Memory.write_i32(vi_ci, 21)
+        Memory.write_i32(vi_ci + 20, 2)         # 2 bindings (0 and 2)
+        Memory.write_ptr(vi_ci + 24, bind)
+        Memory.write_i32(vi_ci + 32, 14)        # 14 counted attributes
+        Memory.write_ptr(vi_ci + 40, attrs)
+
+        ia_ci: i64 = Memory.malloc_zeroed(32)
+        if ia_ci == 0:
+            Memory.free(stages)
+            Memory.free(bind)
+            Memory.free(attrs)
+            Memory.free(vi_ci)
+            return 0
+        Memory.write_i32(ia_ci, 20)
+        Memory.write_i32(ia_ci + 20, 3)
+
+        viewport: i64 = Memory.malloc_zeroed(24)
+        scissor: i64 = Memory.malloc_zeroed(16)
+        if viewport == 0 or scissor == 0:
+            Memory.free(viewport)
+            Memory.free(scissor)
+            return 0
+        w_f: f32 = width
+        h_f: f32 = height
+        Memory.write_f32(viewport + 8, w_f)
+        Memory.write_f32(viewport + 12, h_f)
+        Memory.write_f32(viewport + 20, 1.0)
+        Memory.write_i32(scissor + 8, width)
+        Memory.write_i32(scissor + 12, height)
+
+        vp_ci: i64 = Memory.malloc_zeroed(48)
+        if vp_ci == 0:
+            return 0
+        Memory.write_i32(vp_ci, 22)
+        Memory.write_i32(vp_ci + 20, 1)
+        Memory.write_ptr(vp_ci + 24, viewport)
+        Memory.write_i32(vp_ci + 32, 1)
+        Memory.write_ptr(vp_ci + 40, scissor)
+
+        rast: i64 = Memory.malloc_zeroed(64)
+        if rast == 0:
+            return 0
+        Memory.write_i32(rast, 23)
+        Memory.write_f32(rast + 56, 1.0)
+
+        ms: i64 = Memory.malloc_zeroed(48)
+        if ms == 0:
+            return 0
+        Memory.write_i32(ms, 24)
+        Memory.write_i32(ms + 20, 1)
+        Memory.write_f32(ms + 28, 1.0)
+
+        cba: i64 = Memory.malloc_zeroed(32)
+        if cba == 0:
+            return 0
+        Memory.write_i32(cba + 28, 15)
+
+        cb: i64 = Memory.malloc_zeroed(56)
+        if cb == 0:
+            return 0
+        Memory.write_i32(cb, 26)
+        Memory.write_i32(cb + 28, 1)
+        Memory.write_ptr(cb + 32, cba)
+
+        ds: i64 = Memory.malloc_zeroed(104)
+        if ds == 0:
+            return 0
+        Memory.write_i32(ds, 25)
+        Memory.write_i32(ds + 20, 1)
+        Memory.write_i32(ds + 24, 1)
+        Memory.write_i32(ds + 28, 1)
+
+        pipe_ci: i64 = Memory.malloc_zeroed(144)
+        if pipe_ci == 0:
+            return 0
+        Memory.write_i32(pipe_ci, 28)
+        Memory.write_i32(pipe_ci + 20, 2)
+        Memory.write_ptr(pipe_ci + 24, stages)
+        Memory.write_ptr(pipe_ci + 32, vi_ci)
+        Memory.write_ptr(pipe_ci + 40, ia_ci)
+        Memory.write_ptr(pipe_ci + 56, vp_ci)
+        Memory.write_ptr(pipe_ci + 64, rast)
+        Memory.write_ptr(pipe_ci + 72, ms)
+        Memory.write_ptr(pipe_ci + 80, ds)
+        Memory.write_ptr(pipe_ci + 88, cb)
+        Memory.write_ptr(pipe_ci + 104, self.ssbo_pipeline_layout)
+        Memory.write_ptr(pipe_ci + 112, self.vk_render_pass)
+        Memory.write_i32(pipe_ci + 136, 0 - 1)
+
+        pipe_ptr: i64 = Memory.malloc_zeroed(8)
+        if pipe_ptr == 0:
+            Memory.free(pipe_ci)
+            return 0
+        pipe_result: i32 = vkCreateGraphicsPipelines(device, 0, 1, pipe_ci, 0, pipe_ptr)
+        self.ssbo_pipeline = Memory.read_ptr(pipe_ptr)
+        Memory.free(pipe_ptr)
+        Memory.free(stages)
+        Memory.free(bind)
+        Memory.free(attrs)
+        Memory.free(vi_ci)
+        Memory.free(ia_ci)
+        Memory.free(viewport)
+        Memory.free(scissor)
+        Memory.free(vp_ci)
+        Memory.free(rast)
+        Memory.free(ms)
+        Memory.free(cba)
+        Memory.free(cb)
+        Memory.free(ds)
         Memory.free(pipe_ci)
         if pipe_result != 0:
             return 0

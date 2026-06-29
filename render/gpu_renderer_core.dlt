@@ -370,6 +370,15 @@ struct GpuRendererCore:
     bindless_supported: i32 = 0  # device supports descriptor indexing (from caps)
     bindless_flag:     i32 = 0   # user/runtime opt-in flag
     bindless_enabled:  i32 = 0   # supported && flag && initialized
+    # Phase 2: instance-SSBO descriptor sets (set 3) for the GPU-driven batched
+    # draw. One per frame slot, each pointing at that slot's region of the cull
+    # output buffer. Built once after the SSBO pipeline + cull buffers exist.
+    ssbo_desc_pool:    i64 = 0
+    ssbo_desc_sets:    i64 = 0   # VkDescriptorSet[FROG_CULL_SLOTS]
+    ssbo_desc_outbuf:  i64 = 0   # out_buffer the sets were built against (realloc guard)
+    ssbo_draw_enabled: i32 = 0   # ssbo pipeline ready && bindless && indirect-count
+    ssbo_pipeline_ready: i32 = 0 # ssbo pipeline built (set at init; gates firstInstance)
+    ssbo_layout_ref:   i64 = 0   # cached RenderPass.ssbo_set_layout
     # Offscreen render-scale target. When render_scale != 1, the scene is
     # rendered here, then blitted to the swapchain image for presentation.
     scale_color_image:  i64 = 0
@@ -677,6 +686,91 @@ attach GpuRendererCore:
         print(@"[frog.bindless] table ready (capacity={cap})")
         return 1
 
+    # Phase 2: build the instance-SSBO descriptor sets (set 3) for the
+    # GPU-driven batched draw. One set per frame slot, each a storage-buffer
+    # descriptor over that slot's region of the cull output buffer. Must be
+    # called after the cull buffers are allocated (ensure_capacity) AND the
+    # SSBO pipeline layout exists. Returns 1 on success. ssbo_layout is the
+    # RenderPass.ssbo_set_layout.
+    fun _ssbo_desc_init(self, ssbo_layout: i64, cull: GpuCullPipeline) -> i32:
+        if ssbo_layout == 0:
+            return 0
+        if cull.out_handle() == 0:
+            return 0
+        slot_stride: i64 = (cull.slot_capacity() as i64) * (FROG_CULL_OUT_STRIDE as i64)
+        if slot_stride <= 0:
+            return 0
+        self.ssbo_layout_ref = ssbo_layout
+
+        # Pool: FROG_CULL_SLOTS storage-buffer sets. Reset on rebuild so we can
+        # re-allocate the sets to point at a reallocated output buffer.
+        if self.ssbo_desc_pool == 0:
+            ps: i64 = Memory.malloc_zeroed(8)
+            dp_ci: i64 = Memory.malloc_zeroed(40)
+            dp_out: i64 = Memory.malloc_zeroed(8)
+            if ps == 0 or dp_ci == 0 or dp_out == 0:
+                Memory.free(ps)
+                Memory.free(dp_ci)
+                Memory.free(dp_out)
+                return 0
+            Memory.write_i32(ps, 7)              # STORAGE_BUFFER
+            Memory.write_i32(ps + 4, FROG_CULL_SLOTS)
+            Memory.write_i32(dp_ci, 33)
+            Memory.write_i32(dp_ci + 16, 1)      # FREE_DESCRIPTOR_SET (allow reset/realloc)
+            Memory.write_i32(dp_ci + 20, FROG_CULL_SLOTS)   # maxSets
+            Memory.write_i32(dp_ci + 24, 1)
+            Memory.write_ptr(dp_ci + 32, ps)
+            dp_r: i32 = vkCreateDescriptorPool(self.device, dp_ci, 0, dp_out)
+            self.ssbo_desc_pool = Memory.read_ptr(dp_out)
+            Memory.free(dp_out)
+            Memory.free(dp_ci)
+            Memory.free(ps)
+            if dp_r != 0:
+                return 0
+            self.ssbo_desc_sets = Memory.malloc_zeroed((FROG_CULL_SLOTS as i64) * 8)
+        else:
+            vkResetDescriptorPool(self.device, self.ssbo_desc_pool, 0)
+
+        # Allocate + write one set per slot, each over its output region.
+        s: i32 = 0
+        while s < FROG_CULL_SLOTS:
+            layout_arr: i64 = Memory.malloc_zeroed(8)
+            ai: i64 = Memory.malloc_zeroed(40)
+            set_out: i64 = Memory.malloc_zeroed(8)
+            Memory.write_ptr(layout_arr, ssbo_layout)
+            Memory.write_i32(ai, 34)
+            Memory.write_ptr(ai + 16, self.ssbo_desc_pool)
+            Memory.write_i32(ai + 24, 1)
+            Memory.write_ptr(ai + 32, layout_arr)
+            ar: i32 = vkAllocateDescriptorSets(self.device, ai, set_out)
+            dset: i64 = Memory.read_ptr(set_out)
+            Memory.free(set_out)
+            Memory.free(ai)
+            Memory.free(layout_arr)
+            if ar != 0:
+                return 0
+            Memory.write_ptr(self.ssbo_desc_sets + s * 8, dset)
+
+            binfo: i64 = Memory.malloc_zeroed(24)
+            wds: i64 = Memory.malloc_zeroed(64)
+            Memory.write_ptr(binfo, cull.out_handle())
+            Memory.write_i64(binfo + 8, (s as i64) * slot_stride)   # offset
+            Memory.write_i64(binfo + 16, slot_stride)               # range
+            Memory.write_i32(wds, 35)
+            Memory.write_ptr(wds + 16, dset)
+            Memory.write_i32(wds + 24, 0)        # binding 0
+            Memory.write_i32(wds + 32, 1)        # count
+            Memory.write_i32(wds + 36, 7)        # STORAGE_BUFFER
+            Memory.write_ptr(wds + 48, binfo)    # pBufferInfo
+            vkUpdateDescriptorSets(self.device, 1, wds, 0, 0)
+            Memory.free(wds)
+            Memory.free(binfo)
+            s = s + 1
+        self.ssbo_draw_enabled = 1
+        self.ssbo_desc_outbuf = cull.out_handle()
+        print("[frog.bindless] SSBO instance pipeline ready")
+        return 1
+
     # Phase 1 task 1.3: write a (view, sampler) pair into the next free slot
     # of the bindless table and return its index. Uses dstArrayElement = slot
     # with descriptorCount = 1, COMBINED_IMAGE_SAMPLER, layout
@@ -909,6 +1003,9 @@ attach GpuRendererCore:
             cmd_index: i32 = cmd_base0 + g
             out_base: i32 = out_cursor
             cull.prepare_group_cmd(cmd_index, draw_count, indexed)
+            # firstInstance stays 0 (prepare_group_cmd zeroed it). The active
+            # per-group draw binds the instance buffer at out_base directly, so
+            # it must be 0. (Only the disabled SSBO batched path would set it.)
             # NOTE: no full out_buffer clear here. The indirect draw reads only
             # instanceCount visible records (slots 0..count-1, written densely
             # by the compute compaction), so stale tail data is never drawn.
@@ -1158,11 +1255,31 @@ attach GpuRendererCore:
         if out_buf == 0 or ind_buf == 0:
             return
 
-        # Decide path: indirect-count batching needs device support + bindless
-        # (so texture differences don't force a descriptor rebind between the
-        # groups we batch). Otherwise the classic per-group loop runs.
-        use_count: i32 = 0
+        # Path selection. NOTE: the SSBO+gl_InstanceIndex batched path (below,
+        # currently DISABLED) relies on firstInstance>0 indexing, which this
+        # NVIDIA driver does not honor in practice (both the attribute-fetch and
+        # the gl_InstanceIndex variants made non-first groups read instance 0's
+        # data — the car appeared at random bot positions). Until that's root-
+        # caused (likely drawIndirectFirstInstance not effectively enabled), we
+        # use the proven per-group indirect-count path: the GPU still decides
+        # the draw count + per-command instanceCount with no CPU round-trip.
         dc_buf: i64 = cull.draw_count_handle()
+        ssbo_batch_path: i32 = 0   # disabled pending firstInstance root-cause
+        if ssbo_batch_path == 1:
+            if rp.ssbo_pipeline != 0:
+                if self.bindless_enabled == 1:
+                    if dc_buf != 0:
+                        if self.ssbo_desc_outbuf != cull.out_handle():
+                            self._ssbo_desc_init(rp.ssbo_set_layout, cull)
+            if self.ssbo_draw_enabled == 1:
+                if rp.ssbo_pipeline != 0:
+                    if dc_buf != 0:
+                        if self.ssbo_desc_sets != 0:
+                            if self.ssbo_desc_outbuf == cull.out_handle():
+                                self._gpu_draw_ssbo_batched(cmd, rp, cull, ind_buf, dc_buf)
+                                return
+
+        use_count: i32 = 0
         if self.bindless_enabled == 1:
             if rp.bindless_pipeline != 0:
                 if dc_buf != 0:
@@ -1257,6 +1374,100 @@ attach GpuRendererCore:
                     last_index_bound = ib_handle
             vkCmdDrawIndexedIndirectCount(cmd, ind_buf, cmd_off, dc_buf, dc_off, 1, 20)
             g = g + 1
+
+    # R2 strongest path: GPU-driven SSBO batched draw. Binds the SSBO pipeline
+    # (instance data via gl_InstanceIndex from set 3) and draws all groups that
+    # share VB/IB under ONE vkCmdDrawIndexedIndirectCount per batch. Each group
+    # command's firstInstance (set in precull) offsets gl_InstanceIndex into
+    # the slot's instance region — correct because gl_InstanceIndex includes
+    # firstInstance (Vulkan spec), unlike the attribute-fetch path.
+    fun _gpu_draw_ssbo_batched(self, cmd: i64, rp: RenderPass, cull: GpuCullPipeline, ind_buf: i64, dc_buf: i64):
+        layout: i64 = rp.ssbo_pipeline_layout
+        vkCmdBindPipeline(cmd, 0, rp.ssbo_pipeline)
+        # Rebind sets under the SSBO layout: 0 (shadow sampler), 2 (texture
+        # table), 3 (instance SSBO for this frame slot). Set 1 (lights) carries
+        # over from the compatible bindless layout binding.
+        set0: i64 = self.white_desc_set
+        if set0 == 0:
+            set0 = self.mesh_descriptor_set(rp, 0)
+        if set0 != 0:
+            Memory.write_ptr(self.scratch_desc_arr, set0)
+            vkCmdBindDescriptorSets(cmd, 0, layout, 0, 1, self.scratch_desc_arr, 0, 0)
+        if self.bindless_set != 0:
+            Memory.write_ptr(self.scratch_desc_arr, self.bindless_set)
+            vkCmdBindDescriptorSets(cmd, 0, layout, 2, 1, self.scratch_desc_arr, 0, 0)
+        slot: i32 = self.gpu_cull_slot
+        if slot < 0:
+            slot = 0
+        if slot >= FROG_CULL_SLOTS:
+            slot = 0
+        ssbo_set: i64 = Memory.read_ptr(self.ssbo_desc_sets + slot * 8)
+        if ssbo_set != 0:
+            Memory.write_ptr(self.scratch_desc_arr, ssbo_set)
+            vkCmdBindDescriptorSets(cmd, 0, layout, 3, 1, self.scratch_desc_arr, 0, 0)
+        # Re-bind lights (set 1) under this layout for correctness.
+        light_slot: i32 = self.current_frame
+        if light_slot < 0:
+            light_slot = 0
+        if light_slot > 1:
+            light_slot = 1
+        if self.point_light_desc_sets != 0:
+            pl_desc: i64 = Memory.read_ptr(self.point_light_desc_sets + light_slot * 8)
+            if pl_desc != 0:
+                Memory.write_ptr(self.scratch_desc_arr, pl_desc)
+                vkCmdBindDescriptorSets(cmd, 0, layout, 1, 1, self.scratch_desc_arr, 0, 0)
+        # Re-push the constants under the SSBO layout (already filled in
+        # scratch_push_data by the caller this frame).
+        if self.scratch_push_data != 0:
+            vkCmdPushConstants(cmd, layout, 17, 0, 128, self.scratch_push_data)
+
+        last_vb: i64 = 0
+        last_index_bound: i64 = 0
+        g: i32 = 0
+        batch: i32 = 0
+        while g < self.gpu_grp_n:
+            mi: i32 = Memory.read_i32(self.gpu_grp_mi + g * 4)
+            indexed: i32 = Memory.read_i32(self.gpu_grp_indexed + g * 4)
+            cmd_index: i32 = Memory.read_i32(self.gpu_grp_cmd + g * 4)
+            vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
+            ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
+
+            # Extend the batch while VB/IB/indexed match and commands stay
+            # contiguous (cmd_index increments by 1 per group in a slot).
+            batch_end: i32 = g + 1
+            while batch_end < self.gpu_grp_n:
+                nmi: i32 = Memory.read_i32(self.gpu_grp_mi + batch_end * 4)
+                nidx: i32 = Memory.read_i32(self.gpu_grp_indexed + batch_end * 4)
+                ncmd: i32 = Memory.read_i32(self.gpu_grp_cmd + batch_end * 4)
+                nvb: i64 = Memory.read_ptr(self.vb_handles + nmi * 8)
+                nib: i64 = Memory.read_ptr(self.ib_handles + nmi * 8)
+                if nvb != vb_handle:
+                    batch_end = self.gpu_grp_n
+                elif nib != ib_handle:
+                    batch_end = self.gpu_grp_n
+                elif nidx != indexed:
+                    batch_end = self.gpu_grp_n
+                elif ncmd != cmd_index + (batch_end - g):
+                    batch_end = self.gpu_grp_n
+                else:
+                    batch_end = batch_end + 1
+            group_count: i32 = batch_end - g
+
+            if vb_handle != last_vb:
+                Memory.write_ptr(self.scratch_vb_arr, vb_handle)
+                vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
+                last_vb = vb_handle
+
+            cull.set_draw_count(batch, group_count)
+            cmd_off: i64 = cull.group_cmd_offset(cmd_index)
+            dc_off: i64 = cull.draw_count_offset(batch)
+            if indexed == 1:
+                if ib_handle != last_index_bound:
+                    vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
+                    last_index_bound = ib_handle
+            vkCmdDrawIndexedIndirectCount(cmd, ind_buf, cmd_off, dc_buf, dc_off, group_count, 20)
+            batch = batch + 1
+            g = batch_end
 
     fun set_directional_light(self, light_ptr: i64):
         if self.render_state == 0:
@@ -4185,6 +4396,10 @@ attach GpuRendererCore:
         if self.bindless_layout != 0:
             vkDestroyDescriptorSetLayout(self.device, self.bindless_layout, 0)
             self.bindless_layout = 0
+        if self.ssbo_desc_pool != 0:
+            vkDestroyDescriptorPool(self.device, self.ssbo_desc_pool, 0)
+            self.ssbo_desc_pool = 0
+        self.ssbo_draw_enabled = 0
         self.bindless_enabled = 0
         self.bindless_count = 0
         if self.retire_buffers != 0:
