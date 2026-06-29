@@ -47,6 +47,7 @@ static g_engine_render_stats_enabled: i32 = 0
 static g_engine_gpu_timing_enabled: i32 = 0
 static g_engine_shadow_min_size: f32 = 0.0
 static g_engine_shadow_cascade0_margin: f32 = 0.0
+static g_engine_cpu_record_timing: i32 = 0
 static g_engine_collision_debug_enabled: i32 = 0
 static g_engine_frame_pacing_enabled: i32 = 0
 static g_engine_frame_pacing_interval: i32 = 120
@@ -317,6 +318,17 @@ attach Debug:
     static fun shadow_cascade0_margin_value() -> f32:
         return g_engine_shadow_cascade0_margin
 
+    # CPU command-recording profiler: prints shadow-build vs total recording
+    # microseconds every 120 frames. Off by default. Used to locate the CPU
+    # bottleneck before optimizing.
+    static fun cpu_record_timing(enabled: i32):
+        if enabled == 0:
+            g_engine_cpu_record_timing = 0
+        else:
+            g_engine_cpu_record_timing = 1
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_cpu_record_timing(g_engine_cpu_record_timing)
+
     static fun collisions(enabled: i32):
         if enabled == 0:
             g_engine_collision_debug_enabled = 0
@@ -479,6 +491,7 @@ attach Engine:
             g_engine_runtime.set_gpu_timing(g_engine_gpu_timing_enabled)
             g_engine_runtime.set_shadow_min_size(g_engine_shadow_min_size)
             g_engine_runtime.set_shadow_cascade0_margin(g_engine_shadow_cascade0_margin)
+            g_engine_runtime.set_cpu_record_timing(g_engine_cpu_record_timing)
             g_engine_runtime.set_collision_debug(g_engine_collision_debug_enabled)
             g_engine_runtime.set_instance_culling(g_engine_frustum_culling_enabled)
             g_engine_runtime.set_culling_auto_threshold(g_engine_culling_auto_threshold)
