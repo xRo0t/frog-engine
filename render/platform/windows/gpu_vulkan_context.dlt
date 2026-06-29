@@ -412,20 +412,32 @@ attach VulkanContext:
             Memory.write_i32(queue_ci + 64, 1)
             Memory.write_ptr(queue_ci + 72, priority_ptr)
 
-        swap_ext: i64 = Memory.malloc_zeroed(32)
-        if swap_ext == 0:
+        # Device extensions: swapchain always; VK_KHR_draw_indirect_count when
+        # the device supports it (R2). drawIndirectCount is core in 1.2 via the
+        # Vulkan12Features aggregate, but that aggregate CANNOT coexist with the
+        # dedicated descriptor-indexing struct in one pNext chain (VUID-02830,
+        # NVIDIA crash). Enabling it as a plain device EXTENSION (no feature
+        # struct) sidesteps the conflict entirely.
+        dev_ext: i64 = Memory.malloc_zeroed(16)
+        if dev_ext == 0:
             Memory.free(priority_ptr)
             Memory.free(queue_ci)
             return 0
         swap_ext_name: str = "VK_KHR_swapchain"
-        Memory.write_ptr(swap_ext, swap_ext_name)
+        indirect_count_ext_name: str = "VK_KHR_draw_indirect_count"
+        Memory.write_ptr(dev_ext, swap_ext_name as i64)
+        dev_ext_count: i32 = 1
+        idc_caps: GpuCaps = self.caps
+        if idc_caps.draw_indirect_count == 1:
+            Memory.write_ptr(dev_ext + 8, indirect_count_ext_name as i64)
+            dev_ext_count = 2
 
         # VkDeviceCreateInfo (72 bytes)
         dev_ci: i64 = Memory.malloc_zeroed(72)
         if dev_ci == 0:
             Memory.free(priority_ptr)
             Memory.free(queue_ci)
-            Memory.free(swap_ext)
+            Memory.free(dev_ext)
             return 0
         Memory.write_i32(dev_ci, 3)
         Memory.write_ptr(dev_ci + 8, 0)
@@ -434,8 +446,8 @@ attach VulkanContext:
         Memory.write_ptr(dev_ci + 24, queue_ci)
         Memory.write_i32(dev_ci + 32, 0)
         Memory.write_ptr(dev_ci + 40, 0)
-        Memory.write_i32(dev_ci + 48, 1)
-        Memory.write_ptr(dev_ci + 56, swap_ext)
+        Memory.write_i32(dev_ci + 48, dev_ext_count)
+        Memory.write_ptr(dev_ci + 56, dev_ext)
         Memory.write_ptr(dev_ci + 64, 0)
 
         # Build the device feature pNext chain. PHASE 1 CHANGE: we enable
@@ -462,10 +474,9 @@ attach VulkanContext:
         dcaps: GpuCaps = self.caps
         cap_di: i32 = dcaps.descriptor_indexing
         cap_dyn: i32 = dcaps.dynamic_rendering
-        # drawIndirectCount is NOT enabled this phase (not used by the current
-        # draw path). Reflect that truthfully in caps; Phase 2 restores it.
-        dcaps.draw_indirect_count = 0
-        self.caps = dcaps
+        # drawIndirectCount (R2) is enabled via the VK_KHR_draw_indirect_count
+        # device extension above (NOT a feature struct), so caps.draw_indirect_count
+        # stays as detected — no conflict with the descriptor-indexing struct.
         if cap_di == 1:
             want_modern = 1
         if cap_dyn == 1:
@@ -495,7 +506,7 @@ attach VulkanContext:
         if dev_ptr == 0:
             Memory.free(priority_ptr)
             Memory.free(queue_ci)
-            Memory.free(swap_ext)
+            Memory.free(dev_ext)
             Memory.free(dev_ci)
             Memory.free(feat_idx)
             Memory.free(feat_dynr)
@@ -533,7 +544,7 @@ attach VulkanContext:
         Memory.free(dev_ptr)
         Memory.free(priority_ptr)
         Memory.free(queue_ci)
-        Memory.free(swap_ext)
+        Memory.free(dev_ext)
         Memory.free(dev_ci)
         Memory.free(feat_idx)
         Memory.free(feat_dynr)
