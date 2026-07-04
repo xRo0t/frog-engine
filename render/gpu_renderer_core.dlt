@@ -387,18 +387,21 @@ fun _frog_shadow_vis_one(gi: i32):
                 elif obj_dist < eff_dist:
                     eff_dist = obj_dist
 
+    # Only write the ACTIVE cascade slots. The visibility buffer is sized for
+    # g_shadow_active_cascades cascades; looping a hard-coded 2 here overran it
+    # (and corrupted the heap from parallel workers) when only 1 cascade was
+    # active — a first-frame crash. Bound by the active count.
     c: i32 = 0
-    while c < 2:
+    while c < g_shadow_active_cascades:
         vis: i32 = 0
-        if c < g_shadow_active_cascades:
-            if castable == 1:
-                cascade_matrix: i64 = light_vp + (c as i64) * 64
-                vis = _frog_shadow_instance_visible(cascade_matrix, g_model, bound_x, bound_y, bound_z, bound_r, g_shadow_cam_x, g_shadow_cam_y, g_shadow_cam_z, eff_dist)
-                if vis == 1:
-                    if c == 1:
-                        if g_frog_shadow_cascade0_margin > 0.0:
-                            if _frog_shadow_fully_in_cascade(light_vp, g_model, bound_x, bound_y, bound_z, bound_r, g_frog_shadow_cascade0_margin) == 1:
-                                vis = 0
+        if castable == 1:
+            cascade_matrix: i64 = light_vp + (c as i64) * 64
+            vis = _frog_shadow_instance_visible(cascade_matrix, g_model, bound_x, bound_y, bound_z, bound_r, g_shadow_cam_x, g_shadow_cam_y, g_shadow_cam_z, eff_dist)
+            if vis == 1:
+                if c == 1:
+                    if g_frog_shadow_cascade0_margin > 0.0:
+                        if _frog_shadow_fully_in_cascade(light_vp, g_model, bound_x, bound_y, bound_z, bound_r, g_frog_shadow_cascade0_margin) == 1:
+                            vis = 0
         Memory.write_i32(out + ((c * vbc + gi) as i64) * 4, vis)
         c = c + 1
 
