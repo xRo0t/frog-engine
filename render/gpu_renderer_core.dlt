@@ -3982,6 +3982,26 @@ attach GpuRendererCore:
         if push == 0:
             return 0 - 1
 
+        # Distance cull params (match the CPU path): reject casters beyond the
+        # shadow distance from the camera. Written into the push block's
+        # camDistance vec4 (offset 112: xyz cam, w max-distance). w<=0 = off.
+        s_cam_x: f32 = 0.0
+        s_cam_y: f32 = 0.0
+        s_cam_z: f32 = 0.0
+        s_max_dist: f32 = 0.0
+        if self.render_state != 0:
+            s_cam_x = Memory.read_f32(self.render_state + 64)
+            s_cam_y = Memory.read_f32(self.render_state + 68)
+            s_cam_z = Memory.read_f32(self.render_state + 72)
+            s_light_ptr: i64 = Memory.read_ptr(self.render_state)
+            if s_light_ptr != 0:
+                s_light: DirectionalLight3D = s_light_ptr as DirectionalLight3D
+                s_max_dist = s_light.shadow.distance
+                if s_max_dist < 10.0:
+                    s_max_dist = 10.0
+                if s_max_dist > 1000.0:
+                    s_max_dist = 1000.0
+
         # --- Compute phase: cull every cascade into the shadow regions. ---
         # Pre-fill each group's indirect command (indexCount + zero
         # instanceCount) then dispatch, so the compute atomic-appends visible
@@ -3991,6 +4011,11 @@ attach GpuRendererCore:
             cascade_matrix: i64 = light_vp + (cascade_index as i64) * 64
             Memory.set(push, 0, FROG_CULL_PUSH_SIZE)
             frog_cull_extract_planes(cascade_matrix, push)
+            # camDistance vec4 at offset 112 (after 96 planes + 16 uints).
+            Memory.write_f32(push + 112, s_cam_x)
+            Memory.write_f32(push + 116, s_cam_y)
+            Memory.write_f32(push + 120, s_cam_z)
+            Memory.write_f32(push + 124, s_max_dist)
             s_out_base0: i32 = cull.shadow_out_base(slot, cascade_index)
             s_cmd_base0: i32 = cull.shadow_cmd_base(slot, cascade_index)
             out_cursor: i32 = s_out_base0

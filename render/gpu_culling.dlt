@@ -25,8 +25,10 @@ FROG_CULL_INSTANCE_STRIDE: i32 = 144
 # (model + material + uv + texture indices), matching FROG_GPU_INSTANCE_STRIDE
 # so the graphics pass binds it directly as the per-instance vertex buffer.
 FROG_CULL_OUT_STRIDE: i32 = 128
-# Push-constant block: 6 planes (vec4) + 4 u32 = 96 + 16 = 112 bytes.
-FROG_CULL_PUSH_SIZE: i32 = 112
+# Push-constant block: 6 planes (vec4) + 4 u32 + camDistance vec4
+# = 96 + 16 + 16 = 128 bytes. camDistance = cull origin (xyz) + max distance
+# (w); w <= 0 disables the optional distance cull (main camera pass).
+FROG_CULL_PUSH_SIZE: i32 = 128
 # Max distinct mesh groups per frame (size of the indirect-command array).
 FROG_CULL_MAX_GROUPS: i32 = 4096
 # Frames-in-flight slots the cull buffers are partitioned into, so the

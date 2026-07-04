@@ -64,6 +64,8 @@ layout(push_constant) uniform CullPush {
     uint inBase;          // first candidate index (shared input buffer)
     uint outBase;         // first output slot (shared output buffer)
     uint cmdIndex;        // which indirect command this group writes
+    vec4 camDistance;     // xyz = cull origin (camera), w = max distance
+                          //       (<= 0 disables the distance cull)
 } push;
 
 void main() {
@@ -94,6 +96,17 @@ void main() {
         vec4 p = push.planes[i];
         float dist = dot(p.xyz, centerWorld) + p.w;
         if (dist < -radius) {
+            visible = false;
+        }
+    }
+
+    // Optional distance cull (shadow pass): reject casters whose bounding
+    // sphere is entirely beyond maxDistance from the cull origin. Disabled
+    // when camDistance.w <= 0 (the main camera pass passes 0 -> no change).
+    if (push.camDistance.w > 0.0) {
+        vec3 d = centerWorld - push.camDistance.xyz;
+        float limit = push.camDistance.w + radius;
+        if (dot(d, d) > limit * limit) {
             visible = false;
         }
     }
