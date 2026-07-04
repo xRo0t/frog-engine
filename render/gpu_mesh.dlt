@@ -166,6 +166,28 @@ fun gltf_write_position_vertex(out: i64, out_off: i64, bin: i64, pos_addr: i64, 
             Memory.write_f32(out + out_off + FROG_GPU_VERTEX_NORMAL_OFFSET + 8, nz)
     return next_off
 
+# Single-entry cache for the glTF binary (.bin) buffer. A model with N
+# primitives previously re-read the ENTIRE .bin file from disk N times (once
+# per gpu_make_gltf_primitive_vertices call), i.e. O(primitives × filesize)
+# disk I/O + malloc. The cache keeps the most-recently-loaded .bin keyed by
+# its path, so consecutive primitive loads of the same model reuse one buffer.
+# The buffer is OWNED by the cache; callers must NOT free the returned pointer.
+# Loading a different .bin frees the previous one. This is load-time only
+# (never runs per frame), and bounded to a single buffer.
+g_gltf_bin_cache_path: str = ""
+g_gltf_bin_cache_data: i64 = 0
+
+# Release the cached .bin buffer (call when done loading a model, optional —
+# the next different-path load also frees it). Safe to call repeatedly.
+fun gltf_release_bin_cache():
+    if g_gltf_bin_cache_data != 0:
+        Memory.free(g_gltf_bin_cache_data)
+        g_gltf_bin_cache_data = 0
+    g_gltf_bin_cache_path = ""
+
+# Load the glTF .bin buffer for `gltf_path`, reusing the cached buffer when the
+# resolved path matches the last load. Returns a CACHE-OWNED pointer (do NOT
+# free it). Returns 0 on failure.
 fun gltf_load_binary_buffer(gltf_path: str, root: JsonValue) -> i64:
     buffers: JsonValue = root.get("buffers")
     if buffers.size() <= 0:
@@ -176,6 +198,10 @@ fun gltf_load_binary_buffer(gltf_path: str, root: JsonValue) -> i64:
         return 0
     dir: str = PathOps.get_directory(gltf_path)
     bin_path: str = PathOps.join_path(dir, uri)
+    # Cache hit: same .bin already resident -> reuse (no disk I/O).
+    if g_gltf_bin_cache_data != 0:
+        if Str.equals(g_gltf_bin_cache_path, bin_path):
+            return g_gltf_bin_cache_data
     file: File = File.open_cwd(bin_path, "r")
     if file.is_valid() == false:
         return 0
@@ -189,6 +215,11 @@ fun gltf_load_binary_buffer(gltf_path: str, root: JsonValue) -> i64:
         return 0
     file.read_bytes(data, size as i32)
     file.close()
+    # Install into the single-entry cache (freeing any previous buffer).
+    if g_gltf_bin_cache_data != 0:
+        Memory.free(g_gltf_bin_cache_data)
+    g_gltf_bin_cache_data = data
+    g_gltf_bin_cache_path = bin_path
     return data
 
 fun frogmodel_part_entry(model: Model3D, primitive_index: i32) -> i64:
@@ -335,12 +366,10 @@ fun gpu_make_gltf_primitive_vertices(model: Model3D, mesh_index: i32, primitive_
 
     out: i64 = Memory.malloc_zeroed((total_vertices as i64) * (FROG_GPU_VERTEX_STRIDE as i64))
     if out == 0:
-        Memory.free(bin)
         return GpuMeshData()
     out_indices: i64 = Memory.malloc_zeroed((total_indices as i64) * 4)
     if out_indices == 0:
         Memory.free(out)
-        Memory.free(bin)
         return GpuMeshData()
 
     material_id: i32 = prim.get_i32("material")
@@ -400,7 +429,6 @@ fun gpu_make_gltf_primitive_vertices(model: Model3D, mesh_index: i32, primitive_
         index_off = index_off + 4
         ii = ii + 1
 
-    Memory.free(bin)
     return GpuMeshData(vertices=out, vertex_count=total_vertices, indices=out_indices, index_count=total_indices)
 
 fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
@@ -444,20 +472,16 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
         mi = mi + 1
 
     if total_vertices <= 0:
-        Memory.free(bin)
         return GpuMeshData()
     if total_indices <= 0:
-        Memory.free(bin)
         return GpuMeshData()
 
     out: i64 = Memory.malloc_zeroed((total_vertices as i64) * (FROG_GPU_VERTEX_STRIDE as i64))
     if out == 0:
-        Memory.free(bin)
         return GpuMeshData()
     out_indices: i64 = Memory.malloc_zeroed((total_indices as i64) * 4)
     if out_indices == 0:
         Memory.free(out)
-        Memory.free(bin)
         return GpuMeshData()
 
     out_off: i64 = 0
@@ -539,7 +563,6 @@ fun gpu_make_gltf_model_vertices(model: Model3D) -> GpuMeshData:
             pi2 = pi2 + 1
         mi = mi + 1
 
-    Memory.free(bin)
     return GpuMeshData(vertices=out, vertex_count=total_vertices, indices=out_indices, index_count=total_indices)
 
 fun gpu_make_cube_vertices() -> i64:
