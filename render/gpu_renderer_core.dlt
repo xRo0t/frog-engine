@@ -2228,7 +2228,7 @@ attach GpuRendererCore:
             new_cap = 1024
         while new_cap < needed:
             new_cap = new_cap * 2
-        size: i64 = (new_cap as i64) * 80
+        size: i64 = (new_cap as i64) * (FROG_GPU_INSTANCE_STRIDE as i64)
         zeros: i64 = Memory.malloc_zeroed(size)
         if zeros == 0:
             return 0
@@ -2245,7 +2245,7 @@ attach GpuRendererCore:
             if old_mem != 0:
                 if old_mapped != 0:
                     vkUnmapMemory(self.device, old_mem)
-                self._retire_buffer_pair(old_buf, old_mem, (instance_capacity as i64) * 80, 128)
+                self._retire_buffer_pair(old_buf, old_mem, (instance_capacity as i64) * (FROG_GPU_INSTANCE_STRIDE as i64), 128)
             elif old_buf != 0:
                 vkDestroyBuffer(self.device, old_buf, 0)
 
@@ -4072,9 +4072,9 @@ attach GpuRendererCore:
                             if shadow_vis != 0:
                                 visible = Memory.read_i32(shadow_vis + ((cascade_index * self.vb_count + gi) as i64) * 4)
                             if visible == 1:
-                                dst: i64 = mapped + ((instance_base + instance_write) as i64) * 80
+                                dst: i64 = mapped + ((instance_base + instance_write) as i64) * (FROG_GPU_INSTANCE_STRIDE as i64)
                                 Memory.copy(dst, g_model, 64)
-                                Memory.set(dst + 64, 0, 16)
+                                Memory.set(dst + 64, 0, 64)
                                 instance_write = instance_write + 1
                                 group_count = group_count + 1
                             gi = gi + 1
@@ -4109,7 +4109,7 @@ attach GpuRendererCore:
                             vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
                             last_bound = vb_handle
                         Memory.write_ptr(self.scratch_inst_vb_arr, shadow_instance_buffer)
-                        Memory.write_i64(self.scratch_inst_off_arr, ((instance_base + group_start) as i64) * 80)
+                        Memory.write_i64(self.scratch_inst_off_arr, ((instance_base + group_start) as i64) * (FROG_GPU_INSTANCE_STRIDE as i64))
                         vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
                         if ib_handle != 0:
                             if ic > 0:

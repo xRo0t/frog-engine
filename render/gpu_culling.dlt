@@ -32,6 +32,9 @@ FROG_CULL_MAX_GROUPS: i32 = 4096
 # Frames-in-flight slots the cull buffers are partitioned into, so the
 # compute pass for frame N never writes memory frame N-1 is still reading.
 FROG_CULL_SLOTS: i32 = 2
+# GPU-driven shadow culling (S6): number of shadow cascades the shadow
+# output/command regions are partitioned for (matches the renderer's max).
+FROG_CULL_SHADOW_CASCADES: i32 = 2
 
 # Culling mode selectors (Engine.set_culling_mode).
 #   CPU  = CPU-side per-instance culling + draw (default, safe, best for
@@ -73,6 +76,19 @@ FROG_CULL_MODE_AUTO: i32 = 2
     draw_count_buffer: i64 = 0
     draw_count_memory: i64 = 0
     draw_count_mapped: i64 = 0
+    # S6: GPU-driven shadow culling. A second output region + indirect command
+    # region + descriptor set, partitioned per cascade × per slot. The compute
+    # pipeline is reused (same candidate in_buffer); only the output/cmd
+    # bindings differ, so shadow_desc_set rebinds binding 1/2 at the shadow
+    # buffers. Compacted shadow instances feed vkCmdDrawIndexedIndirect in the
+    # shadow pass, replacing the CPU compaction + per-caster copy.
+    shadow_out_buffer: i64 = 0
+    shadow_out_memory: i64 = 0
+    shadow_cmd_buffer: i64 = 0
+    shadow_cmd_memory: i64 = 0
+    shadow_cmd_mapped: i64 = 0
+    shadow_desc_set: i64 = 0
+    shadow_ready: i32 = 0
     capacity: i32 = 0
     # Per-slot partition sizes (capacity instances / FROG_CULL_MAX_GROUPS cmds
     # per slot). The compute pass for frame `slot` writes only its partition.
@@ -293,13 +309,13 @@ attach GpuCullPipeline:
         # VkDescriptorPoolSize = type(u32) count(u32) = 8B
         ps: i64 = Memory.malloc_zeroed(8)
         Memory.write_i32(ps, 7)                           # STORAGE_BUFFER
-        Memory.write_i32(ps + 4, 3)                       # 3 descriptors
+        Memory.write_i32(ps + 4, 6)                       # 6 descriptors (2 sets x 3)
         # VkDescriptorPoolCreateInfo:
         #   sType(4) pad(4) pNext(8) flags(4) maxSets(4) poolSizeCount(4) pad(4) pPoolSizes(8)
         dp_ci: i64 = Memory.malloc_zeroed(40)
         Memory.write_i32(dp_ci, 33)                       # sType = DESCRIPTOR_POOL_CREATE_INFO
         Memory.write_i32(dp_ci + 16, 0)                   # flags
-        Memory.write_i32(dp_ci + 20, 1)                   # maxSets
+        Memory.write_i32(dp_ci + 20, 2)                   # maxSets (main + shadow)
         Memory.write_i32(dp_ci + 24, 1)                   # poolSizeCount
         Memory.write_ptr(dp_ci + 32, ps)                  # pPoolSizes
         dpp: i64 = Memory.malloc_zeroed(8)
@@ -391,6 +407,31 @@ attach GpuCullPipeline:
         self.draw_count_memory = Memory.read_ptr(mp)
         self.draw_count_mapped = Memory.read_ptr(map_pp)
 
+        # S6: shadow output region — compacted shadow instances, partitioned
+        # per cascade × per slot. usage STORAGE(0x20)|VERTEX(0x80)=160 so the
+        # shadow pass binds it as the per-instance vertex buffer.
+        cascades: i64 = FROG_CULL_SHADOW_CASCADES as i64
+        shadow_out_size: i64 = (new_cap as i64) * (FROG_CULL_OUT_STRIDE as i64) * cascades * slots
+        if _frog_cull_make_buffer(self.device, self.phys_device, shadow_out_size, 160, bp, mp, 0) == 0:
+            Memory.free(bp)
+            Memory.free(mp)
+            Memory.free(map_pp)
+            return 0
+        self.shadow_out_buffer = Memory.read_ptr(bp)
+        self.shadow_out_memory = Memory.read_ptr(mp)
+
+        # S6: shadow indirect commands — one VkDrawIndexedIndirectCommand (20B)
+        # per group, per cascade, per slot. usage INDIRECT(0x100)|STORAGE(0x20).
+        shadow_cmd_size: i64 = (FROG_CULL_MAX_GROUPS as i64) * 20 * cascades * slots
+        if _frog_cull_make_buffer(self.device, self.phys_device, shadow_cmd_size, 288, bp, mp, map_pp) == 0:
+            Memory.free(bp)
+            Memory.free(mp)
+            Memory.free(map_pp)
+            return 0
+        self.shadow_cmd_buffer = Memory.read_ptr(bp)
+        self.shadow_cmd_memory = Memory.read_ptr(mp)
+        self.shadow_cmd_mapped = Memory.read_ptr(map_pp)
+
         Memory.free(bp)
         Memory.free(mp)
         Memory.free(map_pp)
@@ -399,6 +440,7 @@ attach GpuCullPipeline:
         self.capacity = new_cap * FROG_CULL_SLOTS
         self.in_dirty = 1
         self._update_descriptors()
+        self._update_shadow_descriptors()
         return 1
 
     # Per-frame instance budget (one slot's worth).
@@ -417,6 +459,110 @@ attach GpuCullPipeline:
     # First OUTPUT-instance slot for frame `slot` (output stays partitioned).
     fun slot_out_base(self, slot: i32) -> i32:
         return slot * self.slot_cap
+
+    # S6 shadow region bases. Shadow output is partitioned per (slot, cascade):
+    #   region index = slot * FROG_CULL_SHADOW_CASCADES + cascade
+    # Each region holds slot_cap instances / FROG_CULL_MAX_GROUPS commands.
+    fun shadow_region(self, slot: i32, cascade: i32) -> i32:
+        return slot * FROG_CULL_SHADOW_CASCADES + cascade
+
+    fun shadow_out_base(self, slot: i32, cascade: i32) -> i32:
+        return self.shadow_region(slot, cascade) * self.slot_cap
+
+    fun shadow_cmd_base(self, slot: i32, cascade: i32) -> i32:
+        return self.shadow_region(slot, cascade) * FROG_CULL_MAX_GROUPS
+
+    fun shadow_out_handle(self) -> i64:
+        return self.shadow_out_buffer
+
+    fun shadow_cmd_handle(self) -> i64:
+        return self.shadow_cmd_buffer
+
+    # Byte offset of shadow group g's VkDrawIndexedIndirectCommand.
+    fun shadow_cmd_offset(self, g: i32) -> i64:
+        return (g as i64) * 20
+
+    # Pre-fill a shadow group's indirect command (indexCount + zero
+    # instanceCount for the compute to atomic-increment). firstInstance=0;
+    # the draw binds the instance buffer at the group's byte offset.
+    fun prepare_shadow_cmd(self, g: i32, count: i32):
+        if self.shadow_cmd_mapped == 0:
+            return
+        if g < 0:
+            return
+        if g >= FROG_CULL_MAX_GROUPS * FROG_CULL_SHADOW_CASCADES * FROG_CULL_SLOTS:
+            return
+        base: i64 = self.shadow_cmd_mapped + (g as i64) * 20
+        Memory.write_i32(base + 0, count)         # indexCount
+        Memory.write_i32(base + 4, 0)             # instanceCount = 0
+        Memory.write_i32(base + 8, 0)             # firstIndex
+        Memory.write_i32(base + 12, 0)            # vertexOffset
+        Memory.write_i32(base + 16, 0)            # firstInstance
+
+    fun shadow_group_visible_count(self, g: i32) -> i32:
+        if self.shadow_cmd_mapped == 0:
+            return 0
+        return Memory.read_i32(self.shadow_cmd_mapped + (g as i64) * 20 + 4)
+
+    # S6: record a shadow cull dispatch for one group into `cmd`, writing into
+    # the SHADOW output/command regions (via shadow_desc_set). push_ptr has the
+    # cascade's 6 frustum planes already written; this fills candidateCount/
+    # inBase/outBase/cmdIndex (offsets 96/100/104/108).
+    fun dispatch_shadow_group(self, cmd: i64, candidate_count: i32, in_base: i32, out_base: i32, cmd_index: i32, push_ptr: i64):
+        if self.ready == 0:
+            return
+        if candidate_count <= 0:
+            return
+        Memory.write_i32(push_ptr + 96, candidate_count)
+        Memory.write_i32(push_ptr + 100, in_base)
+        Memory.write_i32(push_ptr + 104, out_base)
+        Memory.write_i32(push_ptr + 108, cmd_index)
+        vkCmdBindPipeline(cmd, 1, self.pipeline)
+        dsp: i64 = Memory.malloc_zeroed(8)
+        Memory.write_ptr(dsp, self.shadow_desc_set)
+        vkCmdBindDescriptorSets(cmd, 1, self.pipeline_layout, 0, 1, dsp, 0, 0)
+        Memory.free(dsp)
+        vkCmdPushConstants(cmd, self.pipeline_layout, 32, 0, FROG_CULL_PUSH_SIZE, push_ptr)
+        groups: i32 = (candidate_count + 63) / 64
+        vkCmdDispatch(cmd, groups, 1, 1)
+
+    # HOST-write -> COMPUTE barrier for the shadow command buffer (CPU zeroed
+    # instanceCount + wrote indexCount before the dispatch reads/updates it).
+    fun shadow_barrier_before(self, cmd: i64):
+        bb: i64 = Memory.malloc_zeroed(56)
+        Memory.write_i32(bb, 44)
+        Memory.write_i32(bb + 16, 16384)                 # src = HOST_WRITE
+        Memory.write_i32(bb + 20, 96)                    # dst = SHADER_READ|SHADER_WRITE
+        Memory.write_i32(bb + 24, 0 - 1)
+        Memory.write_i32(bb + 28, 0 - 1)
+        Memory.write_ptr(bb + 32, self.shadow_cmd_buffer)
+        Memory.write_i64(bb + 40, 0)
+        Memory.write_i64(bb + 48, 0 - 1)
+        vkCmdPipelineBarrier(cmd, 16384, 2048, 0, 0, 0, 1, bb, 0, 0)
+        Memory.free(bb)
+
+    # COMPUTE-write -> {vertex-attribute, indirect} barrier so the shadow draw
+    # sees the compacted instances + updated commands.
+    fun shadow_barrier_after(self, cmd: i64):
+        bb: i64 = Memory.malloc_zeroed(112)
+        Memory.write_i32(bb, 44)
+        Memory.write_i32(bb + 16, 64)                    # src = SHADER_WRITE
+        Memory.write_i32(bb + 20, 4)                     # dst = VERTEX_ATTRIBUTE_READ
+        Memory.write_i32(bb + 24, 0 - 1)
+        Memory.write_i32(bb + 28, 0 - 1)
+        Memory.write_ptr(bb + 32, self.shadow_out_buffer)
+        Memory.write_i64(bb + 40, 0)
+        Memory.write_i64(bb + 48, 0 - 1)
+        Memory.write_i32(bb + 56, 44)
+        Memory.write_i32(bb + 56 + 16, 64)               # src = SHADER_WRITE
+        Memory.write_i32(bb + 56 + 20, 1)                # dst = INDIRECT_COMMAND_READ
+        Memory.write_i32(bb + 56 + 24, 0 - 1)
+        Memory.write_i32(bb + 56 + 28, 0 - 1)
+        Memory.write_ptr(bb + 56 + 32, self.shadow_cmd_buffer)
+        Memory.write_i64(bb + 56 + 40, 0)
+        Memory.write_i64(bb + 56 + 48, 0 - 1)
+        vkCmdPipelineBarrier(cmd, 2048, 6, 0, 0, 0, 2, bb, 0, 0)
+        Memory.free(bb)
 
     # Mark the persistent candidate buffer as needing a re-upload (scene
     # changed: instances added/removed/transformed).
@@ -495,6 +641,56 @@ attach GpuCullPipeline:
         Memory.free(writes)
         Memory.free(bufs)
 
+    # S6: allocate (once) the shadow descriptor set and point its 3 bindings
+    # at in_buffer (shared candidates) + shadow_out_buffer + shadow_cmd_buffer.
+    # The compute shader is reused as-is; only the output/command bindings
+    # differ, so a shadow dispatch writes into the shadow regions.
+    fun _update_shadow_descriptors(self):
+        if self.shadow_out_buffer == 0:
+            return
+        if self.shadow_cmd_buffer == 0:
+            return
+        if self.shadow_desc_set == 0:
+            setp: i64 = Memory.malloc_zeroed(8)
+            Memory.write_ptr(setp, self.desc_set_layout)
+            ai: i64 = Memory.malloc_zeroed(40)
+            Memory.write_i32(ai, 34)                      # DESCRIPTOR_SET_ALLOCATE_INFO
+            Memory.write_ptr(ai + 16, self.desc_pool)
+            Memory.write_i32(ai + 24, 1)
+            Memory.write_ptr(ai + 32, setp)
+            dsp: i64 = Memory.malloc_zeroed(8)
+            vkAllocateDescriptorSets(self.device, ai, dsp)
+            self.shadow_desc_set = Memory.read_ptr(dsp)
+            Memory.free(dsp)
+            Memory.free(ai)
+            Memory.free(setp)
+
+        bufs: i64 = Memory.malloc_zeroed(24 * 3)
+        Memory.write_ptr(bufs + 0, self.in_buffer)
+        Memory.write_i64(bufs + 8, 0)
+        Memory.write_i64(bufs + 16, 0 - 1)
+        Memory.write_ptr(bufs + 24, self.shadow_out_buffer)
+        Memory.write_i64(bufs + 32, 0)
+        Memory.write_i64(bufs + 40, 0 - 1)
+        Memory.write_ptr(bufs + 48, self.shadow_cmd_buffer)
+        Memory.write_i64(bufs + 56, 0)
+        Memory.write_i64(bufs + 64, 0 - 1)
+
+        writes: i64 = Memory.malloc_zeroed(64 * 3)
+        wi: i32 = 0
+        while wi < 3:
+            wbase: i64 = (wi as i64) * 64
+            Memory.write_i32(writes + wbase, 35)          # WRITE_DESCRIPTOR_SET
+            Memory.write_ptr(writes + wbase + 16, self.shadow_desc_set)
+            Memory.write_i32(writes + wbase + 24, wi)     # dstBinding
+            Memory.write_i32(writes + wbase + 32, 1)      # descriptorCount
+            Memory.write_i32(writes + wbase + 36, 7)      # STORAGE_BUFFER
+            Memory.write_ptr(writes + wbase + 48, bufs + (wi as i64) * 24)
+            wi = wi + 1
+        vkUpdateDescriptorSets(self.device, 3, writes, 0, 0)
+        Memory.free(writes)
+        Memory.free(bufs)
+
     fun _free_buffers(self):
         if self.in_buffer != 0:
             vkDestroyBuffer(self.device, self.in_buffer, 0)
@@ -519,6 +715,17 @@ attach GpuCullPipeline:
             self.draw_count_buffer = 0
             self.draw_count_memory = 0
             self.draw_count_mapped = 0
+        if self.shadow_out_buffer != 0:
+            vkDestroyBuffer(self.device, self.shadow_out_buffer, 0)
+            vkFreeMemory(self.device, self.shadow_out_memory, 0)
+            self.shadow_out_buffer = 0
+            self.shadow_out_memory = 0
+        if self.shadow_cmd_buffer != 0:
+            vkDestroyBuffer(self.device, self.shadow_cmd_buffer, 0)
+            vkFreeMemory(self.device, self.shadow_cmd_memory, 0)
+            self.shadow_cmd_buffer = 0
+            self.shadow_cmd_memory = 0
+            self.shadow_cmd_mapped = 0
 
     fun cleanup(self):
         self._free_buffers()
@@ -543,6 +750,8 @@ attach GpuCullPipeline:
         self.slot_cap = 0
         self.in_dirty = 1
         self.in_count = 0
+        self.shadow_desc_set = 0
+        self.shadow_ready = 0
 
     # Prepare the indirect draw command for this frame's group:
     # write indexCount + firstIndex/vertexOffset/firstInstance, and zero
