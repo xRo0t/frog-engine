@@ -320,6 +320,9 @@ attach Renderer:
     fun upload_plane_mesh(self) -> i32:
         return self.core.upload_plane_mesh()
 
+    fun upload_sprite_quad_mesh(self) -> i32:
+        return self.core.upload_sprite_quad_mesh()
+
     fun upload_colored_plane_mesh(self, color: Color) -> i32:
         return self.core.upload_colored_plane_mesh(color)
 
@@ -528,6 +531,14 @@ attach GpuRendererCore:
 
     fun upload_plane_mesh(self) -> i32:
         verts: i64 = gpu_make_plane_vertices()
+        if verts == 0:
+            return -1
+        mesh_id: i32 = self.upload_mesh(verts, 6)
+        Memory.free(verts)
+        return mesh_id
+
+    fun upload_sprite_quad_mesh(self) -> i32:
+        verts: i64 = gpu_make_sprite_quad_vertices()
         if verts == 0:
             return -1
         mesh_id: i32 = self.upload_mesh(verts, 6)

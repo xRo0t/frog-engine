@@ -660,3 +660,31 @@ fun gpu_make_plane_vertices() -> i64:
     gpu_assign_quad_uvs(buf, 0)
     gpu_assign_flat_normals(buf, 6)
     return buf
+
+# Sprite quad: a unit 1x1 quad centered at origin in the local XY plane,
+# facing +Z (normal +Z). White vertex color (sprite color/tint comes from the
+# material + texture). The Sprite3D billboard matrix orients local X/Y to the
+# camera's right/up each frame, so this local layout maps directly to
+# screen-space right (+X) / up (+Y). UVs: top-left origin (v flipped) so image
+# rows map naturally. Winding matches the plane quad (same front-face state).
+fun gpu_make_sprite_quad_vertices() -> i64:
+    buf: i64 = Memory.malloc_zeroed(6 * FROG_GPU_VERTEX_STRIDE)
+    if buf == 0:
+        return 0
+    h: f32 = 0.5
+    off: i64 = 0
+    # Two triangles (CCW when viewed from +Z), matching gpu_assign_quad_uvs order.
+    off = gpu_wv(buf, off, 0.0 - h,       h, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off,       h, 0.0 - h, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off,       h,       h, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - h,       h, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off, 0.0 - h, 0.0 - h, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0)
+    off = gpu_wv(buf, off,       h, 0.0 - h, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0)
+    gpu_assign_quad_uvs(buf, 0)
+    # Flat normal +Z for all verts (billboards are unlit by default; kept for
+    # completeness / optional lit sprites).
+    nrm: i32 = 0
+    while nrm < 6:
+        gpu_write_vertex_normal(buf, nrm, 0.0, 0.0, 1.0)
+        nrm = nrm + 1
+    return buf

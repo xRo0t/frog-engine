@@ -27,6 +27,11 @@ struct RenderPass:
     # only when bindless is enabled; vk_pipeline stays the classic fallback.
     bindless_pipeline:        i64 = 0
     bindless_pipeline_layout: i64 = 0
+    # Transparent variant of the bindless pipeline: same shaders + layout, but
+    # alpha blending ON (src_alpha, one_minus_src_alpha) and depth-write OFF
+    # (depth-test still ON so opaque geometry occludes it). Used for the
+    # transparent sprite pass drawn after all opaque geometry.
+    bindless_transparent_pipeline: i64 = 0
     bindless_vert_module:     i64 = 0
     bindless_frag_module:     i64 = 0
     # Phase 2: GPU-driven SSBO pipeline. Reads the per-instance record from a
@@ -1302,6 +1307,68 @@ attach RenderPass:
         pipe_result: i32 = vkCreateGraphicsPipelines(device, 0, 1, pipe_ci, 0, pipe_ptr)
         self.bindless_pipeline = Memory.read_ptr(pipe_ptr)
         Memory.free(pipe_ptr)
+
+        # --- Transparent variant: same shaders/layout/vertex-input, but alpha
+        # blending ON and depth-write OFF. Reuses stages/vi_ci/ia_ci/vp_ci/
+        # rast/ms; only the color-blend attachment and depth-stencil differ.
+        t_cba: i64 = Memory.malloc_zeroed(32)
+        t_cb: i64 = Memory.malloc_zeroed(56)
+        t_ds: i64 = Memory.malloc_zeroed(104)
+        t_pipe_ci: i64 = Memory.malloc_zeroed(144)
+        t_pipe_ptr: i64 = Memory.malloc_zeroed(8)
+        if t_cba != 0 and t_cb != 0 and t_ds != 0 and t_pipe_ci != 0 and t_pipe_ptr != 0:
+            # Blend attachment: standard src-over alpha blending.
+            #   blendEnable=1
+            #   srcColor=SRC_ALPHA(6), dstColor=ONE_MINUS_SRC_ALPHA(7), colorOp=ADD(0)
+            #   srcAlpha=ONE(1),       dstAlpha=ONE_MINUS_SRC_ALPHA(7), alphaOp=ADD(0)
+            #   colorWriteMask=RGBA(15)
+            Memory.write_i32(t_cba + 0, 1)
+            Memory.write_i32(t_cba + 4, 6)
+            Memory.write_i32(t_cba + 8, 7)
+            Memory.write_i32(t_cba + 12, 0)
+            Memory.write_i32(t_cba + 16, 1)
+            Memory.write_i32(t_cba + 20, 7)
+            Memory.write_i32(t_cba + 24, 0)
+            Memory.write_i32(t_cba + 28, 15)
+
+            Memory.write_i32(t_cb, 26)
+            Memory.write_i32(t_cb + 28, 1)
+            Memory.write_ptr(t_cb + 32, t_cba)
+
+            # Depth: test ON (occluded by opaque), write OFF (don't block others).
+            Memory.write_i32(t_ds, 25)
+            Memory.write_i32(t_ds + 20, 1)      # depthTestEnable
+            Memory.write_i32(t_ds + 24, 0)      # depthWriteEnable = OFF
+            Memory.write_i32(t_ds + 28, 1)      # compareOp = LESS_OR_EQUAL
+
+            Memory.write_i32(t_pipe_ci, 28)
+            Memory.write_i32(t_pipe_ci + 20, 2)
+            Memory.write_ptr(t_pipe_ci + 24, stages)
+            Memory.write_ptr(t_pipe_ci + 32, vi_ci)
+            Memory.write_ptr(t_pipe_ci + 40, ia_ci)
+            Memory.write_ptr(t_pipe_ci + 56, vp_ci)
+            Memory.write_ptr(t_pipe_ci + 64, rast)
+            Memory.write_ptr(t_pipe_ci + 72, ms)
+            Memory.write_ptr(t_pipe_ci + 80, t_ds)
+            Memory.write_ptr(t_pipe_ci + 88, t_cb)
+            Memory.write_ptr(t_pipe_ci + 104, self.bindless_pipeline_layout)
+            Memory.write_ptr(t_pipe_ci + 112, self.vk_render_pass)
+            Memory.write_i32(t_pipe_ci + 120, 0)
+            Memory.write_i32(t_pipe_ci + 136, 0 - 1)
+            t_result: i32 = vkCreateGraphicsPipelines(device, 0, 1, t_pipe_ci, 0, t_pipe_ptr)
+            if t_result == 0:
+                self.bindless_transparent_pipeline = Memory.read_ptr(t_pipe_ptr)
+        if t_cba != 0:
+            Memory.free(t_cba)
+        if t_cb != 0:
+            Memory.free(t_cb)
+        if t_ds != 0:
+            Memory.free(t_ds)
+        if t_pipe_ci != 0:
+            Memory.free(t_pipe_ci)
+        if t_pipe_ptr != 0:
+            Memory.free(t_pipe_ptr)
+
         Memory.free(stages)
         Memory.free(bind)
         Memory.free(attrs)

@@ -103,7 +103,10 @@ fun _frog_pack_material(material: Material3D) -> f32:
     occlusion_map: i32 = 0
     if material.has_occlusion_map != 0:
         occlusion_map = 1
-    return (r + g * 32 + b * 1024 + unlit * 32768 + emissive_map * 131072 + normal_map * 262144 + metallic_roughness_map * 524288 + occlusion_map * 1048576) as f32
+    alpha_clip: i32 = 0
+    if material.alpha_clip != 0:
+        alpha_clip = 1
+    return (r + g * 32 + b * 1024 + unlit * 32768 + emissive_map * 131072 + normal_map * 262144 + metallic_roughness_map * 524288 + occlusion_map * 1048576 + alpha_clip * 2097152) as f32
 
 fun _frog_mesh_bounds(vertices: i64, vertex_count: i32) -> GpuMeshBounds:
     if vertices == 0:
@@ -568,6 +571,7 @@ struct GpuRendererCore:
     mesh_material_params: i64 = 0 # mesh_id -> material vec4 + uv transform vec4
     mesh_shadow_flags: i64 = 0 # mesh_id -> cast + receive * 2
     mesh_shadow_distances: i64 = 0 # mesh_id -> object shadow cutoff, 0 = inherit light distance
+    mesh_transparent: i64 = 0  # mesh_id -> 1 if drawn in the transparent (alpha-blended) pass
     white_desc_set: i64 = 0    # descriptor set for the 1x1 white fallback
     white_tex_id:   i32 = -1
     # --- Phase 1: Bindless texture table (R1) ---
@@ -682,6 +686,7 @@ attach GpuRendererCore:
         self.mesh_desc_sets = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.mesh_material_params = Memory.malloc_zeroed(self.vb_capacity * 32)
         self.mesh_shadow_flags = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.mesh_transparent = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.mesh_shadow_distances = Memory.malloc_zeroed(self.vb_capacity * 4)
         mti: i32 = 0
         while mti < self.vb_capacity:
@@ -1505,7 +1510,7 @@ attach GpuRendererCore:
                     use_count = 1
 
         if use_count == 1:
-            self._gpu_draw_indirect_count(cmd, cull, out_buf, ind_buf, dc_buf)
+            self._gpu_draw_indirect_count(cmd, rp, cull, out_buf, ind_buf, dc_buf)
             return
 
         last_vb: i64 = 0
@@ -1559,40 +1564,88 @@ attach GpuRendererCore:
     # (bindless), so there are NO per-group descriptor binds. We do NOT rely on
     # firstInstance>0 (drawIndirectFirstInstance fetch offset proved unreliable
     # on this driver — it made non-first groups read instance 0's data).
-    fun _gpu_draw_indirect_count(self, cmd: i64, cull: GpuCullPipeline, out_buf: i64, ind_buf: i64, dc_buf: i64):
+    fun _gpu_draw_indirect_count(self, cmd: i64, rp: RenderPass, cull: GpuCullPipeline, out_buf: i64, ind_buf: i64, dc_buf: i64):
+        # Opaque pass: draw every group EXCEPT transparent ones (those are
+        # drawn afterward with alpha blending). transparent_seen tracks whether
+        # a transparent second pass is needed.
         last_vb: i64 = 0
         last_index_bound: i64 = 0
+        transparent_seen: i32 = 0
         g: i32 = 0
         while g < self.gpu_grp_n:
             mi: i32 = Memory.read_i32(self.gpu_grp_mi + g * 4)
-            indexed: i32 = Memory.read_i32(self.gpu_grp_indexed + g * 4)
-            cmd_index: i32 = Memory.read_i32(self.gpu_grp_cmd + g * 4)
-            out_base: i32 = Memory.read_i32(self.gpu_grp_outbase + g * 4)
-            vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
-            ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
+            is_transparent: i32 = 0
+            if self.mesh_transparent != 0:
+                if Memory.read_i32(self.mesh_transparent + mi * 4) != 0:
+                    is_transparent = 1
+            if is_transparent == 1:
+                transparent_seen = 1
+                g = g + 1
+            else:
+                indexed: i32 = Memory.read_i32(self.gpu_grp_indexed + g * 4)
+                cmd_index: i32 = Memory.read_i32(self.gpu_grp_cmd + g * 4)
+                out_base: i32 = Memory.read_i32(self.gpu_grp_outbase + g * 4)
+                vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
+                ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
 
-            if vb_handle != last_vb:
-                Memory.write_ptr(self.scratch_vb_arr, vb_handle)
-                vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
-                last_vb = vb_handle
+                if vb_handle != last_vb:
+                    Memory.write_ptr(self.scratch_vb_arr, vb_handle)
+                    vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
+                    last_vb = vb_handle
 
-            # Instance buffer = this group's compacted output slice. Bind at the
-            # group byte offset; the command's firstInstance is 0.
-            Memory.write_ptr(self.scratch_inst_vb_arr, out_buf)
-            Memory.write_i64(self.scratch_inst_off_arr, (out_base as i64) * (FROG_CULL_OUT_STRIDE as i64))
-            vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
+                Memory.write_ptr(self.scratch_inst_vb_arr, out_buf)
+                Memory.write_i64(self.scratch_inst_off_arr, (out_base as i64) * (FROG_CULL_OUT_STRIDE as i64))
+                vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
 
-            # draw-count = 1 command for this group; the GPU still decides the
-            # instanceCount inside it (set by the cull compaction).
-            cull.set_draw_count(g, 1)
-            cmd_off: i64 = cull.group_cmd_offset(cmd_index)
-            dc_off: i64 = cull.draw_count_offset(g)
-            if indexed == 1:
-                if ib_handle != last_index_bound:
-                    vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
-                    last_index_bound = ib_handle
-            vkCmdDrawIndexedIndirectCount(cmd, ind_buf, cmd_off, dc_buf, dc_off, 1, 20)
-            g = g + 1
+                cull.set_draw_count(g, 1)
+                cmd_off: i64 = cull.group_cmd_offset(cmd_index)
+                dc_off: i64 = cull.draw_count_offset(g)
+                if indexed == 1:
+                    if ib_handle != last_index_bound:
+                        vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
+                        last_index_bound = ib_handle
+                vkCmdDrawIndexedIndirectCount(cmd, ind_buf, cmd_off, dc_buf, dc_off, 1, 20)
+                g = g + 1
+
+        # Transparent pass: same descriptors/push constants (already bound by
+        # the caller), just swap to the blend+no-depth-write pipeline and draw
+        # the transparent groups. Drawn after opaque so they blend over it.
+        if transparent_seen == 1:
+            if rp.bindless_transparent_pipeline != 0:
+                vkCmdBindPipeline(cmd, 0, rp.bindless_transparent_pipeline)
+                last_vb = 0
+                last_index_bound = 0
+                gt: i32 = 0
+                while gt < self.gpu_grp_n:
+                    mit: i32 = Memory.read_i32(self.gpu_grp_mi + gt * 4)
+                    tflag: i32 = 0
+                    if self.mesh_transparent != 0:
+                        if Memory.read_i32(self.mesh_transparent + mit * 4) != 0:
+                            tflag = 1
+                    if tflag == 0:
+                        gt = gt + 1
+                    else:
+                        indexed2: i32 = Memory.read_i32(self.gpu_grp_indexed + gt * 4)
+                        cmd_index2: i32 = Memory.read_i32(self.gpu_grp_cmd + gt * 4)
+                        out_base2: i32 = Memory.read_i32(self.gpu_grp_outbase + gt * 4)
+                        vb2: i64 = Memory.read_ptr(self.vb_handles + mit * 8)
+                        ib2: i64 = Memory.read_ptr(self.ib_handles + mit * 8)
+                        if vb2 != last_vb:
+                            Memory.write_ptr(self.scratch_vb_arr, vb2)
+                            vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
+                            last_vb = vb2
+                        Memory.write_ptr(self.scratch_inst_vb_arr, out_buf)
+                        Memory.write_i64(self.scratch_inst_off_arr, (out_base2 as i64) * (FROG_CULL_OUT_STRIDE as i64))
+                        vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
+                        cull.set_draw_count(gt, 1)
+                        cmd_off2: i64 = cull.group_cmd_offset(cmd_index2)
+                        dc_off2: i64 = cull.draw_count_offset(gt)
+                        if indexed2 == 1:
+                            if ib2 != last_index_bound:
+                                vkCmdBindIndexBuffer(cmd, ib2, 0, 1)
+                                last_index_bound = ib2
+                        vkCmdDrawIndexedIndirectCount(cmd, ind_buf, cmd_off2, dc_buf, dc_off2, 1, 20)
+                        gt = gt + 1
 
     # R2 strongest path: GPU-driven SSBO batched draw. Binds the SSBO pipeline
     # (instance data via gl_InstanceIndex from set 3) and draws all groups that
@@ -1801,6 +1854,7 @@ attach GpuRendererCore:
         new_mesh_materials: i64 = Memory.malloc_zeroed(new_cap * 32)
         new_shadow_flags: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_shadow_distances: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_transparent: i64 = Memory.malloc_zeroed(new_cap * 4)
         mti2: i32 = 0
         while mti2 < new_cap:
             Memory.write_i32(new_mesh_tex + mti2 * 4, 0 - 1)
@@ -1852,6 +1906,8 @@ attach GpuRendererCore:
             Memory.copy(new_shadow_flags, self.mesh_shadow_flags, self.vb_capacity * 4)
         if self.mesh_shadow_distances != 0:
             Memory.copy(new_shadow_distances, self.mesh_shadow_distances, self.vb_capacity * 4)
+        if self.mesh_transparent != 0:
+            Memory.copy(new_transparent, self.mesh_transparent, self.vb_capacity * 4)
         Memory.free(self.vb_handles)
         Memory.free(self.vb_memories)
         Memory.free(self.vb_alloc_sizes)
@@ -1885,6 +1941,8 @@ attach GpuRendererCore:
             Memory.free(self.mesh_shadow_flags)
         if self.mesh_shadow_distances != 0:
             Memory.free(self.mesh_shadow_distances)
+        if self.mesh_transparent != 0:
+            Memory.free(self.mesh_transparent)
         self.vb_handles = new_handles
         self.vb_memories = new_memories
         self.vb_alloc_sizes = new_alloc_sizes
@@ -1909,6 +1967,7 @@ attach GpuRendererCore:
         self.mesh_material_params = new_mesh_materials
         self.mesh_shadow_flags = new_shadow_flags
         self.mesh_shadow_distances = new_shadow_distances
+        self.mesh_transparent = new_transparent
         self.vb_capacity = new_cap
         # Grow the candidate->gi map alongside the vb arrays.
         new_cand_gi: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
@@ -2947,6 +3006,8 @@ attach GpuRendererCore:
             Memory.write_i32(self.mesh_shadow_flags + idx * 4, Memory.read_i32(self.mesh_shadow_flags + src_vb_idx * 4))
         if self.mesh_shadow_distances != 0:
             Memory.write_f32(self.mesh_shadow_distances + idx * 4, Memory.read_f32(self.mesh_shadow_distances + src_vb_idx * 4))
+        if self.mesh_transparent != 0:
+            Memory.write_i32(self.mesh_transparent + idx * 4, Memory.read_i32(self.mesh_transparent + src_vb_idx * 4))
         self._copy_mesh_bounds(idx, src_vb_idx)
         self.vb_count = idx + 1
         self._mark_cull_dirty_struct()
@@ -3070,6 +3131,11 @@ attach GpuRendererCore:
             return
         if self.mesh_material_params == 0:
             return
+        if self.mesh_transparent != 0:
+            tflag: i32 = 0
+            if material.transparent != 0:
+                tflag = 1
+            Memory.write_i32(self.mesh_transparent + mesh_id * 4, tflag)
         off: i64 = (mesh_id as i64) * 32
         Memory.write_f32(self.mesh_material_params + off, material.metallic)
         Memory.write_f32(self.mesh_material_params + off + 4, material.roughness)
@@ -5180,6 +5246,8 @@ attach GpuRendererCore:
             Memory.free(self.mesh_shadow_flags)
         if self.mesh_shadow_distances != 0:
             Memory.free(self.mesh_shadow_distances)
+        if self.mesh_transparent != 0:
+            Memory.free(self.mesh_transparent)
         self.tex_count = 0
         self.vb_count = 0
         self.instance_capacity = 0

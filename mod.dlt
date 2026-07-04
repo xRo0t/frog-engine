@@ -35,6 +35,7 @@ load frog/scene/node
 load frog/scene/game_object
 load frog/scene/material3d
 load frog/scene/mesh3d
+load frog/scene/sprite3d
 load frog/scene/light3d
 load frog/scene/day_cycle
 load frog/scene/physics
@@ -82,6 +83,7 @@ export Model3D, ModelLods, Texture2D, AudioClip, Shader, Shader3D
 export GpuTexture, TextureSpec, GpuMeshData
 export Environment, Fog, Bloom, ToneMapping, Sky, SkyShape, SkyObject, DayCycle
 export Node, Node3D, Mesh3D, Mesh3DShape, Material3D, ModelMaterials, Camera3D, DirectionalLight3D, PointLight3D, ShadowSettings, RootNode
+export Sprite3D, Sprite3DBillboard, sprite3d_create
 export node3d_create, camera3d_create, directional_light3d_create, point_light3d_create, root_node_create
 export Scene, GameObject, ObjectBench
 export Ray3D, RaycastHit, Raycast3D, Physics

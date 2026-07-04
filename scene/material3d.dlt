@@ -24,6 +24,15 @@ struct Material3D:
     alpha: f32 = 1.0
     unlit: i32 = 0
     double_sided: i32 = 0
+    # Alpha cutout: when 1, fragments with texture alpha below ~0.5 are
+    # discarded in the shader (clean transparent edges, depth-correct, no
+    # blend/ordering needed — ideal for foliage, icons, and sprite cards).
+    alpha_clip: i32 = 0
+    # Transparent: when 1, the mesh is drawn in the transparent pass with alpha
+    # blending (src-over) and depth-write off — for soft-edged/semi-transparent
+    # images (glow, smoke, soft sprites). Costs a second draw pass; ordering is
+    # approximate. Prefer alpha_clip for hard-edged cutouts.
+    transparent: i32 = 0
     uv_scale_x: f32 = 1.0
     uv_scale_y: f32 = 1.0
     uv_offset_x: f32 = 0.0
@@ -161,6 +170,20 @@ attach Material3D:
             self.emissive_strength = 0.0
             return self
         self.emissive_strength = value
+        return self
+
+    fun set_alpha_clip(self, enabled: i32) -> Material3D:
+        if enabled == 0:
+            self.alpha_clip = 0
+        else:
+            self.alpha_clip = 1
+        return self
+
+    fun set_transparent(self, enabled: i32) -> Material3D:
+        if enabled == 0:
+            self.transparent = 0
+        else:
+            self.transparent = 1
         return self
 
     fun set_unlit(self, enabled: i32) -> Material3D:
