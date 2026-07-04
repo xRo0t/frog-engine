@@ -279,6 +279,9 @@ attach EngineRuntime:
     fun set_cpu_record_timing(self, enabled: i32):
         self.renderer.set_cpu_record_timing(enabled)
 
+    fun set_gpu_shadow_cull(self, enabled: i32):
+        self.renderer.set_gpu_shadow_cull(enabled)
+
     fun set_collision_debug(self, enabled: i32):
         self.renderer.set_collision_debug(enabled)
 

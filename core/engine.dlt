@@ -48,6 +48,7 @@ static g_engine_gpu_timing_enabled: i32 = 0
 static g_engine_shadow_min_size: f32 = 0.0
 static g_engine_shadow_cascade0_margin: f32 = 0.0
 static g_engine_cpu_record_timing: i32 = 0
+static g_engine_gpu_shadow_cull: i32 = 0
 static g_engine_collision_debug_enabled: i32 = 0
 static g_engine_frame_pacing_enabled: i32 = 0
 static g_engine_frame_pacing_interval: i32 = 120
@@ -329,6 +330,20 @@ attach Debug:
         if g_engine_runtime.ready() == 1:
             g_engine_runtime.set_cpu_record_timing(g_engine_cpu_record_timing)
 
+    # S6: GPU-driven shadow culling. Culls each cascade on the GPU + indirect
+    # draw, removing the CPU shadow compaction (~1.3ms at 100k). Active only
+    # when GPU culling mode is on; otherwise the CPU shadow path runs. 0 = off.
+    static fun gpu_shadow_cull(enabled: i32):
+        if enabled == 0:
+            g_engine_gpu_shadow_cull = 0
+        else:
+            g_engine_gpu_shadow_cull = 1
+        if g_engine_runtime.ready() == 1:
+            g_engine_runtime.set_gpu_shadow_cull(g_engine_gpu_shadow_cull)
+
+    static fun gpu_shadow_cull_enabled() -> i32:
+        return g_engine_gpu_shadow_cull
+
     static fun collisions(enabled: i32):
         if enabled == 0:
             g_engine_collision_debug_enabled = 0
@@ -492,6 +507,7 @@ attach Engine:
             g_engine_runtime.set_shadow_min_size(g_engine_shadow_min_size)
             g_engine_runtime.set_shadow_cascade0_margin(g_engine_shadow_cascade0_margin)
             g_engine_runtime.set_cpu_record_timing(g_engine_cpu_record_timing)
+            g_engine_runtime.set_gpu_shadow_cull(g_engine_gpu_shadow_cull)
             g_engine_runtime.set_collision_debug(g_engine_collision_debug_enabled)
             g_engine_runtime.set_instance_culling(g_engine_frustum_culling_enabled)
             g_engine_runtime.set_culling_auto_threshold(g_engine_culling_auto_threshold)
