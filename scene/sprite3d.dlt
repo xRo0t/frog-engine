@@ -243,7 +243,7 @@ attach Sprite3D:
             return self
         if self.matrix_buf == 0:
             self.matrix_buf = Memory.malloc_zeroed(64)
-        source_mesh: i32 = Engine.upload_sprite_quad_mesh()
+        source_mesh: i32 = Engine._shared_sprite_quad_mesh()
         if source_mesh < 0:
             return self
         instance_id: i32 = Engine.register_instance(source_mesh)

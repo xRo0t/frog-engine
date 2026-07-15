@@ -196,6 +196,9 @@ attach EngineRuntime:
     fun upload_sprite_quad_mesh(self) -> i32:
         return self.renderer.upload_sprite_quad_mesh()
 
+    fun _shared_sprite_quad_mesh(self) -> i32:
+        return self.renderer._shared_sprite_quad_mesh()
+
     fun upload_colored_plane_mesh(self, color: Color) -> i32:
         return self.renderer.upload_colored_plane_mesh(color)
 

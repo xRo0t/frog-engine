@@ -540,6 +540,9 @@ attach Engine:
     static fun upload_sprite_quad_mesh() -> i32:
         return g_engine_runtime.upload_sprite_quad_mesh()
 
+    static fun _shared_sprite_quad_mesh() -> i32:
+        return g_engine_runtime._shared_sprite_quad_mesh()
+
     static fun upload_colored_plane_mesh(color: Color) -> i32:
         return g_engine_runtime.upload_colored_plane_mesh(color)
 

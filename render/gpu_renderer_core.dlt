@@ -572,6 +572,12 @@ struct GpuRendererCore:
     mesh_shadow_flags: i64 = 0 # mesh_id -> cast + receive * 2
     mesh_shadow_distances: i64 = 0 # mesh_id -> object shadow cutoff, 0 = inherit light distance
     mesh_transparent: i64 = 0  # mesh_id -> 1 if drawn in the transparent (alpha-blended) pass
+    transparent_mesh_count: i32 = 0
+    transparent_visible_count: i32 = 0
+    # Sprite3D instances all share one immutable unit quad. This avoids one
+    # vertex-buffer allocation/upload per sprite and lets bindless rendering
+    # batch sprites with different textures into the same draw group.
+    sprite_quad_source_id: i32 = -1
     white_desc_set: i64 = 0    # descriptor set for the 1x1 white fallback
     white_tex_id:   i32 = -1
     # --- Phase 1: Bindless texture table (R1) ---
@@ -688,6 +694,9 @@ attach GpuRendererCore:
         self.mesh_shadow_flags = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.mesh_transparent = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.mesh_shadow_distances = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.transparent_mesh_count = 0
+        self.transparent_visible_count = 0
+        self.sprite_quad_source_id = 0 - 1
         mti: i32 = 0
         while mti < self.vb_capacity:
             Memory.write_i32(self.mesh_tex_ids + mti * 4, 0 - 1)
@@ -1282,6 +1291,7 @@ attach GpuRendererCore:
                 g_nrm0: i32 = self._grp_tex(self.mesh_normal_tex_ids, mi)
                 g_mr0: i32 = self._grp_tex(self.mesh_metallic_roughness_tex_ids, mi)
                 g_occ0: i32 = self._grp_tex(self.mesh_occlusion_tex_ids, mi)
+                g_transparent0: i32 = self._grp_tex(self.mesh_transparent, mi)
                 gi: i32 = mi
                 group_span: i32 = 0
                 while gi < self.vb_count:
@@ -1298,15 +1308,17 @@ attach GpuRendererCore:
                         gi = self.vb_count
                     elif g_ic != ic:
                         gi = self.vb_count
-                    elif self._grp_tex(self.mesh_tex_ids, gi) != g_tex0:
+                    elif self.bindless_enabled == 0 and self._grp_tex(self.mesh_tex_ids, gi) != g_tex0:
                         gi = self.vb_count
-                    elif self._grp_tex(self.mesh_emissive_tex_ids, gi) != g_emi0:
+                    elif self.bindless_enabled == 0 and self._grp_tex(self.mesh_emissive_tex_ids, gi) != g_emi0:
                         gi = self.vb_count
-                    elif self._grp_tex(self.mesh_normal_tex_ids, gi) != g_nrm0:
+                    elif self.bindless_enabled == 0 and self._grp_tex(self.mesh_normal_tex_ids, gi) != g_nrm0:
                         gi = self.vb_count
-                    elif self._grp_tex(self.mesh_metallic_roughness_tex_ids, gi) != g_mr0:
+                    elif self.bindless_enabled == 0 and self._grp_tex(self.mesh_metallic_roughness_tex_ids, gi) != g_mr0:
                         gi = self.vb_count
-                    elif self._grp_tex(self.mesh_occlusion_tex_ids, gi) != g_occ0:
+                    elif self.bindless_enabled == 0 and self._grp_tex(self.mesh_occlusion_tex_ids, gi) != g_occ0:
+                        gi = self.vb_count
+                    elif self._grp_tex(self.mesh_transparent, gi) != g_transparent0:
                         gi = self.vb_count
                     elif g_model == 0:
                         gi = self.vb_count
@@ -1516,43 +1528,66 @@ attach GpuRendererCore:
         last_vb: i64 = 0
         last_index_bound: i64 = 0
         last_desc: i64 = 0
+        transparent_supported: i32 = 0
+        if self.transparent_visible_count > 0:
+            if rp.transparent_pipeline != 0:
+                transparent_supported = 1
+        draw_pass: i32 = 0
         g: i32 = 0
         while g < self.gpu_grp_n:
             mi: i32 = Memory.read_i32(self.gpu_grp_mi + g * 4)
-            out_base: i32 = Memory.read_i32(self.gpu_grp_outbase + g * 4)
-            indexed: i32 = Memory.read_i32(self.gpu_grp_indexed + g * 4)
-            cmd_index: i32 = Memory.read_i32(self.gpu_grp_cmd + g * 4)
-            vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
-            ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
+            group_transparent: i32 = 0
+            if self.mesh_transparent != 0:
+                if Memory.read_i32(self.mesh_transparent + mi * 4) != 0:
+                    group_transparent = 1
+            draw_group: i32 = 1
+            if transparent_supported == 1:
+                if group_transparent != draw_pass:
+                    draw_group = 0
 
-            if vb_handle != last_vb:
-                Memory.write_ptr(self.scratch_vb_arr, vb_handle)
-                vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
-                last_vb = vb_handle
+            if draw_group == 1:
+                out_base: i32 = Memory.read_i32(self.gpu_grp_outbase + g * 4)
+                indexed: i32 = Memory.read_i32(self.gpu_grp_indexed + g * 4)
+                cmd_index: i32 = Memory.read_i32(self.gpu_grp_cmd + g * 4)
+                vb_handle: i64 = Memory.read_ptr(self.vb_handles + mi * 8)
+                ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
 
-            # Instance buffer = GPU-culled output. Bind at the group's byte
-            # offset (out_base * stride) and keep the indirect command's
-            # firstInstance=0, so we don't need drawIndirectFirstInstance.
-            Memory.write_ptr(self.scratch_inst_vb_arr, out_buf)
-            Memory.write_i64(self.scratch_inst_off_arr, (out_base as i64) * (FROG_CULL_OUT_STRIDE as i64))
-            vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
+                if vb_handle != last_vb:
+                    Memory.write_ptr(self.scratch_vb_arr, vb_handle)
+                    vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
+                    last_vb = vb_handle
 
-            grp_desc: i64 = self.mesh_descriptor_set(rp, mi)
-            if grp_desc != 0:
-                if grp_desc != last_desc:
-                    Memory.write_ptr(self.scratch_desc_arr, grp_desc)
-                    vkCmdBindDescriptorSets(cmd, 0, rp.vk_pipeline_layout, 0, 1, self.scratch_desc_arr, 0, 0)
-                    last_desc = grp_desc
+                # Instance buffer = GPU-culled output. Bind at the group's byte
+                # offset (out_base * stride) and keep the indirect command's
+                # firstInstance=0, so we don't need drawIndirectFirstInstance.
+                Memory.write_ptr(self.scratch_inst_vb_arr, out_buf)
+                Memory.write_i64(self.scratch_inst_off_arr, (out_base as i64) * (FROG_CULL_OUT_STRIDE as i64))
+                vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
 
-            cmd_off: i64 = cull.group_cmd_offset(cmd_index)
-            if indexed == 1:
-                if ib_handle != last_index_bound:
-                    vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
-                    last_index_bound = ib_handle
-                vkCmdDrawIndexedIndirect(cmd, ind_buf, cmd_off, 1, 20)
-            else:
-                vkCmdDrawIndirect(cmd, ind_buf, cmd_off, 1, 16)
+                grp_desc: i64 = self.mesh_descriptor_set(rp, mi)
+                if grp_desc != 0:
+                    if grp_desc != last_desc:
+                        Memory.write_ptr(self.scratch_desc_arr, grp_desc)
+                        vkCmdBindDescriptorSets(cmd, 0, rp.vk_pipeline_layout, 0, 1, self.scratch_desc_arr, 0, 0)
+                        last_desc = grp_desc
+
+                cmd_off: i64 = cull.group_cmd_offset(cmd_index)
+                if indexed == 1:
+                    if ib_handle != last_index_bound:
+                        vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
+                        last_index_bound = ib_handle
+                    vkCmdDrawIndexedIndirect(cmd, ind_buf, cmd_off, 1, 20)
+                else:
+                    vkCmdDrawIndirect(cmd, ind_buf, cmd_off, 1, 16)
             g = g + 1
+            if g >= self.gpu_grp_n:
+                if draw_pass == 0 and transparent_supported == 1:
+                    draw_pass = 1
+                    g = 0
+                    last_vb = 0
+                    last_index_bound = 0
+                    last_desc = 0
+                    vkCmdBindPipeline(cmd, 0, rp.transparent_pipeline)
 
     # R2 bindless + indirect-count draw. Each group binds the culled-output
     # instance buffer at ITS OWN out_base (firstInstance stays 0, exactly like
@@ -1568,6 +1603,10 @@ attach GpuRendererCore:
         # Opaque pass: draw every group EXCEPT transparent ones (those are
         # drawn afterward with alpha blending). transparent_seen tracks whether
         # a transparent second pass is needed.
+        transparent_supported: i32 = 0
+        if self.transparent_visible_count > 0:
+            if rp.bindless_transparent_pipeline != 0:
+                transparent_supported = 1
         last_vb: i64 = 0
         last_index_bound: i64 = 0
         transparent_seen: i32 = 0
@@ -1575,9 +1614,10 @@ attach GpuRendererCore:
         while g < self.gpu_grp_n:
             mi: i32 = Memory.read_i32(self.gpu_grp_mi + g * 4)
             is_transparent: i32 = 0
-            if self.mesh_transparent != 0:
-                if Memory.read_i32(self.mesh_transparent + mi * 4) != 0:
-                    is_transparent = 1
+            if transparent_supported == 1:
+                if self.mesh_transparent != 0:
+                    if Memory.read_i32(self.mesh_transparent + mi * 4) != 0:
+                        is_transparent = 1
             if is_transparent == 1:
                 transparent_seen = 1
                 g = g + 1
@@ -2998,6 +3038,12 @@ attach GpuRendererCore:
             Memory.write_i32(self.mesh_tex_ids + idx * 4, Memory.read_i32(self.mesh_tex_ids + src_vb_idx * 4))
         if self.mesh_emissive_tex_ids != 0:
             Memory.write_i32(self.mesh_emissive_tex_ids + idx * 4, Memory.read_i32(self.mesh_emissive_tex_ids + src_vb_idx * 4))
+        if self.mesh_normal_tex_ids != 0:
+            Memory.write_i32(self.mesh_normal_tex_ids + idx * 4, Memory.read_i32(self.mesh_normal_tex_ids + src_vb_idx * 4))
+        if self.mesh_metallic_roughness_tex_ids != 0:
+            Memory.write_i32(self.mesh_metallic_roughness_tex_ids + idx * 4, Memory.read_i32(self.mesh_metallic_roughness_tex_ids + src_vb_idx * 4))
+        if self.mesh_occlusion_tex_ids != 0:
+            Memory.write_i32(self.mesh_occlusion_tex_ids + idx * 4, Memory.read_i32(self.mesh_occlusion_tex_ids + src_vb_idx * 4))
         if self.mesh_desc_sets != 0:
             Memory.write_ptr(self.mesh_desc_sets + idx * 8, Memory.read_ptr(self.mesh_desc_sets + src_vb_idx * 8))
         if self.mesh_material_params != 0:
@@ -3007,7 +3053,13 @@ attach GpuRendererCore:
         if self.mesh_shadow_distances != 0:
             Memory.write_f32(self.mesh_shadow_distances + idx * 4, Memory.read_f32(self.mesh_shadow_distances + src_vb_idx * 4))
         if self.mesh_transparent != 0:
-            Memory.write_i32(self.mesh_transparent + idx * 4, Memory.read_i32(self.mesh_transparent + src_vb_idx * 4))
+            copied_transparent: i32 = Memory.read_i32(self.mesh_transparent + src_vb_idx * 4)
+            Memory.write_i32(self.mesh_transparent + idx * 4, copied_transparent)
+            if copied_transparent != 0:
+                self.transparent_mesh_count = self.transparent_mesh_count + 1
+                if self.vb_visible != 0:
+                    if Memory.read_i32(self.vb_visible + idx * 4) != 0:
+                        self.transparent_visible_count = self.transparent_visible_count + 1
         self._copy_mesh_bounds(idx, src_vb_idx)
         self.vb_count = idx + 1
         self._mark_cull_dirty_struct()
@@ -3023,6 +3075,16 @@ attach GpuRendererCore:
         v: i32 = 1
         if on == 0:
             v = 0
+        old_visible: i32 = Memory.read_i32(self.vb_visible + mesh_id * 4)
+        if old_visible != v:
+            if self.mesh_transparent != 0:
+                if Memory.read_i32(self.mesh_transparent + mesh_id * 4) != 0:
+                    if v == 1:
+                        self.transparent_visible_count = self.transparent_visible_count + 1
+                    else:
+                        self.transparent_visible_count = self.transparent_visible_count - 1
+                        if self.transparent_visible_count < 0:
+                            self.transparent_visible_count = 0
         Memory.write_i32(self.vb_visible + mesh_id * 4, v)
         self._mark_cull_dirty_struct()
 
@@ -3120,9 +3182,12 @@ attach GpuRendererCore:
             return
         if self.mesh_tex_ids == 0:
             return
+        old_tex_id: i32 = Memory.read_i32(self.mesh_tex_ids + mesh_id * 4)
         Memory.write_i32(self.mesh_tex_ids + mesh_id * 4, tex_id)
         if self.mesh_desc_sets != 0:
             Memory.write_ptr(self.mesh_desc_sets + mesh_id * 8, 0)
+        if old_tex_id != tex_id:
+            self._mark_cull_dirty_struct()
 
     fun bind_material(self, mesh_id: i32, material: Material3D):
         if mesh_id < 0:
@@ -3131,10 +3196,29 @@ attach GpuRendererCore:
             return
         if self.mesh_material_params == 0:
             return
+        grouping_changed: i32 = 0
         if self.mesh_transparent != 0:
             tflag: i32 = 0
             if material.transparent != 0:
                 tflag = 1
+            old_tflag: i32 = Memory.read_i32(self.mesh_transparent + mesh_id * 4)
+            if old_tflag != tflag:
+                grouping_changed = 1
+                visible_now: i32 = 1
+                if self.vb_visible != 0:
+                    visible_now = Memory.read_i32(self.vb_visible + mesh_id * 4)
+                if tflag == 1:
+                    self.transparent_mesh_count = self.transparent_mesh_count + 1
+                    if visible_now != 0:
+                        self.transparent_visible_count = self.transparent_visible_count + 1
+                else:
+                    self.transparent_mesh_count = self.transparent_mesh_count - 1
+                    if self.transparent_mesh_count < 0:
+                        self.transparent_mesh_count = 0
+                    if visible_now != 0:
+                        self.transparent_visible_count = self.transparent_visible_count - 1
+                        if self.transparent_visible_count < 0:
+                            self.transparent_visible_count = 0
             Memory.write_i32(self.mesh_transparent + mesh_id * 4, tflag)
         off: i64 = (mesh_id as i64) * 32
         Memory.write_f32(self.mesh_material_params + off, material.metallic)
@@ -3149,24 +3233,34 @@ attach GpuRendererCore:
             emissive_tex_id: i32 = 0 - 1
             if material.has_emissive_map == 1:
                 emissive_tex_id = material.emissive_map.texture_id
+            if Memory.read_i32(self.mesh_emissive_tex_ids + mesh_id * 4) != emissive_tex_id:
+                grouping_changed = 1
             Memory.write_i32(self.mesh_emissive_tex_ids + mesh_id * 4, emissive_tex_id)
         if self.mesh_normal_tex_ids != 0:
             normal_tex_id: i32 = 0 - 1
             if material.has_normal_map == 1:
                 normal_tex_id = material.normal_map.texture_id
+            if Memory.read_i32(self.mesh_normal_tex_ids + mesh_id * 4) != normal_tex_id:
+                grouping_changed = 1
             Memory.write_i32(self.mesh_normal_tex_ids + mesh_id * 4, normal_tex_id)
         if self.mesh_metallic_roughness_tex_ids != 0:
             metallic_roughness_tex_id: i32 = 0 - 1
             if material.has_metallic_roughness_map == 1:
                 metallic_roughness_tex_id = material.metallic_roughness_map.texture_id
+            if Memory.read_i32(self.mesh_metallic_roughness_tex_ids + mesh_id * 4) != metallic_roughness_tex_id:
+                grouping_changed = 1
             Memory.write_i32(self.mesh_metallic_roughness_tex_ids + mesh_id * 4, metallic_roughness_tex_id)
         if self.mesh_occlusion_tex_ids != 0:
             occlusion_tex_id: i32 = 0 - 1
             if material.has_occlusion_map == 1:
                 occlusion_tex_id = material.occlusion_map.texture_id
+            if Memory.read_i32(self.mesh_occlusion_tex_ids + mesh_id * 4) != occlusion_tex_id:
+                grouping_changed = 1
             Memory.write_i32(self.mesh_occlusion_tex_ids + mesh_id * 4, occlusion_tex_id)
         if self.mesh_desc_sets != 0:
             Memory.write_ptr(self.mesh_desc_sets + mesh_id * 8, 0)
+        if grouping_changed == 1:
+            self._mark_cull_dirty_struct()
 
     fun set_shadow_flags(self, mesh_id: i32, cast_shadows: i32, receive_shadows: i32):
         if mesh_id < 0:
@@ -4750,6 +4844,18 @@ attach GpuRendererCore:
                         cull_body: @heap fun(i32) = fun(gi: i32) _frog_cull_one(cull_self_addr, cull_vp, gi, cull_res)
                         engine_parallel_for(self.vb_count, cull_body)
 
+                # CPU draw path uses two registry scans: opaque first, then
+                # transparent with blending + depth writes disabled. If the
+                # transparent variant could not be created, retain the old
+                # single-pass behavior instead of silently dropping meshes.
+                transparent_pipeline: i64 = rp.transparent_pipeline
+                if use_bindless == 1:
+                    transparent_pipeline = rp.bindless_transparent_pipeline
+                transparent_supported: i32 = 0
+                if self.transparent_visible_count > 0:
+                    if transparent_pipeline != 0:
+                        transparent_supported = 1
+                draw_pass: i32 = 0
                 mi: i32 = 0
                 if self.gpu_draw_enabled == 1:
                     # GPU-driven path: the pre-cull pass already compacted
@@ -4765,6 +4871,10 @@ attach GpuRendererCore:
                     model_ptr: i64 = 0
                     if self.model_matrices != 0:
                         model_ptr = Memory.read_ptr(self.model_matrices + mi * 8)
+                    mesh_is_transparent: i32 = 0
+                    if self.mesh_transparent != 0:
+                        if Memory.read_i32(self.mesh_transparent + mi * 4) != 0:
+                            mesh_is_transparent = 1
 
                     if mapped_instances == 0:
                         mi = mi + 1
@@ -4773,6 +4883,8 @@ attach GpuRendererCore:
                     elif vc <= 0:
                         mi = mi + 1
                     elif model_ptr == 0:
+                        mi = mi + 1
+                    elif transparent_supported == 1 and mesh_is_transparent != draw_pass:
                         mi = mi + 1
                     else:
                         group_start: i32 = instance_write
@@ -4792,6 +4904,7 @@ attach GpuRendererCore:
                         group_occlusion_tex_id: i32 = 0 - 1
                         if self.mesh_occlusion_tex_ids != 0:
                             group_occlusion_tex_id = Memory.read_i32(self.mesh_occlusion_tex_ids + mi * 4)
+                        group_transparent: i32 = mesh_is_transparent
                         gi: i32 = mi
                         while gi < self.vb_count:
                             g_vb: i64 = Memory.read_ptr(self.vb_handles + gi * 8)
@@ -4813,6 +4926,10 @@ attach GpuRendererCore:
                             g_occlusion_tex: i32 = 0 - 1
                             if self.mesh_occlusion_tex_ids != 0:
                                 g_occlusion_tex = Memory.read_i32(self.mesh_occlusion_tex_ids + gi * 4)
+                            g_transparent: i32 = 0
+                            if self.mesh_transparent != 0:
+                                if Memory.read_i32(self.mesh_transparent + gi * 4) != 0:
+                                    g_transparent = 1
                             g_model: i64 = 0
                             if self.model_matrices != 0:
                                 g_model = Memory.read_ptr(self.model_matrices + gi * 8)
@@ -4824,15 +4941,17 @@ attach GpuRendererCore:
                                 break
                             elif g_ic != ic:
                                 break
-                            elif g_tex != group_tex_id:
+                            elif use_bindless == 0 and g_tex != group_tex_id:
                                 break
-                            elif g_emissive_tex != group_emissive_tex_id:
+                            elif use_bindless == 0 and g_emissive_tex != group_emissive_tex_id:
                                 break
-                            elif g_normal_tex != group_normal_tex_id:
+                            elif use_bindless == 0 and g_normal_tex != group_normal_tex_id:
                                 break
-                            elif g_metallic_roughness_tex != group_metallic_roughness_tex_id:
+                            elif use_bindless == 0 and g_metallic_roughness_tex != group_metallic_roughness_tex_id:
                                 break
-                            elif g_occlusion_tex != group_occlusion_tex_id:
+                            elif use_bindless == 0 and g_occlusion_tex != group_occlusion_tex_id:
+                                break
+                            elif g_transparent != group_transparent:
                                 break
                             elif g_model == 0:
                                 break
@@ -4906,6 +5025,15 @@ attach GpuRendererCore:
                             frame_visible_instances = frame_visible_instances + group_count
 
                         mi = gi
+
+                    if mi >= self.vb_count:
+                        if draw_pass == 0 and transparent_supported == 1:
+                            draw_pass = 1
+                            mi = 0
+                            last_bound = 0
+                            last_index_bound = 0
+                            last_desc = 0
+                            vkCmdBindPipeline(cmd, 0, transparent_pipeline)
 
                 if self.debug_render_stats_enabled == 1:
                     self.debug_draw_calls = self.debug_draw_calls + frame_draw_calls

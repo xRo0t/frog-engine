@@ -323,6 +323,9 @@ attach Renderer:
     fun upload_sprite_quad_mesh(self) -> i32:
         return self.core.upload_sprite_quad_mesh()
 
+    fun _shared_sprite_quad_mesh(self) -> i32:
+        return self.core._shared_sprite_quad_mesh()
+
     fun upload_colored_plane_mesh(self, color: Color) -> i32:
         return self.core.upload_colored_plane_mesh(color)
 
@@ -543,6 +546,14 @@ attach GpuRendererCore:
             return -1
         mesh_id: i32 = self.upload_mesh(verts, 6)
         Memory.free(verts)
+        return mesh_id
+
+    fun _shared_sprite_quad_mesh(self) -> i32:
+        if self.sprite_quad_source_id >= 0:
+            return self.sprite_quad_source_id
+        mesh_id: i32 = self.upload_sprite_quad_mesh()
+        if mesh_id >= 0:
+            self.sprite_quad_source_id = mesh_id
         return mesh_id
 
     fun upload_colored_plane_mesh(self, color: Color) -> i32:
