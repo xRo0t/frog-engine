@@ -107,6 +107,10 @@ attach AssetModels:
                         cooked_model: Model3D = FrogModelLoader.load(cooked_path, cooked_resolved)
                         if cooked_model.parsed == 1:
                             return cooked_model
+                        # Never silently draw an incompatible cooked model via
+                        # the raw glTF fallback. Old cooked geometry may have
+                        # omitted node transforms and must be rebuilt.
+                        return cooked_model
             cache_path: str = AssetModels.runtime_cache_path(path)
             if Str.equals(cache_path, "") == false:
                 cache_resolved: str = Assets.resolve(cache_path)

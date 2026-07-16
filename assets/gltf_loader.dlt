@@ -6,6 +6,113 @@
 struct GltfLoader:
     _placeholder: i32 = 0
 
+attach GltfLoader:
+
+    static fun node_reaches(nodes: JsonValue, current: i32, target: i32, depth: i32) -> i32:
+        if current == target:
+            return 1
+        if current < 0:
+            return 0
+        if current >= nodes.size():
+            return 0
+        if depth > nodes.size():
+            return 0
+        node: JsonValue = nodes.at(current)
+        children: JsonValue = node.get("children")
+        i: i32 = 0
+        while i < children.size():
+            child_index: i32 = children.at(i).as_i32()
+            if GltfLoader.node_reaches(nodes, child_index, target, depth + 1) == 1:
+                return 1
+            i = i + 1
+        return 0
+
+    # The lightweight raw glTF path uploads meshes directly and intentionally
+    # has no runtime scene graph. Only accept files for which that flattening is
+    # exact. General hierarchy, transforms, instancing, skins, and morphs must
+    # use the offline .frogmodel cooker, which bakes static node transforms.
+    static fun raw_scene_is_flat_safe(root: JsonValue) -> i32:
+        nodes: JsonValue = root.get("nodes")
+        meshes: JsonValue = root.get("meshes")
+        scenes: JsonValue = root.get("scenes")
+        node_count: i32 = nodes.size()
+        mesh_count: i32 = meshes.size()
+        if mesh_count <= 0:
+            return 1
+        if node_count <= 0:
+            return 0
+        if scenes.size() <= 0:
+            return 0
+        scene_index: i32 = 0
+        scene_value: JsonValue = root.get("scene")
+        if scene_value.exists() == 1:
+            scene_index = scene_value.as_i32()
+        if scene_index < 0:
+            return 0
+        if scene_index >= scenes.size():
+            return 0
+        scene: JsonValue = scenes.at(scene_index)
+        roots: JsonValue = scene.get("nodes")
+        if roots.size() <= 0:
+            return 0
+
+        ni: i32 = 0
+        while ni < node_count:
+            node: JsonValue = nodes.at(ni)
+            if node.get("matrix").exists() == 1:
+                return 0
+            if node.get("translation").exists() == 1:
+                return 0
+            if node.get("rotation").exists() == 1:
+                return 0
+            if node.get("scale").exists() == 1:
+                return 0
+            if node.get("skin").exists() == 1:
+                return 0
+            if node.get("weights").exists() == 1:
+                return 0
+            mesh_value: JsonValue = node.get("mesh")
+            if mesh_value.exists() == 1:
+                mesh_index: i32 = mesh_value.as_i32()
+                if mesh_index < 0:
+                    return 0
+                if mesh_index >= mesh_count:
+                    return 0
+                reachable: i32 = 0
+                ri: i32 = 0
+                while ri < roots.size():
+                    root_index: i32 = roots.at(ri).as_i32()
+                    if GltfLoader.node_reaches(nodes, root_index, ni, 0) == 1:
+                        reachable = 1
+                    ri = ri + 1
+                if reachable == 0:
+                    return 0
+            ni = ni + 1
+
+        mi: i32 = 0
+        while mi < mesh_count:
+            references: i32 = 0
+            ni = 0
+            while ni < node_count:
+                mesh_value2: JsonValue = nodes.at(ni).get("mesh")
+                if mesh_value2.exists() == 1:
+                    if mesh_value2.as_i32() == mi:
+                        references = references + 1
+                ni = ni + 1
+            if references != 1:
+                return 0
+            mesh: JsonValue = meshes.at(mi)
+            primitives: JsonValue = mesh.get("primitives")
+            pi: i32 = 0
+            while pi < primitives.size():
+                targets: JsonValue = primitives.at(pi).get("targets")
+                if targets.exists() == 1:
+                    if targets.size() > 0:
+                        return 0
+                pi = pi + 1
+            mi = mi + 1
+        return 1
+
 attach Model3D:
 
     fun primitive_count(self) -> i32:
@@ -125,6 +232,9 @@ attach GltfLoader:
         version: str = asset.get_str("version")
         if Str.equals(version, "2.0") == false:
             return Model3D(path=path, resolved_path=resolved_path, format=format, mesh_id=-1, found=1, parsed=0, ready=0, error="unsupported glTF version")
+
+        if GltfLoader.raw_scene_is_flat_safe(root) == 0:
+            return Model3D(path=path, resolved_path=resolved_path, format=format, mesh_id=-1, found=1, parsed=0, ready=0, error="glTF scene hierarchy requires a v2 .frogmodel; cook it with Frog Cooker")
 
         meshes: JsonValue = root.get("meshes")
         nodes: JsonValue = root.get("nodes")

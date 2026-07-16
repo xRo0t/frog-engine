@@ -1,9 +1,0 @@
-{
-  "private": true,
-  "scripts": {
-    "import-model": "node tools/import_model.mjs"
-  },
-  "devDependencies": {
-    "meshoptimizer": "1.1.1"
-  }
-}

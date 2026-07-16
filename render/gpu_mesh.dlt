@@ -143,19 +143,19 @@ fun gltf_write_position_vertex(out: i64, out_off: i64, bin: i64, pos_addr: i64, 
     raw_x: f32 = Memory.read_f32(bin + pos_addr)
     raw_y: f32 = Memory.read_f32(bin + pos_addr + 4)
     raw_z: f32 = Memory.read_f32(bin + pos_addr + 8)
-    # Uniform axis remap (this content is authored Z-up): keep real
-    # proportions — no per-axis squash/stretch. raw_z -> up, raw_y -> depth.
+    # glTF 2.0 is right-handed and Y-up, matching Frog model space.
+    # Asset-specific conversion belongs in the node hierarchy and v2 cooker.
     px: f32 = raw_x
-    py: f32 = raw_z
-    pz: f32 = 0.0 - raw_y
+    py: f32 = raw_y
+    pz: f32 = raw_z
     next_off: i64 = gpu_wv(out, out_off, px, py, pz, cr, cg, cb, u, v)
     if normal_present == 1:
         raw_nx: f32 = Memory.read_f32(bin + normal_addr)
         raw_ny: f32 = Memory.read_f32(bin + normal_addr + 4)
         raw_nz: f32 = Memory.read_f32(bin + normal_addr + 8)
         nx: f32 = raw_nx
-        ny: f32 = raw_nz
-        nz: f32 = 0.0 - raw_ny
+        ny: f32 = raw_ny
+        nz: f32 = raw_nz
         n_len: f32 = @sqrt(nx * nx + ny * ny + nz * nz)
         if n_len > 0.00001:
             nx = nx / n_len

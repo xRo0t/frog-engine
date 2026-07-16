@@ -59,6 +59,32 @@ runtime/backend types remain internal package plumbing.
 - `vulkan` package - Vulkan C API bindings
 - `window` package - Win32 window + vulkan surface
 
+## Obin workflow
+
+Frog is an engine package rather than a second project manager. Dolet
+applications use Obin as their single project interface; its optional Frog
+adapter discovers referenced static glTF assets, builds the pure-Dolet cooker,
+incrementally cooks stale models, and then invokes `doletc`:
+
+```powershell
+obin build
+obin run
+obin package --profile release
+```
+
+Enable the adapter in the application manifest:
+
+```toml
+[tool.frog]
+enabled = true
+cook-models = true
+lods = [0.45, 0.22]
+```
+
+`obin build --force` rebuilds and recooks when a clean verification is needed.
+Frog Cooker remains part of the engine package as an internal Dolet tool; there
+is intentionally no separate `frog.exe` workflow.
+
 ## Philosophy
 
 Frog exists to make the ECS vs OOP performance / ergonomics trade-off
