@@ -3,6 +3,23 @@
 # CPU-side vertex generation for the independent Vulkan backend.
 ##############################
 
+# Runtime model uploads overwrite the whole destination. Copy 32-byte blocks
+# instead of routing large cooked buffers through the byte-wise generic copy.
+fun gpu_copy_bytes_fast(destination: i64, source: i64, size: i64):
+    offset: i64 = 0
+    while offset + 32 <= size:
+        Memory.write_i64(destination + offset, Memory.read_i64(source + offset))
+        Memory.write_i64(destination + offset + 8, Memory.read_i64(source + offset + 8))
+        Memory.write_i64(destination + offset + 16, Memory.read_i64(source + offset + 16))
+        Memory.write_i64(destination + offset + 24, Memory.read_i64(source + offset + 24))
+        offset = offset + 32
+    while offset + 8 <= size:
+        Memory.write_i64(destination + offset, Memory.read_i64(source + offset))
+        offset = offset + 8
+    while offset < size:
+        Memory.write_i8(destination + offset, Memory.read_i8(source + offset))
+        offset = offset + 1
+
 fun gpu_wv(buf: i64, off: i64, px: f32, py: f32, pz: f32, cr: f32, cg: f32, cb: f32, u: f32, v: f32) -> i64:
     Memory.write_f32(buf + off, px)
     Memory.write_f32(buf + off + 4, py)
@@ -257,15 +274,15 @@ fun gpu_make_frogmodel_primitive_vertices(model: Model3D, mesh_index: i32, primi
         return GpuMeshData()
     if index_offset + index_bytes > model.frog_size:
         return GpuMeshData()
-    vertices: i64 = Memory.malloc_zeroed(vertex_bytes)
+    vertices: i64 = Memory.malloc(vertex_bytes) as i64
     if vertices == 0:
         return GpuMeshData()
-    indices: i64 = Memory.malloc_zeroed(index_bytes)
+    indices: i64 = Memory.malloc(index_bytes) as i64
     if indices == 0:
         Memory.free(vertices)
         return GpuMeshData()
-    Memory.copy(vertices, model.frog_data + vertex_offset, vertex_bytes)
-    Memory.copy(indices, model.frog_data + index_offset, index_bytes)
+    gpu_copy_bytes_fast(vertices, model.frog_data + vertex_offset, vertex_bytes)
+    gpu_copy_bytes_fast(indices, model.frog_data + index_offset, index_bytes)
     return GpuMeshData(vertices=vertices, vertex_count=vertex_count, indices=indices, index_count=index_count)
 
 fun gpu_make_frogmodel_model_vertices(model: Model3D) -> GpuMeshData:
@@ -285,10 +302,10 @@ fun gpu_make_frogmodel_model_vertices(model: Model3D) -> GpuMeshData:
         return GpuMeshData()
     if total_indices <= 0:
         return GpuMeshData()
-    vertices: i64 = Memory.malloc_zeroed((total_vertices as i64) * (FROG_GPU_VERTEX_STRIDE as i64))
+    vertices: i64 = Memory.malloc((total_vertices as i64) * (FROG_GPU_VERTEX_STRIDE as i64)) as i64
     if vertices == 0:
         return GpuMeshData()
-    indices: i64 = Memory.malloc_zeroed((total_indices as i64) * 4)
+    indices: i64 = Memory.malloc((total_indices as i64) * 4) as i64
     if indices == 0:
         Memory.free(vertices)
         return GpuMeshData()
@@ -303,7 +320,7 @@ fun gpu_make_frogmodel_model_vertices(model: Model3D) -> GpuMeshData:
         data_vertex_offset: i64 = Memory.read_i32(model.frog_data + entry + 16) as i64
         data_index_offset: i64 = Memory.read_i32(model.frog_data + entry + 20) as i64
         vertex_bytes: i64 = (vertex_count as i64) * (FROG_GPU_VERTEX_STRIDE as i64)
-        Memory.copy(vertices + vertex_offset, model.frog_data + data_vertex_offset, vertex_bytes)
+        gpu_copy_bytes_fast(vertices + vertex_offset, model.frog_data + data_vertex_offset, vertex_bytes)
         index_i: i32 = 0
         while index_i < index_count:
             source_index: i32 = Memory.read_i32(model.frog_data + data_index_offset + ((index_i as i64) * 4))

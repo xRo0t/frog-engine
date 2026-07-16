@@ -1,0 +1,72 @@
+##############################
+# Frog - Cooked Texture Loader
+# Runtime-ready RGBA8 pixels produced by Frog Cooker.
+##############################
+
+imm FROG_TEXTURE_MAGIC: i32 = 0x58455446
+imm FROG_TEXTURE_VERSION: i32 = 1
+imm FROG_TEXTURE_HEADER_SIZE: i64 = 32
+imm FROG_TEXTURE_FORMAT_RGBA8: i32 = 1
+
+struct CookedTexture:
+    width: i32 = 0
+    height: i32 = 0
+    pixels: i64 = 0
+    size: i64 = 0
+    buffer: i64 = 0
+    valid: i32 = 0
+
+    fun free(self):
+        if self.buffer != 0:
+            Memory.free(self.buffer)
+        self.width = 0
+        self.height = 0
+        self.pixels = 0
+        self.size = 0
+        self.buffer = 0
+        self.valid = 0
+
+struct FrogTextureLoader:
+    _placeholder: i32 = 0
+
+attach FrogTextureLoader:
+
+    static fun load(resolved_path: str) -> CookedTexture:
+        if PathOps.exists(resolved_path) == false:
+            return CookedTexture()
+        file: File = File.open_cwd(resolved_path, "r")
+        if file.is_valid() == false:
+            return CookedTexture()
+        size: i64 = file.get_size()
+        if size < FROG_TEXTURE_HEADER_SIZE or size > 2147483647:
+            file.close()
+            return CookedTexture()
+        data: i64 = Memory.malloc(size) as i64
+        if data == 0:
+            file.close()
+            return CookedTexture()
+        read: i32 = file.read_bytes(data, size as i32)
+        file.close()
+        if (read as i64) != size:
+            Memory.free(data)
+            return CookedTexture()
+        if Memory.read_i32(data) != FROG_TEXTURE_MAGIC or Memory.read_i32(data + 4) != FROG_TEXTURE_VERSION:
+            Memory.free(data)
+            return CookedTexture()
+        width: i32 = Memory.read_i32(data + 8)
+        height: i32 = Memory.read_i32(data + 12)
+        channels: i32 = Memory.read_i32(data + 16)
+        format: i32 = Memory.read_i32(data + 20)
+        data_offset: i64 = Memory.read_i32(data + 24) as i64
+        data_size: i64 = Memory.read_i32(data + 28) as i64
+        expected: i64 = (width as i64) * (height as i64) * 4
+        if width <= 0 or height <= 0 or channels != 4 or format != FROG_TEXTURE_FORMAT_RGBA8:
+            Memory.free(data)
+            return CookedTexture()
+        if data_offset < FROG_TEXTURE_HEADER_SIZE or data_size != expected:
+            Memory.free(data)
+            return CookedTexture()
+        if data_offset + data_size > size:
+            Memory.free(data)
+            return CookedTexture()
+        return CookedTexture(width=width, height=height, pixels=data + data_offset, size=data_size, buffer=data, valid=1)

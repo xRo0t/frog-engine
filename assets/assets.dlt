@@ -46,12 +46,17 @@ attach AssetModels:
     static fun runtime_cooked_path(path: str) -> str:
         if Str.ends_with(path, ".frogmodel"):
             return path
-        if Str.ends_with(path, ".gltf") == false:
-            return ""
         path_len: i64 = Memory.strlen(path)
-        if path_len <= 5:
+        extension_length: i64 = 0
+        if Str.ends_with(path, ".gltf"):
+            extension_length = 5
+        elif Str.ends_with(path, ".glb"):
+            extension_length = 4
+        if extension_length == 0:
             return ""
-        base: str = Str.substring(path, 0, path_len - 5)
+        if path_len <= extension_length:
+            return ""
+        base: str = Str.substring(path, 0, path_len - extension_length)
         return base + ".frogmodel"
 
     static fun runtime_cache_path(path: str) -> str:
@@ -98,7 +103,7 @@ attach AssetModels:
                 return Model3D(path=path, resolved_path=resolved, format="unknown", mesh_id=-1, found=found_other, parsed=0, ready=0, error="unsupported model format")
         load_path: str = path
         load_resolved: str = resolved
-        if Str.equals(format, "gltf"):
+        if Str.equals(format, "gltf") or Str.equals(format, "glb"):
             cooked_path: str = AssetModels.runtime_cooked_path(path)
             if Str.equals(cooked_path, "") == false:
                 cooked_resolved: str = Assets.resolve(cooked_path)
@@ -111,16 +116,29 @@ attach AssetModels:
                         # the raw glTF fallback. Old cooked geometry may have
                         # omitted node transforms and must be rebuilt.
                         return cooked_model
-            cache_path: str = AssetModels.runtime_cache_path(path)
-            if Str.equals(cache_path, "") == false:
-                cache_resolved: str = Assets.resolve(cache_path)
-                if Str.equals(cache_resolved, "") == false:
-                    if PathOps.exists(cache_resolved):
-                        load_path = cache_path
-                        load_resolved = cache_resolved
+            if Str.equals(format, "gltf"):
+                cache_path: str = AssetModels.runtime_cache_path(path)
+                if Str.equals(cache_path, "") == false:
+                    cache_resolved: str = Assets.resolve(cache_path)
+                    if Str.equals(cache_resolved, "") == false:
+                        if PathOps.exists(cache_resolved):
+                            load_path = cache_path
+                            load_resolved = cache_resolved
         return GltfLoader.load(load_path, load_resolved, format)
 
 attach AssetTextures:
+
+    static fun runtime_cooked_path(path: str) -> str:
+        if Str.ends_with(path, ".frogtex"):
+            return path
+        path_len: i64 = Memory.strlen(path)
+        extension_length: i64 = 0
+        if Str.ends_with(path, ".png"):
+            extension_length = 4
+        if extension_length == 0 or path_len <= extension_length:
+            return ""
+        base: str = Str.substring(path, 0, path_len - extension_length)
+        return base + ".frogtex"
 
     # Read a PNG, upload it to the GPU with the default (smooth) spec, and
     # return a ready-to-use Texture2D whose texture_id is bound-able.
@@ -136,6 +154,13 @@ attach AssetTextures:
         found: i32 = 0
         if PathOps.exists(resolved):
             found = 1
+        if found == 0:
+            cooked_path: str = AssetTextures.runtime_cooked_path(path)
+            if Str.equals(cooked_path, "") == false:
+                cooked_resolved: str = Assets.resolve(cooked_path)
+                if Str.equals(cooked_resolved, "") == false:
+                    if PathOps.exists(cooked_resolved):
+                        found = 1
         if found == 0:
             return Texture2D(path=path, resolved_path=resolved, texture_id=-1, found=0, ready=0, error="texture file not found")
         tid: i32 = Engine.upload_texture_spec(path, spec)

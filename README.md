@@ -63,8 +63,8 @@ runtime/backend types remain internal package plumbing.
 
 Frog is an engine package rather than a second project manager. Dolet
 applications use Obin as their single project interface; its optional Frog
-adapter discovers referenced static glTF assets, builds the pure-Dolet cooker,
-incrementally cooks stale models, and then invokes `doletc`:
+adapter discovers referenced static glTF/GLB models and PNG textures, builds the
+pure-Dolet cooker, incrementally cooks stale assets, and then invokes `doletc`:
 
 ```powershell
 obin build
@@ -78,8 +78,22 @@ Enable the adapter in the application manifest:
 [tool.frog]
 enabled = true
 cook-models = true
+cook-textures = true
+texture-roots = ["assets/textures"]
+texture-excludes = ["@channels="]
+# keep-source-textures = true # optional PNG fallback in packaged builds
 lods = [0.45, 0.22]
 ```
+
+Static PNG path literals are discovered automatically. `texture-roots` covers
+textures selected dynamically at runtime, while `texture-excludes` avoids
+cooking source files that the application does not use. Each PNG is cooked to
+an adjacent GPU-ready `.frogtex`; Frog prefers it automatically and falls back
+to decoding the PNG during development when the sidecar is absent. For 3D
+materials, use `TextureSpec.model_color()` for albedo/emission and
+`TextureSpec.model_data()` for normal, metallic-roughness, and occlusion maps.
+Packaged builds omit a PNG only when its cooked sidecar validates; set
+`keep-source-textures = true` when a release must retain both representations.
 
 `obin build --force` rebuilds and recooks when a clean verification is needed.
 Frog Cooker remains part of the engine package as an internal Dolet tool; there

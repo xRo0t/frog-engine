@@ -3974,6 +3974,7 @@ attach GpuRendererCore:
             return
         if rp.in_flight_fences == 0:
             return
+        gpu_tex_flush_pending(device, rp.vk_command_pool, gfx_queue)
         self._ensure_shadow_target(rp)
 
         # Resolve CPU vs GPU-driven culling for this frame (mode-driven).

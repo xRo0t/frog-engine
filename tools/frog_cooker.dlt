@@ -4,12 +4,19 @@
 ##############################
 
 import json
+import image
 
 imm COOK_FROG_MAGIC: i32 = 0x4D475246
 imm COOK_FROG_VERSION: i32 = 2
+imm COOK_TEXTURE_MAGIC: i32 = 0x58455446
+imm COOK_TEXTURE_VERSION: i32 = 1
+imm COOK_TEXTURE_HEADER_SIZE: i64 = 32
+imm COOK_TEXTURE_FORMAT_RGBA8: i32 = 1
+imm COOK_PROTOCOL_VERSION: i32 = 2
 imm COOK_VERTEX_STRIDE: i64 = 44
 imm COOK_TEMP_VERTEX_STRIDE: i64 = 32
 imm COOK_TRIANGLE_STRIDE: i64 = 96
+imm COOK_JSON_CACHE_STRIDE: i64 = 16
 
 # Raw CookGroup layout.
 imm CG_MATERIAL: i64 = 0
@@ -37,6 +44,24 @@ imm CA_SIZE: i64 = 40
 
 g_cook_doc: JsonDocument = JsonDocument()
 g_cook_root: JsonValue = JsonValue()
+g_cook_json_buffers: JsonValue = JsonValue()
+g_cook_json_buffer_views: JsonValue = JsonValue()
+g_cook_json_accessors: JsonValue = JsonValue()
+g_cook_json_materials: JsonValue = JsonValue()
+g_cook_json_meshes: JsonValue = JsonValue()
+g_cook_json_nodes: JsonValue = JsonValue()
+g_cook_json_scenes: JsonValue = JsonValue()
+g_cook_json_animations: JsonValue = JsonValue()
+g_cook_accessor_cache: i64 = 0
+g_cook_accessor_count: i32 = 0
+g_cook_buffer_view_cache: i64 = 0
+g_cook_buffer_view_count: i32 = 0
+g_cook_material_cache: i64 = 0
+g_cook_material_count: i32 = 0
+g_cook_mesh_cache: i64 = 0
+g_cook_mesh_count: i32 = 0
+g_cook_node_cache: i64 = 0
+g_cook_node_count: i32 = 0
 g_cook_source: str = ""
 g_cook_source_dir: str = ""
 g_cook_buffers: list<i64> = []
@@ -45,6 +70,10 @@ g_cook_groups: list<i64> = []
 g_cook_total_triangles: i64 = 0
 g_cook_lod_ratios: list<f32> = []
 g_cook_levels: list<i64> = []
+g_cook_glb_file_data: i64 = 0
+g_cook_glb_bin_data: i64 = 0
+g_cook_glb_bin_size: i64 = 0
+g_cook_nodes_processed: i32 = 0
 
 fun cook_fail(message: str):
     print(@"frog cooker: {message}")
@@ -62,6 +91,119 @@ fun cook_abs_i64(value: i64) -> i64:
 
 fun cook_align4(value: i64) -> i64:
     return (value + 3) & (0 - 4)
+
+fun cook_json_skip_ws(source: str, position: i64, limit: i64) -> i64:
+    p: i64 = position
+    while p < limit:
+        ch: i32 = Memory.read_i8((source as i64) + p) as i32
+        if ch == 32 or ch == 9 or ch == 10 or ch == 13:
+            p = p + 1
+        else:
+            return p
+    return p
+
+# Returns the first byte after one already-validated JSON value.
+fun cook_json_value_end(source: str, position: i64, limit: i64) -> i64:
+    start: i64 = cook_json_skip_ws(source, position, limit)
+    if start >= limit:
+        return start
+    first: i32 = Memory.read_i8((source as i64) + start) as i32
+    if first == 123 or first == 91:
+        depth: i32 = 0
+        in_string: i32 = 0
+        escaped: i32 = 0
+        p: i64 = start
+        while p < limit:
+            ch: i32 = Memory.read_i8((source as i64) + p) as i32
+            if in_string == 1:
+                if escaped == 1:
+                    escaped = 0
+                elif ch == 92:
+                    escaped = 1
+                elif ch == 34:
+                    in_string = 0
+            else:
+                if ch == 34:
+                    in_string = 1
+                elif ch == 123 or ch == 91:
+                    depth = depth + 1
+                elif ch == 125 or ch == 93:
+                    depth = depth - 1
+                    if depth == 0:
+                        return p + 1
+            p = p + 1
+        return limit
+    if first == 34:
+        p: i64 = start + 1
+        escaped: i32 = 0
+        while p < limit:
+            ch: i32 = Memory.read_i8((source as i64) + p) as i32
+            if escaped == 1:
+                escaped = 0
+            elif ch == 92:
+                escaped = 1
+            elif ch == 34:
+                return p + 1
+            p = p + 1
+        return limit
+    p: i64 = start
+    while p < limit:
+        ch: i32 = Memory.read_i8((source as i64) + p) as i32
+        if ch == 44 or ch == 93 or ch == 125 or ch == 32 or ch == 9 or ch == 10 or ch == 13:
+            return p
+        p = p + 1
+    return p
+
+# Builds a compact [start,end] table with one sequential pass over an array.
+fun cook_json_cache_array(value: JsonValue, count: i32) -> i64:
+    if count <= 0:
+        return 0
+    cache: i64 = Memory.malloc_zeroed((count as i64) * COOK_JSON_CACHE_STRIDE)
+    if cache == 0:
+        cook_fail("out of memory indexing glTF JSON")
+    p: i64 = cook_json_skip_ws(value.source, value.content_start, value.content_end)
+    i: i32 = 0
+    while i < count and p < value.content_end:
+        start: i64 = p
+        finish: i64 = cook_json_value_end(value.source, start, value.content_end)
+        entry: i64 = cache + ((i as i64) * COOK_JSON_CACHE_STRIDE)
+        Memory.write_i64(entry, start)
+        Memory.write_i64(entry + 8, finish)
+        p = cook_json_skip_ws(value.source, finish, value.content_end)
+        if p < value.content_end and (Memory.read_i8((value.source as i64) + p) as i32) == 44:
+            p = cook_json_skip_ws(value.source, p + 1, value.content_end)
+        i = i + 1
+    if i != count:
+        cook_fail("could not index glTF JSON array")
+    return cache
+
+fun cook_json_cached_at(value: JsonValue, cache: i64, count: i32, index: i32) -> JsonValue:
+    if index < 0 or index >= count or cache == 0:
+        return JsonValue.invalid()
+    entry: i64 = cache + ((index as i64) * COOK_JSON_CACHE_STRIDE)
+    start: i64 = Memory.read_i64(entry)
+    finish: i64 = Memory.read_i64(entry + 8)
+    first: i32 = Memory.read_i8((value.source as i64) + start) as i32
+    kind: i32 = JSON_KIND_NUMBER
+    content_start: i64 = start
+    content_end: i64 = finish
+    if first == 123:
+        kind = JSON_KIND_OBJECT
+        content_start = start + 1
+        content_end = finish - 1
+    elif first == 91:
+        kind = JSON_KIND_ARRAY
+        content_start = start + 1
+        content_end = finish - 1
+    elif first == 34:
+        kind = JSON_KIND_STRING
+        content_start = start + 1
+        content_end = finish - 1
+    elif first == 116 or first == 102:
+        kind = JSON_KIND_BOOL
+    elif first == 110:
+        kind = JSON_KIND_NULL
+    return JsonValue(source=value.source, kind=kind, start_pos=start, end_pos=finish, content_start=content_start, content_end=content_end)
 
 fun cook_component_size(component_type: i32) -> i32:
     if component_type == 5120 or component_type == 5121:
@@ -347,21 +489,80 @@ fun cook_load_file_bytes(path: str) -> i64:
     Memory.write_i64(result + 8, size)
     return result
 
+fun cook_parse_glb(path: str) -> JsonDocument:
+    loaded: i64 = cook_load_file_bytes(path)
+    data: i64 = Memory.read_i64(loaded)
+    size: i64 = Memory.read_i64(loaded + 8)
+    Memory.free(loaded)
+    if size < 20:
+        cook_fail("GLB file is too small")
+    if Memory.read_i32(data) != 0x46546C67:
+        cook_fail("invalid GLB magic")
+    if Memory.read_i32(data + 4) != 2:
+        cook_fail("only GLB version 2 is supported")
+    declared_i32: i32 = Memory.read_i32(data + 8)
+    if declared_i32 <= 0:
+        cook_fail("invalid GLB byte length")
+    declared: i64 = declared_i32 as i64
+    if declared > size:
+        cook_fail("GLB is shorter than its declared byte length")
+    json_source: str = ""
+    cursor: i64 = 12
+    while cursor + 8 <= declared:
+        chunk_length_i32: i32 = Memory.read_i32(data + cursor)
+        chunk_type: i32 = Memory.read_i32(data + cursor + 4)
+        if chunk_length_i32 < 0:
+            cook_fail("GLB chunk is too large")
+        chunk_length: i64 = chunk_length_i32 as i64
+        chunk_data: i64 = cursor + 8
+        chunk_end: i64 = chunk_data + chunk_length
+        if chunk_end > declared:
+            cook_fail("GLB chunk exceeds the file boundary")
+        if chunk_type == 0x4E4F534A:
+            if Memory.strlen(json_source) == 0:
+                json_data: i64 = Memory.malloc_zeroed(chunk_length + 1)
+                if json_data == 0:
+                    cook_fail("out of memory loading GLB JSON")
+                Memory.copy(json_data, data + chunk_data, chunk_length)
+                Memory.write_i8(json_data + chunk_length, 0 as i8)
+                json_source = json_data as str
+        elif chunk_type == 0x004E4942:
+            if g_cook_glb_bin_data == 0:
+                g_cook_glb_bin_data = data + chunk_data
+                g_cook_glb_bin_size = chunk_length
+        cursor = chunk_end
+    if Memory.strlen(json_source) == 0:
+        cook_fail("GLB has no JSON chunk")
+    g_cook_glb_file_data = data
+    document: JsonDocument = Json.parse(json_source)
+    if document.valid() == 0:
+        cook_fail(@"invalid GLB JSON at byte {document.error_pos}: {document.error}")
+    return document
+
 fun cook_load_buffers():
-    buffers: JsonValue = g_cook_root.get("buffers")
+    buffers: JsonValue = g_cook_json_buffers
     i: i32 = 0
     while i < buffers.size():
         buffer: JsonValue = buffers.at(i)
         uri: str = buffer.get_str("uri")
-        if Memory.strlen(uri) == 0:
-            cook_fail(@"buffer {i} has no URI; GLB is not supported by this cooker yet")
         loaded: i64 = 0
-        if Str.starts_with(uri, "data:"):
-            loaded = cook_decode_data_uri(uri)
+        uses_glb_data: i32 = 0
+        if Memory.strlen(uri) == 0:
+            if i != 0:
+                cook_fail(@"buffer {i} has no URI")
+            if g_cook_glb_bin_data == 0:
+                cook_fail("GLB has no BIN chunk for buffer 0")
+            loaded = Memory.malloc_zeroed(16)
+            Memory.write_i64(loaded, g_cook_glb_bin_data)
+            Memory.write_i64(loaded + 8, g_cook_glb_bin_size)
+            uses_glb_data = 1
         else:
-            buffer_path: str = PathOps.join_path(g_cook_source_dir, uri)
-            loaded = cook_load_file_bytes(buffer_path)
-            Memory.free(buffer_path as i64)
+            if Str.starts_with(uri, "data:"):
+                loaded = cook_decode_data_uri(uri)
+            else:
+                buffer_path: str = PathOps.join_path(g_cook_source_dir, uri)
+                loaded = cook_load_file_bytes(buffer_path)
+                Memory.free(buffer_path as i64)
         data: i64 = Memory.read_i64(loaded)
         size: i64 = Memory.read_i64(loaded + 8)
         declared: i64 = buffer.get_i64("byteLength")
@@ -370,24 +571,25 @@ fun cook_load_buffers():
         g_cook_buffers.append(data)
         g_cook_buffer_sizes.append(size)
         Memory.free(loaded)
-        Memory.free(uri as i64)
+        if Memory.strlen(uri) > 0:
+            Memory.free(uri as i64)
         i = i + 1
 
 fun cook_accessor(accessor_index: i32) -> i64:
-    accessors: JsonValue = g_cook_root.get("accessors")
-    buffer_views: JsonValue = g_cook_root.get("bufferViews")
-    if accessor_index < 0 or accessor_index >= accessors.size():
+    accessors: JsonValue = g_cook_json_accessors
+    buffer_views: JsonValue = g_cook_json_buffer_views
+    if accessor_index < 0 or accessor_index >= g_cook_accessor_count:
         cook_fail(@"invalid accessor index {accessor_index}")
-    accessor: JsonValue = accessors.at(accessor_index)
+    accessor: JsonValue = cook_json_cached_at(accessors, g_cook_accessor_cache, g_cook_accessor_count, accessor_index)
     if accessor.get("sparse").exists() == 1:
         cook_fail("sparse glTF accessors are not supported yet")
     view_value: JsonValue = accessor.get("bufferView")
     if view_value.exists() == 0:
         cook_fail(@"accessor {accessor_index} has no bufferView")
     view_index: i32 = view_value.as_i32()
-    if view_index < 0 or view_index >= buffer_views.size():
+    if view_index < 0 or view_index >= g_cook_buffer_view_count:
         cook_fail(@"accessor {accessor_index} references invalid bufferView")
-    view: JsonValue = buffer_views.at(view_index)
+    view: JsonValue = cook_json_cached_at(buffer_views, g_cook_buffer_view_cache, g_cook_buffer_view_count, view_index)
     buffer_index: i32 = view.get_i32("buffer")
     if buffer_index < 0 or (buffer_index as i64) >= g_cook_buffers.size():
         cook_fail(@"bufferView {view_index} references invalid buffer")
@@ -480,37 +682,15 @@ fun cook_accessor_component(info: i64, row: i32, component: i32) -> f32:
         return unsigned32 as f32
     return 0.0
 
-fun cook_accessor_index(info: i64, row: i32) -> i32:
-    count: i32 = Memory.read_i32(info + CA_COUNT)
-    if row < 0 or row >= count:
-        return -1
-    component_type: i32 = Memory.read_i32(info + CA_COMPONENT_TYPE)
-    stride: i32 = Memory.read_i32(info + CA_STRIDE)
-    addr: i64 = Memory.read_i64(info + CA_DATA) + ((row as i64) * (stride as i64))
-    if component_type == 5121:
-        value8: i32 = Memory.read_i8(addr) as i32
-        if value8 < 0:
-            value8 = value8 + 256
-        return value8
-    if component_type == 5123:
-        value16: i32 = Memory.read_i16(addr) as i32
-        if value16 < 0:
-            value16 = value16 + 65536
-        return value16
-    if component_type == 5125:
-        return Memory.read_i32(addr)
-    cook_fail("glTF indices must use UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
-    return 0
-
 fun cook_material_name(material_index: i32) -> str:
     if material_index < 0:
         return "Material"
-    materials: JsonValue = g_cook_root.get("materials")
-    if material_index >= materials.size():
+    materials: JsonValue = g_cook_json_materials
+    if material_index >= g_cook_material_count:
         return @"Material_{material_index}"
-    name: str = materials.at(material_index).get_str("name")
+    material: JsonValue = cook_json_cached_at(materials, g_cook_material_cache, g_cook_material_count, material_index)
+    name: str = material.get_str("name")
     if Memory.strlen(name) == 0:
-        Memory.free(name as i64)
         return @"Material_{material_index}"
     return name
 
@@ -520,9 +700,10 @@ fun cook_material_color(material_index: i32, out: i64):
     g: f64 = 0.6
     b: f64 = 0.6
     a: f64 = 1.0
-    materials: JsonValue = g_cook_root.get("materials")
-    if material_index >= 0 and material_index < materials.size():
-        pbr: JsonValue = materials.at(material_index).get("pbrMetallicRoughness")
+    materials: JsonValue = g_cook_json_materials
+    if material_index >= 0 and material_index < g_cook_material_count:
+        material: JsonValue = cook_json_cached_at(materials, g_cook_material_cache, g_cook_material_count, material_index)
+        pbr: JsonValue = material.get("pbrMetallicRoughness")
         factor: JsonValue = pbr.get("baseColorFactor")
         if factor.is_array() == 1 and factor.size() >= 3:
             r = cook_json_number_at(factor, 0, r)
@@ -550,14 +731,17 @@ fun cook_find_group(material_index: i32) -> i64:
     g_cook_groups.append(group)
     return group
 
-fun cook_group_reserve_triangle(group: i64) -> i64:
+fun cook_group_reserve_triangles(group: i64, additional: i32) -> i64:
     count: i32 = Memory.read_i32(group + CG_TRI_COUNT)
     capacity: i32 = Memory.read_i32(group + CG_TRI_CAP)
     data: i64 = Memory.read_i64(group + CG_DATA)
-    if count >= capacity:
+    required: i32 = count + additional
+    if required > capacity:
         new_capacity: i32 = capacity * 2
         if new_capacity < 256:
             new_capacity = 256
+        while new_capacity < required:
+            new_capacity = new_capacity * 2
         new_data: i64 = Memory.realloc(data, (new_capacity as i64) * COOK_TRIANGLE_STRIDE)
         if new_data == 0:
             cook_fail("out of memory growing triangle buffer")
@@ -585,13 +769,6 @@ fun cook_flat_normal(p0: i64, p1: i64, p2: i64, out: i64):
         Memory.write_f32(out, 0.0)
         Memory.write_f32(out + 4, 1.0)
         Memory.write_f32(out + 8, 0.0)
-
-fun cook_copy_temp_vertex(destination: i64, position: i64, normal: i64, uv_info: i64, source_index: i32):
-    memcpy(destination, position, 12)
-    memcpy(destination + 12, normal, 12)
-    if uv_info != 0:
-        Memory.write_f32(destination + 24, cook_accessor_component(uv_info, source_index, 0))
-        Memory.write_f32(destination + 28, cook_accessor_component(uv_info, source_index, 1))
 
 fun cook_process_primitive(primitive: JsonValue, world: i64):
     mode_value: JsonValue = primitive.get("mode")
@@ -627,6 +804,9 @@ fun cook_process_primitive(primitive: JsonValue, world: i64):
         index_info = cook_accessor(index_value.as_i32())
         if Memory.read_i32(index_info + CA_COMPONENTS) != 1:
             cook_fail("index accessor must be SCALAR")
+        index_component_type: i32 = Memory.read_i32(index_info + CA_COMPONENT_TYPE)
+        if index_component_type != 5121 and index_component_type != 5123 and index_component_type != 5125:
+            cook_fail("glTF indices must use UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
     source_count: i32 = Memory.read_i32(position_info + CA_COUNT)
     index_count: i32 = source_count
     if index_info != 0:
@@ -641,13 +821,95 @@ fun cook_process_primitive(primitive: JsonValue, world: i64):
     flip: i32 = 0
     if Memory.read_f64(normal_matrix + 72) < 0.0:
         flip = 1
-    positions: i64 = Memory.malloc_zeroed(36)
-    fallback: i64 = Memory.malloc_zeroed(12)
-    transformed_normal: i64 = Memory.malloc_zeroed(12)
+    normal_fallback: i64 = Memory.malloc_zeroed(12)
+    Memory.write_f32(normal_fallback + 4, 1.0)
+    transformed_vertices: i64 = 0
+    if source_count > 0:
+        transformed_vertices = Memory.malloc_zeroed((source_count as i64) * COOK_TEMP_VERTEX_STRIDE)
+        if transformed_vertices == 0:
+            cook_fail("out of memory transforming primitive vertices")
+    position_data: i64 = Memory.read_i64(position_info + CA_DATA)
+    position_stride: i32 = Memory.read_i32(position_info + CA_STRIDE)
+    position_type: i32 = Memory.read_i32(position_info + CA_COMPONENT_TYPE)
+    normal_data: i64 = 0
+    normal_stride: i32 = 0
+    normal_type: i32 = 0
+    if normal_info != 0:
+        normal_data = Memory.read_i64(normal_info + CA_DATA)
+        normal_stride = Memory.read_i32(normal_info + CA_STRIDE)
+        normal_type = Memory.read_i32(normal_info + CA_COMPONENT_TYPE)
+    uv_data: i64 = 0
+    uv_stride: i32 = 0
+    uv_type: i32 = 0
+    if uv_info != 0:
+        uv_data = Memory.read_i64(uv_info + CA_DATA)
+        uv_stride = Memory.read_i32(uv_info + CA_STRIDE)
+        uv_type = Memory.read_i32(uv_info + CA_COMPONENT_TYPE)
+    source_vertex: i32 = 0
+    while source_vertex < source_count:
+        transformed: i64 = transformed_vertices + ((source_vertex as i64) * COOK_TEMP_VERTEX_STRIDE)
+        px: f64 = 0.0
+        py: f64 = 0.0
+        pz: f64 = 0.0
+        if position_type == 5126:
+            position_source: i64 = position_data + ((source_vertex as i64) * (position_stride as i64))
+            px = Memory.read_f32(position_source) as f64
+            py = Memory.read_f32(position_source + 4) as f64
+            pz = Memory.read_f32(position_source + 8) as f64
+        else:
+            px = cook_accessor_component(position_info, source_vertex, 0) as f64
+            py = cook_accessor_component(position_info, source_vertex, 1) as f64
+            pz = cook_accessor_component(position_info, source_vertex, 2) as f64
+        cook_transform_point(
+            world,
+            px,
+            py,
+            pz,
+            transformed
+        )
+        if normal_info != 0:
+            nx: f64 = 0.0
+            ny: f64 = 0.0
+            nz: f64 = 0.0
+            if normal_type == 5126:
+                normal_source: i64 = normal_data + ((source_vertex as i64) * (normal_stride as i64))
+                nx = Memory.read_f32(normal_source) as f64
+                ny = Memory.read_f32(normal_source + 4) as f64
+                nz = Memory.read_f32(normal_source + 8) as f64
+            else:
+                nx = cook_accessor_component(normal_info, source_vertex, 0) as f64
+                ny = cook_accessor_component(normal_info, source_vertex, 1) as f64
+                nz = cook_accessor_component(normal_info, source_vertex, 2) as f64
+            cook_transform_normal(
+                normal_matrix,
+                nx,
+                ny,
+                nz,
+                transformed + 12,
+                normal_fallback
+            )
+        if uv_info != 0:
+            if uv_type == 5126:
+                uv_source: i64 = uv_data + ((source_vertex as i64) * (uv_stride as i64))
+                Memory.write_f32(transformed + 24, Memory.read_f32(uv_source))
+                Memory.write_f32(transformed + 28, Memory.read_f32(uv_source + 4))
+            else:
+                Memory.write_f32(transformed + 24, cook_accessor_component(uv_info, source_vertex, 0))
+                Memory.write_f32(transformed + 28, cook_accessor_component(uv_info, source_vertex, 1))
+        source_vertex = source_vertex + 1
     color: i64 = Memory.malloc_zeroed(32)
     corners: i64 = Memory.malloc_zeroed(12)
     cook_material_color(material_index, color)
     valid: i32 = 0
+    group_start_count: i32 = Memory.read_i32(group + CG_TRI_COUNT)
+    group_destination: i64 = cook_group_reserve_triangles(group, triangle_count)
+    index_data: i64 = 0
+    index_stride: i32 = 0
+    index_type: i32 = 0
+    if index_info != 0:
+        index_data = Memory.read_i64(index_info + CA_DATA)
+        index_stride = Memory.read_i32(index_info + CA_STRIDE)
+        index_type = Memory.read_i32(index_info + CA_COMPONENT_TYPE)
     triangle: i32 = 0
     while triangle < triangle_count:
         c: i32 = 0
@@ -661,7 +923,17 @@ fun cook_process_primitive(primitive: JsonValue, world: i64):
             row: i32 = triangle * 3 + order
             source_index: i32 = row
             if index_info != 0:
-                source_index = cook_accessor_index(index_info, row)
+                index_source: i64 = index_data + ((row as i64) * (index_stride as i64))
+                if index_type == 5121:
+                    source_index = Memory.read_i8(index_source) as i32
+                    if source_index < 0:
+                        source_index = source_index + 256
+                elif index_type == 5123:
+                    source_index = Memory.read_i16(index_source) as i32
+                    if source_index < 0:
+                        source_index = source_index + 65536
+                else:
+                    source_index = Memory.read_i32(index_source)
             Memory.write_i32(corners + ((c as i64) * 4), source_index)
             c = c + 1
         valid_indices: i32 = 1
@@ -670,43 +942,36 @@ fun cook_process_primitive(primitive: JsonValue, world: i64):
             source_index: i32 = Memory.read_i32(corners + ((c as i64) * 4))
             if source_index < 0 or source_index >= source_count:
                 valid_indices = 0
-            else:
-                cook_transform_point(
-                    world,
-                    cook_accessor_component(position_info, source_index, 0) as f64,
-                    cook_accessor_component(position_info, source_index, 1) as f64,
-                    cook_accessor_component(position_info, source_index, 2) as f64,
-                    positions + ((c as i64) * 12)
-                )
             c = c + 1
         if valid_indices == 1:
-            cook_flat_normal(positions, positions + 12, positions + 24, fallback)
-            destination: i64 = cook_group_reserve_triangle(group)
+            destination: i64 = group_destination + ((valid as i64) * COOK_TRIANGLE_STRIDE)
             c = 0
             while c < 3:
                 source_index: i32 = Memory.read_i32(corners + ((c as i64) * 4))
-                if normal_info != 0:
-                    cook_transform_normal(
-                        normal_matrix,
-                        cook_accessor_component(normal_info, source_index, 0) as f64,
-                        cook_accessor_component(normal_info, source_index, 1) as f64,
-                        cook_accessor_component(normal_info, source_index, 2) as f64,
-                        transformed_normal,
-                        fallback
-                    )
-                else:
-                    memcpy(transformed_normal, fallback, 12)
-                cook_copy_temp_vertex(
-                    destination + ((c as i64) * COOK_TEMP_VERTEX_STRIDE),
-                    positions + ((c as i64) * 12),
-                    transformed_normal,
-                    uv_info,
-                    source_index
-                )
+                source: i64 = transformed_vertices + ((source_index as i64) * COOK_TEMP_VERTEX_STRIDE)
+                target: i64 = destination + ((c as i64) * COOK_TEMP_VERTEX_STRIDE)
+                Memory.write_i64(target, Memory.read_i64(source))
+                Memory.write_i64(target + 8, Memory.read_i64(source + 8))
+                Memory.write_i64(target + 16, Memory.read_i64(source + 16))
+                Memory.write_i64(target + 24, Memory.read_i64(source + 24))
                 c = c + 1
+            if normal_info == 0:
+                cook_flat_normal(destination, destination + COOK_TEMP_VERTEX_STRIDE, destination + COOK_TEMP_VERTEX_STRIDE * 2, normal_fallback)
+                normal_x: f32 = Memory.read_f32(normal_fallback)
+                normal_y: f32 = Memory.read_f32(normal_fallback + 4)
+                normal_z: f32 = Memory.read_f32(normal_fallback + 8)
+                Memory.write_f32(destination + 12, normal_x)
+                Memory.write_f32(destination + 16, normal_y)
+                Memory.write_f32(destination + 20, normal_z)
+                Memory.write_f32(destination + COOK_TEMP_VERTEX_STRIDE + 12, normal_x)
+                Memory.write_f32(destination + COOK_TEMP_VERTEX_STRIDE + 16, normal_y)
+                Memory.write_f32(destination + COOK_TEMP_VERTEX_STRIDE + 20, normal_z)
+                Memory.write_f32(destination + COOK_TEMP_VERTEX_STRIDE * 2 + 12, normal_x)
+                Memory.write_f32(destination + COOK_TEMP_VERTEX_STRIDE * 2 + 16, normal_y)
+                Memory.write_f32(destination + COOK_TEMP_VERTEX_STRIDE * 2 + 20, normal_z)
             valid = valid + 1
-            Memory.write_i32(group + CG_TRI_COUNT, Memory.read_i32(group + CG_TRI_COUNT) + 1)
         triangle = triangle + 1
+    Memory.write_i32(group + CG_TRI_COUNT, group_start_count + valid)
     if valid > 0:
         weight: f64 = valid as f64
         Memory.write_f64(group + CG_COLOR_R, Memory.read_f64(group + CG_COLOR_R) + Memory.read_f64(color) * weight)
@@ -717,9 +982,9 @@ fun cook_process_primitive(primitive: JsonValue, world: i64):
         g_cook_total_triangles = g_cook_total_triangles + (valid as i64)
     Memory.free(color)
     Memory.free(corners)
-    Memory.free(transformed_normal)
-    Memory.free(fallback)
-    Memory.free(positions)
+    if transformed_vertices != 0:
+        Memory.free(transformed_vertices)
+    Memory.free(normal_fallback)
     Memory.free(normal_matrix)
     Memory.free(position_info)
     if normal_info != 0:
@@ -730,10 +995,11 @@ fun cook_process_primitive(primitive: JsonValue, world: i64):
         Memory.free(index_info)
 
 fun cook_process_mesh(mesh_index: i32, world: i64):
-    meshes: JsonValue = g_cook_root.get("meshes")
-    if mesh_index < 0 or mesh_index >= meshes.size():
+    meshes: JsonValue = g_cook_json_meshes
+    if mesh_index < 0 or mesh_index >= g_cook_mesh_count:
         cook_fail(@"node references invalid mesh {mesh_index}")
-    primitives: JsonValue = meshes.at(mesh_index).get("primitives")
+    mesh: JsonValue = cook_json_cached_at(meshes, g_cook_mesh_cache, g_cook_mesh_count, mesh_index)
+    primitives: JsonValue = mesh.get("primitives")
     i: i32 = 0
     while i < primitives.size():
         cook_process_primitive(primitives.at(i), world)
@@ -745,7 +1011,7 @@ fun cook_visit_node(node_index: i32, parent: i64, active: i64, node_count: i32):
     if Memory.read_i8(active + (node_index as i64)) != 0:
         cook_fail(@"node hierarchy contains a cycle at node {node_index}")
     Memory.write_i8(active + (node_index as i64), 1 as i8)
-    node: JsonValue = g_cook_root.get("nodes").at(node_index)
+    node: JsonValue = cook_json_cached_at(g_cook_json_nodes, g_cook_node_cache, g_cook_node_count, node_index)
     if node.get("skin").exists() == 1:
         cook_fail(@"skinned node {node_index} requires the future animated-model pipeline")
     if node.get("weights").exists() == 1:
@@ -754,7 +1020,11 @@ fun cook_visit_node(node_index: i32, parent: i64, active: i64, node_count: i32):
     world: i64 = cook_mat_mul(parent, local)
     mesh_value: JsonValue = node.get("mesh")
     if mesh_value.exists() == 1:
-        cook_process_mesh(mesh_value.as_i32(), world)
+        mesh_index: i32 = mesh_value.as_i32()
+        cook_process_mesh(mesh_index, world)
+    g_cook_nodes_processed = g_cook_nodes_processed + 1
+    if (g_cook_nodes_processed % 10) == 0 or g_cook_nodes_processed == g_cook_node_count:
+        print(@"frog cooker: geometry {g_cook_nodes_processed}/{g_cook_node_count} nodes")
     children: JsonValue = node.get("children")
     child: i32 = 0
     while child < children.size():
@@ -765,38 +1035,28 @@ fun cook_visit_node(node_index: i32, parent: i64, active: i64, node_count: i32):
     Memory.free(local)
 
 fun cook_collect_triangles():
-    if g_cook_root.get("animations").size() > 0:
+    if g_cook_json_animations.size() > 0:
         cook_fail("animated glTF requires the future animated-model pipeline")
-    nodes: JsonValue = g_cook_root.get("nodes")
-    node_count: i32 = nodes.size()
+    nodes: JsonValue = g_cook_json_nodes
+    node_count: i32 = g_cook_node_count
+    g_cook_nodes_processed = 0
     identity: i64 = cook_mat_identity()
     if node_count == 0:
-        meshes: JsonValue = g_cook_root.get("meshes")
+        meshes: JsonValue = g_cook_json_meshes
         mesh: i32 = 0
         while mesh < meshes.size():
             cook_process_mesh(mesh, identity)
             mesh = mesh + 1
         Memory.free(identity)
         return
-    referenced: i64 = Memory.malloc_zeroed(node_count as i64)
     active: i64 = Memory.malloc_zeroed(node_count as i64)
-    n: i32 = 0
-    while n < node_count:
-        children: JsonValue = nodes.at(n).get("children")
-        c: i32 = 0
-        while c < children.size():
-            child_index: i32 = children.at(c).as_i32()
-            if child_index < 0 or child_index >= node_count:
-                cook_fail(@"node hierarchy references invalid node {child_index}")
-            Memory.write_i8(referenced + (child_index as i64), 1 as i8)
-            c = c + 1
-        n = n + 1
+    referenced: i64 = 0
     roots: JsonValue = JsonValue.invalid()
     scene_index: i32 = 0
     scene_value: JsonValue = g_cook_root.get("scene")
     if scene_value.exists() == 1:
         scene_index = scene_value.as_i32()
-    scenes: JsonValue = g_cook_root.get("scenes")
+    scenes: JsonValue = g_cook_json_scenes
     if scene_index >= 0 and scene_index < scenes.size():
         candidate: JsonValue = scenes.at(scene_index).get("nodes")
         if candidate.size() > 0:
@@ -807,13 +1067,26 @@ fun cook_collect_triangles():
             cook_visit_node(roots.at(r).as_i32(), identity, active, node_count)
             r = r + 1
     else:
+        referenced = Memory.malloc_zeroed(node_count as i64)
+        n: i32 = 0
+        while n < node_count:
+            children: JsonValue = nodes.at(n).get("children")
+            c: i32 = 0
+            while c < children.size():
+                child_index: i32 = children.at(c).as_i32()
+                if child_index < 0 or child_index >= node_count:
+                    cook_fail(@"node hierarchy references invalid node {child_index}")
+                Memory.write_i8(referenced + (child_index as i64), 1 as i8)
+                c = c + 1
+            n = n + 1
         n = 0
         while n < node_count:
             if Memory.read_i8(referenced + (n as i64)) == 0:
                 cook_visit_node(n, identity, active, node_count)
             n = n + 1
     Memory.free(active)
-    Memory.free(referenced)
+    if referenced != 0:
+        Memory.free(referenced)
     Memory.free(identity)
 
 # Raw CookLevel layout: ratio f32, group count i32, group pointer array i64,
@@ -1156,9 +1429,9 @@ fun cook_build_frogmodel() -> i64:
     return result
 
 fun cook_usage():
-    print("Frog Cooker - pure Dolet glTF 2.0 cooker")
-    print("usage: frog-cooker <scene.gltf> [--out <scene.frogmodel>] [--lods|--no-lods] [--lod <ratio>]")
-    print("defaults: preserve materials and generate LOD ratios 0.45 and 0.22")
+    print("Frog Cooker - pure Dolet model and texture cooker")
+    print("usage: frog-cooker <scene.gltf|scene.glb|texture.png> [--out <output>] [--lods|--no-lods] [--lod <ratio>]")
+    print("models preserve materials and default to LOD ratios 0.45 and 0.22")
 
 fun cook_default_output(source: str) -> str:
     source_length: i64 = Memory.strlen(source)
@@ -1167,7 +1440,57 @@ fun cook_default_output(source: str) -> str:
         output: str = Str.concat(base, ".frogmodel")
         Memory.free(base as i64)
         return output
+    if source_length >= 4 and Str.ends_with(source, ".glb"):
+        base: str = Str.substring(source, 0, source_length - 4)
+        output: str = Str.concat(base, ".frogmodel")
+        Memory.free(base as i64)
+        return output
+    if source_length >= 4 and Str.ends_with(source, ".png"):
+        base: str = Str.substring(source, 0, source_length - 4)
+        output: str = Str.concat(base, ".frogtex")
+        Memory.free(base as i64)
+        return output
     return Str.concat(source, ".frogmodel")
+
+fun cook_texture(source: str, output: str):
+    image: Image = PNG.load(source)
+    if image.is_valid() == 0:
+        cook_fail(@"could not decode texture: {source}")
+    texture_width: i32 = image.width
+    texture_height: i32 = image.height
+    data_size: i64 = image.byte_size()
+    if data_size <= 0 or data_size > 2147483647:
+        image.free()
+        cook_fail(@"texture is too large: {source}")
+    header: i64 = Memory.malloc_zeroed(COOK_TEXTURE_HEADER_SIZE)
+    if header == 0:
+        image.free()
+        cook_fail("out of memory creating cooked texture header")
+    Memory.write_i32(header, COOK_TEXTURE_MAGIC)
+    Memory.write_i32(header + 4, COOK_TEXTURE_VERSION)
+    Memory.write_i32(header + 8, image.width)
+    Memory.write_i32(header + 12, image.height)
+    Memory.write_i32(header + 16, 4)
+    Memory.write_i32(header + 20, COOK_TEXTURE_FORMAT_RGBA8)
+    Memory.write_i32(header + 24, COOK_TEXTURE_HEADER_SIZE as i32)
+    Memory.write_i32(header + 28, data_size as i32)
+    file: File = File.open_cwd(output, "w")
+    if file.is_valid() == false:
+        Memory.free(header)
+        image.free()
+        cook_fail(@"could not create output: {output}")
+    header_written: i32 = file.write_bytes(header, COOK_TEXTURE_HEADER_SIZE as i32)
+    pixels_written: i32 = file.write_bytes(image.data, data_size as i32)
+    file.close()
+    Memory.free(header)
+    image.free()
+    if header_written != (COOK_TEXTURE_HEADER_SIZE as i32) or pixels_written != (data_size as i32):
+        cook_fail(@"could not write complete output: {output}")
+    total_size: i64 = COOK_TEXTURE_HEADER_SIZE + data_size
+    print(@"source: {source}")
+    print(@"output: {output}")
+    print(@"texture: {texture_width}x{texture_height} RGBA8")
+    print(@"bytes: {total_size}")
 
 fun cook_main():
     argc: i32 = Argv.count()
@@ -1181,7 +1504,10 @@ fun cook_main():
     i: i32 = 1
     while i < argc:
         argument: str = Argv.get(i)
-        if Str.equals(argument, "--help") or Str.equals(argument, "-h"):
+        if Str.equals(argument, "--protocol"):
+            print(COOK_PROTOCOL_VERSION)
+            Process.exit(0)
+        elif Str.equals(argument, "--help") or Str.equals(argument, "-h"):
             cook_usage()
             Process.exit(0)
         else:
@@ -1222,8 +1548,15 @@ fun cook_main():
         cook_fail("missing source .gltf path")
     g_cook_source = PathOps.resolve_path(source_argument)
     source_lower: str = Str.to_lower(g_cook_source)
+    source_is_glb: i32 = 0
+    source_is_png: i32 = 0
+    if Str.ends_with(source_lower, ".glb"):
+        source_is_glb = 1
+    if Str.ends_with(source_lower, ".png"):
+        source_is_png = 1
     if Str.ends_with(source_lower, ".gltf") == false:
-        cook_fail("only .gltf input is supported right now")
+        if source_is_glb == 0 and source_is_png == 0:
+            cook_fail("only .gltf, .glb, and .png input are supported")
     Memory.free(source_lower as i64)
     if PathOps.exists(g_cook_source) == false:
         cook_fail(@"source model not found: {g_cook_source}")
@@ -1232,21 +1565,48 @@ fun cook_main():
         output = PathOps.resolve_path(output_argument)
     else:
         output = cook_default_output(g_cook_source)
+    if source_is_png == 1:
+        cook_texture(g_cook_source, output)
+        Process.exit(0)
     g_cook_source_dir = PathOps.get_directory(g_cook_source)
-    g_cook_doc = Json.parse_file(g_cook_source)
-    if g_cook_doc.valid() == 0:
-        cook_fail(@"invalid glTF JSON at byte {g_cook_doc.error_pos}: {g_cook_doc.error}")
+    if source_is_glb == 1:
+        g_cook_doc = cook_parse_glb(g_cook_source)
+    else:
+        g_cook_doc = Json.parse_file(g_cook_source)
+        if g_cook_doc.valid() == 0:
+            cook_fail(@"invalid glTF JSON at byte {g_cook_doc.error_pos}: {g_cook_doc.error}")
     g_cook_root = g_cook_doc.root
+    g_cook_json_buffers = g_cook_root.get("buffers")
+    g_cook_json_buffer_views = g_cook_root.get("bufferViews")
+    g_cook_json_accessors = g_cook_root.get("accessors")
+    g_cook_json_materials = g_cook_root.get("materials")
+    g_cook_json_meshes = g_cook_root.get("meshes")
+    g_cook_json_nodes = g_cook_root.get("nodes")
+    g_cook_json_scenes = g_cook_root.get("scenes")
+    g_cook_json_animations = g_cook_root.get("animations")
+    g_cook_accessor_count = g_cook_json_accessors.size()
+    g_cook_buffer_view_count = g_cook_json_buffer_views.size()
+    g_cook_material_count = g_cook_json_materials.size()
+    g_cook_mesh_count = g_cook_json_meshes.size()
+    g_cook_node_count = g_cook_json_nodes.size()
+    g_cook_accessor_cache = cook_json_cache_array(g_cook_json_accessors, g_cook_accessor_count)
+    g_cook_buffer_view_cache = cook_json_cache_array(g_cook_json_buffer_views, g_cook_buffer_view_count)
+    g_cook_material_cache = cook_json_cache_array(g_cook_json_materials, g_cook_material_count)
+    g_cook_mesh_cache = cook_json_cache_array(g_cook_json_meshes, g_cook_mesh_count)
+    g_cook_node_cache = cook_json_cache_array(g_cook_json_nodes, g_cook_node_count)
     asset: JsonValue = g_cook_root.get("asset")
     version: str = asset.get_str("version")
     if Str.starts_with(version, "2.") == false:
         cook_fail("only glTF 2.x is supported")
     Memory.free(version as i64)
     cook_load_buffers()
+    print("frog cooker: source loaded")
     cook_collect_triangles()
+    print(@"frog cooker: collected {g_cook_total_triangles} triangles")
     if g_cook_total_triangles <= 0:
         cook_fail("no triangle primitives found")
     g_cook_levels.append(cook_build_level(1.0))
+    print("frog cooker: built source level")
     if disable_lods == 0:
         if custom_lods == 0:
             g_cook_lod_ratios.append(0.45 as f32)
@@ -1256,6 +1616,7 @@ fun cook_main():
             g_cook_levels.append(cook_build_level(g_cook_lod_ratios.get_f32(lod_index)))
             lod_index = lod_index + 1
     cooked: i64 = cook_build_frogmodel()
+    print("frog cooker: serialized model")
     output_data: i64 = Memory.read_i64(cooked)
     output_size: i64 = Memory.read_i64(cooked + 8)
     file: File = File.open_cwd(output, "w")

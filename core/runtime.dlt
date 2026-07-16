@@ -241,6 +241,19 @@ attach EngineRuntime:
     # Same, but with an explicit TextureSpec controlling filtering/wrap/srgb.
     fun upload_texture_spec(self, path: str, spec: TextureSpec) -> i32:
         resolved: str = Assets.resolve(path)
+        cooked_path: str = AssetTextures.runtime_cooked_path(path)
+        if Str.equals(cooked_path, "") == false:
+            cooked_resolved: str = Assets.resolve(cooked_path)
+            if Str.equals(cooked_resolved, "") == false:
+                if PathOps.exists(cooked_resolved):
+                    cooked: CookedTexture = FrogTextureLoader.load(cooked_resolved)
+                    if cooked.valid == 1:
+                        cooked_image: Image = Image.wrap_rgba(cooked.width, cooked.height, cooked.pixels)
+                        cooked_tid: i32 = self.renderer.upload_texture_image_spec(self.render_pass, self.render_pass.vk_command_pool, cooked_image, spec)
+                        cooked.free()
+                        return cooked_tid
+                    print(@"Cooked texture load failed: {cooked_path}")
+                    return 0 - 1
         img: Image = PNG.load(resolved)
         if img.is_valid() == 0:
             print(@"Texture load failed: {path}")

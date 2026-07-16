@@ -16,6 +16,12 @@ struct GpuTexture:
     mip_levels: i32 = 1
     ok:       i32 = 0
 
+g_gpu_tex_batch_cmd: i64 = 0
+g_gpu_tex_batch_device: i64 = 0
+g_gpu_tex_batch_pool: i64 = 0
+g_gpu_tex_batch_buffers: list<i64> = []
+g_gpu_tex_batch_memories: list<i64> = []
+
 # How a texture should look on screen. Filtering, wrapping, color space.
 # Defaults match the engine's historical behaviour (smooth + repeat + sRGB)
 # so untouched code keeps rendering identically.
@@ -49,6 +55,19 @@ attach TextureSpec:
     # Smooth + repeat + linear data for normal, roughness, metallic, and AO maps.
     static fun data_smooth() -> TextureSpec:
         spec: TextureSpec = TextureSpec.smooth()
+        return spec.as_data()
+
+    # High-quality material texture: trilinear mip chain + anisotropic sampling.
+    static fun model_color() -> TextureSpec:
+        spec: TextureSpec = TextureSpec.color_smooth()
+        spec.anisotropy = 8.0
+        spec.mipmaps = 1
+        spec.mipmap_filter = 1
+        return spec
+
+    # Linear-data counterpart for normal/roughness/metallic/AO maps.
+    static fun model_data() -> TextureSpec:
+        spec: TextureSpec = TextureSpec.model_color()
         return spec.as_data()
 
     # Sharp pixels + clamp to edge. For pixel art or crisp UI sprites.
@@ -105,6 +124,21 @@ attach TextureSpec:
         return 1
 
 # ---- low-level helpers -------------------------------------------------
+
+fun gpu_tex_copy_bytes_fast(destination: i64, source: i64, size: i64):
+    offset: i64 = 0
+    while offset + 32 <= size:
+        Memory.write_i64(destination + offset, Memory.read_i64(source + offset))
+        Memory.write_i64(destination + offset + 8, Memory.read_i64(source + offset + 8))
+        Memory.write_i64(destination + offset + 16, Memory.read_i64(source + offset + 16))
+        Memory.write_i64(destination + offset + 24, Memory.read_i64(source + offset + 24))
+        offset = offset + 32
+    while offset + 8 <= size:
+        Memory.write_i64(destination + offset, Memory.read_i64(source + offset))
+        offset = offset + 8
+    while offset < size:
+        Memory.write_i8(destination + offset, Memory.read_i8(source + offset))
+        offset = offset + 1
 
 # Pick a memory type index matching type_bits and the requested property flags.
 fun gpu_tex_find_mem_type(phys_device: i64, type_bits: i32, want_flags: i32) -> i32:
@@ -182,7 +216,7 @@ fun gpu_tex_make_staging(device: i64, phys_device: i64, data: i64, size: i64, bu
     mapped: i64 = Memory.read_ptr(pp)
     Memory.free(pp)
     if mapped != 0:
-        Memory.copy(mapped, data, size)
+        gpu_tex_copy_bytes_fast(mapped, data, size)
     vkUnmapMemory(device, mem)
 
     Memory.write_ptr(buf_out, buf)
@@ -322,6 +356,43 @@ fun gpu_tex_end_oneshot(device: i64, cmd_pool: i64, gfx_queue: i64, cmd: i64):
     Memory.write_ptr(free_arr, cmd)
     vkFreeCommandBuffers(device, cmd_pool, 1, free_arr)
     Memory.free(free_arr)
+
+# Texture creation during scene setup is naturally bursty. Record every upload
+# in one command buffer and submit once before the first frame instead of
+# stalling the graphics queue once per texture.
+fun gpu_tex_batch_command(device: i64, cmd_pool: i64) -> i64:
+    if g_gpu_tex_batch_cmd != 0:
+        if g_gpu_tex_batch_device != device or g_gpu_tex_batch_pool != cmd_pool:
+            return 0
+        return g_gpu_tex_batch_cmd
+    cmd: i64 = gpu_tex_begin_oneshot(device, cmd_pool)
+    if cmd == 0:
+        return 0
+    g_gpu_tex_batch_cmd = cmd
+    g_gpu_tex_batch_device = device
+    g_gpu_tex_batch_pool = cmd_pool
+    return cmd
+
+fun gpu_tex_batch_hold(staging: i64, staging_memory: i64):
+    g_gpu_tex_batch_buffers.append(staging)
+    g_gpu_tex_batch_memories.append(staging_memory)
+
+fun gpu_tex_flush_pending(device: i64, cmd_pool: i64, gfx_queue: i64):
+    if g_gpu_tex_batch_cmd == 0:
+        return
+    if device != g_gpu_tex_batch_device or cmd_pool != g_gpu_tex_batch_pool:
+        return
+    gpu_tex_end_oneshot(device, cmd_pool, gfx_queue, g_gpu_tex_batch_cmd)
+    index: i64 = 0
+    while index < g_gpu_tex_batch_buffers.size():
+        vkDestroyBuffer(device, g_gpu_tex_batch_buffers.get(index), 0)
+        vkFreeMemory(device, g_gpu_tex_batch_memories.get(index), 0)
+        index = index + 1
+    g_gpu_tex_batch_buffers.clear()
+    g_gpu_tex_batch_memories.clear()
+    g_gpu_tex_batch_cmd = 0
+    g_gpu_tex_batch_device = 0
+    g_gpu_tex_batch_pool = 0
 
 # Record an image layout transition barrier on `cmd`.
 # VkImageMemoryBarrier (sType = 45). Offsets:
@@ -547,9 +618,27 @@ fun gpu_texture_upload_rgba_spec(device: i64, phys_device: i64, gfx_queue: i64, 
     Memory.free(img_out)
     Memory.free(imem_out)
 
+    view: i64 = gpu_tex_make_view_mips(device, image, fmt, mip_levels)
+    sampler: i64 = gpu_tex_make_sampler_mips(device, spec, mip_levels)
+    if view == 0:
+        vkDestroyImage(device, image, 0)
+        vkFreeMemory(device, image_mem, 0)
+        vkDestroyBuffer(device, staging, 0)
+        vkFreeMemory(device, staging_mem, 0)
+        return tex
+    if sampler == 0:
+        vkDestroyImageView(device, view, 0)
+        vkDestroyImage(device, image, 0)
+        vkFreeMemory(device, image_mem, 0)
+        vkDestroyBuffer(device, staging, 0)
+        vkFreeMemory(device, staging_mem, 0)
+        return tex
+
     # Record: UNDEFINED -> TRANSFER_DST, copy, optional mip chain, then SHADER_READ_ONLY.
-    cmd: i64 = gpu_tex_begin_oneshot(device, cmd_pool)
+    cmd: i64 = gpu_tex_batch_command(device, cmd_pool)
     if cmd == 0:
+        vkDestroySampler(device, sampler, 0)
+        vkDestroyImageView(device, view, 0)
         vkDestroyImage(device, image, 0)
         vkFreeMemory(device, image_mem, 0)
         vkDestroyBuffer(device, staging, 0)
@@ -561,22 +650,7 @@ fun gpu_texture_upload_rgba_spec(device: i64, phys_device: i64, gfx_queue: i64, 
     gpu_tex_barrier_level(cmd, image, 0, 1, 0, 7, 0, 4096, 1, 4096)
     gpu_tex_copy(cmd, staging, image, width, height)
     gpu_tex_generate_mips(cmd, image, width, height, mip_levels, spec.mipmap_filter)
-    gpu_tex_end_oneshot(device, cmd_pool, gfx_queue, cmd)
-
-    vkDestroyBuffer(device, staging, 0)
-    vkFreeMemory(device, staging_mem, 0)
-
-    view: i64 = gpu_tex_make_view_mips(device, image, fmt, mip_levels)
-    sampler: i64 = gpu_tex_make_sampler_mips(device, spec, mip_levels)
-    if view == 0:
-        vkDestroyImage(device, image, 0)
-        vkFreeMemory(device, image_mem, 0)
-        return tex
-    if sampler == 0:
-        vkDestroyImageView(device, view, 0)
-        vkDestroyImage(device, image, 0)
-        vkFreeMemory(device, image_mem, 0)
-        return tex
+    gpu_tex_batch_hold(staging, staging_mem)
 
     tex.image = image
     tex.memory = image_mem
