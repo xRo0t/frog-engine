@@ -235,6 +235,18 @@ fun gpu_tex_mip_count(width: i32, height: i32) -> i32:
         levels = levels + 1
     return levels
 
+fun gpu_tex_format_supported(phys_device: i64, format: i32) -> i32:
+    properties: i64 = Memory.malloc_zeroed(12)
+    if properties == 0:
+        return 0
+    vkGetPhysicalDeviceFormatProperties(phys_device, format as i64, properties)
+    optimal_features: i32 = Memory.read_i32(properties + 4)
+    Memory.free(properties)
+    # VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT
+    if (optimal_features & 1) == 0:
+        return 0
+    return 1
+
 # Create a device-local VkImage with caller-provided usage flags and mip count.
 # Writes the image + memory to out pointers. Returns 1 on success.
 fun gpu_make_image_usage_mips(device: i64, phys_device: i64, width: i32, height: i32, fmt: i32, usage: i32, mip_levels: i32, img_out: i64, mem_out: i64) -> i32:
@@ -444,6 +456,26 @@ fun gpu_tex_copy(cmd: i64, staging: i64, image: i64, width: i32, height: i32):
     vkCmdCopyBufferToImage(cmd, staging, image, 7, 1, region)
     Memory.free(region)
 
+fun gpu_tex_copy_cooked_levels(cmd: i64, staging: i64, image: i64, cooked: CookedTexture, mip_levels: i32):
+    if mip_levels <= 0:
+        return
+    regions: i64 = Memory.malloc_zeroed((mip_levels as i64) * 56)
+    if regions == 0:
+        return
+    level: i32 = 0
+    while level < mip_levels:
+        region: i64 = regions + (level as i64) * 56
+        Memory.write_i64(region, cooked.level_offset(level))
+        Memory.write_i32(region + 16, 1)      # ASPECT_COLOR
+        Memory.write_i32(region + 20, level)  # mipLevel
+        Memory.write_i32(region + 28, 1)      # layerCount
+        Memory.write_i32(region + 44, cooked.level_width(level))
+        Memory.write_i32(region + 48, cooked.level_height(level))
+        Memory.write_i32(region + 52, 1)
+        level = level + 1
+    vkCmdCopyBufferToImage(cmd, staging, image, 7, mip_levels, regions)
+    Memory.free(regions)
+
 fun gpu_tex_blit_mip(cmd: i64, image: i64, src_level: i32, dst_level: i32, src_width: i32, src_height: i32, dst_width: i32, dst_height: i32, filter: i32):
     # VkImageBlit = srcSubresource + srcOffsets[2] + dstSubresource + dstOffsets[2].
     blit: i64 = Memory.malloc_zeroed(80)
@@ -492,7 +524,7 @@ fun gpu_tex_generate_mips(cmd: i64, image: i64, width: i32, height: i32, mip_lev
     gpu_tex_barrier_level(cmd, image, mip_levels - 1, 1, 7, 5, 4096, 32, 4096, 128)
 
 # Create a VkImageView (2D, color format from spec) for the texture image.
-fun gpu_make_image_view_aspect_mips(device: i64, image: i64, fmt: i32, aspect: i32, mip_levels: i32) -> i64:
+fun gpu_make_image_view_aspect_mips_swizzle(device: i64, image: i64, fmt: i32, aspect: i32, mip_levels: i32, swizzle: i32) -> i64:
     # VkImageViewCreateInfo (sType = 15). Offsets:
     #  0 sType, 8 pNext, 16 flags, 24 image, 32 viewType, 36 format,
     # 40 components {r,g,b,a = 40,44,48,52}, 56 subresourceRange
@@ -507,6 +539,13 @@ fun gpu_make_image_view_aspect_mips(device: i64, image: i64, fmt: i32, aspect: i
     Memory.write_ptr(ci + 24, image)
     Memory.write_i32(ci + 32, 1)        # VIEW_TYPE_2D
     Memory.write_i32(ci + 36, fmt)      # FORMAT (must match the image)
+    if swizzle == FROG_TEXTURE_SWIZZLE_GB_FROM_RG:
+        # VkComponentSwizzle: ZERO=1, ONE=2, R=3, G=4.
+        # glTF metallic-roughness expects roughness in G and metallic in B.
+        Memory.write_i32(ci + 40, 1)
+        Memory.write_i32(ci + 44, 3)
+        Memory.write_i32(ci + 48, 4)
+        Memory.write_i32(ci + 52, 2)
     Memory.write_i32(ci + 56, aspect)
     Memory.write_i32(ci + 60, 0)
     Memory.write_i32(ci + 64, levels)     # levelCount
@@ -521,11 +560,17 @@ fun gpu_make_image_view_aspect_mips(device: i64, image: i64, fmt: i32, aspect: i
         return 0
     return view
 
+fun gpu_make_image_view_aspect_mips(device: i64, image: i64, fmt: i32, aspect: i32, mip_levels: i32) -> i64:
+    return gpu_make_image_view_aspect_mips_swizzle(device, image, fmt, aspect, mip_levels, FROG_TEXTURE_SWIZZLE_IDENTITY)
+
 fun gpu_make_image_view_aspect(device: i64, image: i64, fmt: i32, aspect: i32) -> i64:
     return gpu_make_image_view_aspect_mips(device, image, fmt, aspect, 1)
 
 fun gpu_tex_make_view_mips(device: i64, image: i64, fmt: i32, mip_levels: i32) -> i64:
     return gpu_make_image_view_aspect_mips(device, image, fmt, 1, mip_levels)
+
+fun gpu_tex_make_view_cooked(device: i64, image: i64, fmt: i32, mip_levels: i32, swizzle: i32) -> i64:
+    return gpu_make_image_view_aspect_mips_swizzle(device, image, fmt, 1, mip_levels, swizzle)
 
 fun gpu_tex_make_view(device: i64, image: i64, fmt: i32) -> i64:
     return gpu_make_image_view_aspect(device, image, fmt, 1)
@@ -576,6 +621,76 @@ fun gpu_tex_make_sampler(device: i64, spec: TextureSpec) -> i64:
     return gpu_tex_make_sampler_mips(device, spec, 1)
 
 # ---- public upload --------------------------------------------------------
+
+fun gpu_texture_upload_cooked_spec(device: i64, phys_device: i64, gfx_queue: i64, cmd_pool: i64, cooked: CookedTexture, spec: TextureSpec) -> GpuTexture:
+    tex: GpuTexture = GpuTexture()
+    if cooked.valid == 0 or cooked.pixels == 0 or cooked.size <= 0:
+        return tex
+    format: i32 = cooked.vk_format(spec.srgb)
+    if gpu_tex_format_supported(phys_device, format) == 0:
+        return tex
+    mip_levels: i32 = 1
+    if spec.wants_mipmaps() == 1:
+        mip_levels = cooked.mip_count
+    upload_size: i64 = cooked.level_size(0)
+    if mip_levels > 1:
+        upload_size = cooked.size
+    buf_out: i64 = Memory.malloc_zeroed(8)
+    mem_out: i64 = Memory.malloc_zeroed(8)
+    if gpu_tex_make_staging(device, phys_device, cooked.pixels, upload_size, buf_out, mem_out) == 0:
+        Memory.free(buf_out)
+        Memory.free(mem_out)
+        return tex
+    staging: i64 = Memory.read_ptr(buf_out)
+    staging_mem: i64 = Memory.read_ptr(mem_out)
+    Memory.free(buf_out)
+    Memory.free(mem_out)
+    img_out: i64 = Memory.malloc_zeroed(8)
+    imem_out: i64 = Memory.malloc_zeroed(8)
+    if gpu_make_image_usage_mips(device, phys_device, cooked.width, cooked.height, format, 6, mip_levels, img_out, imem_out) == 0:
+        Memory.free(img_out)
+        Memory.free(imem_out)
+        vkDestroyBuffer(device, staging, 0)
+        vkFreeMemory(device, staging_mem, 0)
+        return tex
+    image: i64 = Memory.read_ptr(img_out)
+    image_mem: i64 = Memory.read_ptr(imem_out)
+    Memory.free(img_out)
+    Memory.free(imem_out)
+    view: i64 = gpu_tex_make_view_cooked(device, image, format, mip_levels, cooked.swizzle)
+    sampler: i64 = gpu_tex_make_sampler_mips(device, spec, mip_levels)
+    if view == 0 or sampler == 0:
+        if sampler != 0:
+            vkDestroySampler(device, sampler, 0)
+        if view != 0:
+            vkDestroyImageView(device, view, 0)
+        vkDestroyImage(device, image, 0)
+        vkFreeMemory(device, image_mem, 0)
+        vkDestroyBuffer(device, staging, 0)
+        vkFreeMemory(device, staging_mem, 0)
+        return tex
+    cmd: i64 = gpu_tex_batch_command(device, cmd_pool)
+    if cmd == 0:
+        vkDestroySampler(device, sampler, 0)
+        vkDestroyImageView(device, view, 0)
+        vkDestroyImage(device, image, 0)
+        vkFreeMemory(device, image_mem, 0)
+        vkDestroyBuffer(device, staging, 0)
+        vkFreeMemory(device, staging_mem, 0)
+        return tex
+    gpu_tex_barrier_level(cmd, image, 0, mip_levels, 0, 7, 0, 4096, 1, 4096)
+    gpu_tex_copy_cooked_levels(cmd, staging, image, cooked, mip_levels)
+    gpu_tex_barrier_level(cmd, image, 0, mip_levels, 7, 5, 4096, 32, 4096, 128)
+    gpu_tex_batch_hold(staging, staging_mem)
+    tex.image = image
+    tex.memory = image_mem
+    tex.view = view
+    tex.sampler = sampler
+    tex.width = cooked.width
+    tex.height = cooked.height
+    tex.mip_levels = mip_levels
+    tex.ok = 1
+    return tex
 
 # Upload raw RGBA8 pixel data (width*height*4 bytes) to a sampled GpuTexture,
 # using `spec` for format (sRGB/linear), filtering, and wrapping.

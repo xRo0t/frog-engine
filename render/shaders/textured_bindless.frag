@@ -514,7 +514,9 @@ void main() {
         }
 
         if (hasNormalMap() > 0.5) {
-            vec3 sampledNormal = sampleNormalMap(fragmentUv).xyz * 2.0 - 1.0;
+            vec2 sampledXY = sampleNormalMap(fragmentUv).xy * 2.0 - 1.0;
+            float sampledZ = sqrt(max(1.0 - dot(sampledXY, sampledXY), 0.0));
+            vec3 sampledNormal = vec3(sampledXY, sampledZ);
             normal = normalize(normalMapFrame(normal, fragmentWorldPosition, fragmentUv) * sampledNormal);
         }
 

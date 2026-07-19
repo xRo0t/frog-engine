@@ -1,0 +1,686 @@
+##############################
+# Frog Texture Cooker v2
+# Pure-Dolet offline mip generation and GPU-native block compression.
+##############################
+
+imm COOK_TEXTURE_MAGIC: i32 = 0x58455446
+imm COOK_TEXTURE_VERSION: i32 = 2
+imm COOK_TEXTURE_HEADER_SIZE: i64 = 64
+imm COOK_TEXTURE_LEVEL_SIZE: i64 = 16
+
+imm COOK_TEXTURE_FORMAT_RGBA8: i32 = 1
+imm COOK_TEXTURE_FORMAT_BC7: i32 = 2
+imm COOK_TEXTURE_FORMAT_BC5: i32 = 3
+imm COOK_TEXTURE_FORMAT_BC4: i32 = 4
+
+imm COOK_TEXTURE_KIND_AUTO: i32 = 0
+imm COOK_TEXTURE_KIND_COLOR: i32 = 1
+imm COOK_TEXTURE_KIND_NORMAL: i32 = 2
+imm COOK_TEXTURE_KIND_METALLIC_ROUGHNESS: i32 = 3
+imm COOK_TEXTURE_KIND_OCCLUSION: i32 = 4
+imm COOK_TEXTURE_KIND_DATA: i32 = 5
+imm COOK_TEXTURE_KIND_LOSSLESS: i32 = 6
+
+imm COOK_TEXTURE_SWIZZLE_IDENTITY: i32 = 0
+imm COOK_TEXTURE_SWIZZLE_GB_FROM_RG: i32 = 1
+
+g_cook_texture_linear_lut: i64 = 0
+
+struct CookBc7Endpoint:
+    r: i32 = 0
+    g: i32 = 0
+    b: i32 = 0
+    a: i32 = 0
+    p: i32 = 0
+
+struct CookBc7Endpoints:
+    first: CookBc7Endpoint = CookBc7Endpoint()
+    second: CookBc7Endpoint = CookBc7Endpoint()
+
+fun cook_texture_align16(value: i64) -> i64:
+    remainder: i64 = value % 16
+    if remainder == 0:
+        return value
+    return value + (16 - remainder)
+
+fun cook_texture_mip_count(width: i32, height: i32) -> i32:
+    count: i32 = 1
+    w: i32 = width
+    h: i32 = height
+    while w > 1 or h > 1:
+        if w > 1:
+            w = w / 2
+        if h > 1:
+            h = h / 2
+        count = count + 1
+    return count
+
+fun cook_texture_level_size(width: i32, height: i32, format: i32) -> i64:
+    if format == COOK_TEXTURE_FORMAT_RGBA8:
+        return (width as i64) * (height as i64) * 4
+    blocks_x: i64 = ((width + 3) / 4) as i64
+    blocks_y: i64 = ((height + 3) / 4) as i64
+    block_size: i64 = 16
+    if format == COOK_TEXTURE_FORMAT_BC4:
+        block_size = 8
+    return blocks_x * blocks_y * block_size
+
+fun cook_texture_channel(image: Image, x: i32, y: i32, channel: i32) -> i32:
+    px: i32 = x
+    py: i32 = y
+    if px < 0:
+        px = 0
+    if py < 0:
+        py = 0
+    if px >= image.width:
+        px = image.width - 1
+    if py >= image.height:
+        py = image.height - 1
+    offset: i64 = (py as i64) * (image.stride as i64) + (px as i64) * 4 + (channel as i64)
+    return (Memory.read_i8(image.data + offset) as i32) & 255
+
+fun cook_texture_write_channel(image: Image, x: i32, y: i32, channel: i32, value: i32):
+    offset: i64 = (y as i64) * (image.stride as i64) + (x as i64) * 4 + (channel as i64)
+    clamped: i32 = value
+    if clamped < 0:
+        clamped = 0
+    if clamped > 255:
+        clamped = 255
+    Memory.write_i8(image.data + offset, clamped as i8)
+
+fun cook_texture_sqrt(value: f64) -> f64:
+    if value <= 0.0:
+        return 0.0
+    estimate: f64 = value
+    if estimate < 1.0:
+        estimate = 1.0
+    iteration: i32 = 0
+    while iteration < 10:
+        estimate = 0.5 * (estimate + value / estimate)
+        iteration = iteration + 1
+    return estimate
+
+fun cook_texture_init_linear_lut():
+    if g_cook_texture_linear_lut != 0:
+        return
+    g_cook_texture_linear_lut = Memory.malloc_zeroed(256 * 8)
+    if g_cook_texture_linear_lut == 0:
+        cook_fail("out of memory creating sRGB mipmap table")
+    index: i32 = 0
+    while index < 256:
+        encoded: f64 = (index as f64) / 255.0
+        linear: f64 = 0.0
+        if encoded <= 0.04045:
+            linear = encoded / 12.92
+        else:
+            # Accurate cubic sRGB-to-linear approximation; avoids platform math calls
+            # in the standalone cooker while remaining monotonic over 0..1.
+            linear = encoded * (encoded * (encoded * 0.305306011 + 0.682171111) + 0.012522878)
+        Memory.write_f64(g_cook_texture_linear_lut + (index as i64) * 8, linear)
+        index = index + 1
+
+fun cook_texture_linear_to_srgb(linear: f64) -> i32:
+    if linear <= 0.0:
+        return 0
+    if linear >= 1.0:
+        return 255
+    low: i32 = 0
+    high: i32 = 255
+    while low + 1 < high:
+        middle: i32 = (low + high) / 2
+        candidate: f64 = Memory.read_f64(g_cook_texture_linear_lut + (middle as i64) * 8)
+        if candidate < linear:
+            low = middle
+        else:
+            high = middle
+    low_value: f64 = Memory.read_f64(g_cook_texture_linear_lut + (low as i64) * 8)
+    high_value: f64 = Memory.read_f64(g_cook_texture_linear_lut + (high as i64) * 8)
+    low_error: f64 = linear - low_value
+    high_error: f64 = high_value - linear
+    if high_error < low_error:
+        return high
+    return low
+
+fun cook_texture_next_mip(source: Image, kind: i32) -> Image:
+    width: i32 = source.width / 2
+    height: i32 = source.height / 2
+    if width < 1:
+        width = 1
+    if height < 1:
+        height = 1
+    result: Image = Image.create(width, height)
+    if result.is_valid() == 0:
+        cook_fail("out of memory creating texture mip")
+    if kind == COOK_TEXTURE_KIND_COLOR or kind == COOK_TEXTURE_KIND_LOSSLESS:
+        cook_texture_init_linear_lut()
+    y: i32 = 0
+    while y < height:
+        x: i32 = 0
+        while x < width:
+            source_x: i32 = x * 2
+            source_y: i32 = y * 2
+            if kind == COOK_TEXTURE_KIND_NORMAL:
+                nx: f64 = 0.0
+                ny: f64 = 0.0
+                nz: f64 = 0.0
+                alpha: i32 = 0
+                sample: i32 = 0
+                while sample < 4:
+                    sx: i32 = source_x + (sample % 2)
+                    sy: i32 = source_y + (sample / 2)
+                    r: f64 = (cook_texture_channel(source, sx, sy, 0) as f64) / 127.5 - 1.0
+                    g: f64 = (cook_texture_channel(source, sx, sy, 1) as f64) / 127.5 - 1.0
+                    b: f64 = (cook_texture_channel(source, sx, sy, 2) as f64) / 127.5 - 1.0
+                    nx = nx + r
+                    ny = ny + g
+                    nz = nz + b
+                    alpha = alpha + cook_texture_channel(source, sx, sy, 3)
+                    sample = sample + 1
+                length: f64 = cook_texture_sqrt(nx * nx + ny * ny + nz * nz)
+                if length <= 0.000001:
+                    nx = 0.0
+                    ny = 0.0
+                    nz = 1.0
+                else:
+                    nx = nx / length
+                    ny = ny / length
+                    nz = nz / length
+                cook_texture_write_channel(result, x, y, 0, ((nx * 0.5 + 0.5) * 255.0 + 0.5) as i32)
+                cook_texture_write_channel(result, x, y, 1, ((ny * 0.5 + 0.5) * 255.0 + 0.5) as i32)
+                cook_texture_write_channel(result, x, y, 2, ((nz * 0.5 + 0.5) * 255.0 + 0.5) as i32)
+                cook_texture_write_channel(result, x, y, 3, (alpha + 2) / 4)
+            else:
+                channel: i32 = 0
+                while channel < 4:
+                    if channel < 3 and (kind == COOK_TEXTURE_KIND_COLOR or kind == COOK_TEXTURE_KIND_LOSSLESS):
+                        linear_sum: f64 = 0.0
+                        sample: i32 = 0
+                        while sample < 4:
+                            value: i32 = cook_texture_channel(source, source_x + (sample % 2), source_y + (sample / 2), channel)
+                            linear_sum = linear_sum + Memory.read_f64(g_cook_texture_linear_lut + (value as i64) * 8)
+                            sample = sample + 1
+                        cook_texture_write_channel(result, x, y, channel, cook_texture_linear_to_srgb(linear_sum * 0.25))
+                    else:
+                        total: i32 = 0
+                        sample: i32 = 0
+                        while sample < 4:
+                            total = total + cook_texture_channel(source, source_x + (sample % 2), source_y + (sample / 2), channel)
+                            sample = sample + 1
+                        cook_texture_write_channel(result, x, y, channel, (total + 2) / 4)
+                    channel = channel + 1
+            x = x + 1
+        y = y + 1
+    return result
+
+fun cook_texture_put_bits(block: i64, position: i32, value: i64, count: i32):
+    if count <= 0:
+        return
+    mask: i64 = ((1 as i64) << count) - 1
+    bits: i64 = value & mask
+    if position < 64:
+        low: i64 = Memory.read_i64(block)
+        low = low | (bits << position)
+        Memory.write_i64(block, low)
+        if position + count > 64:
+            high: i64 = Memory.read_i64(block + 8)
+            high = high | (bits >> (64 - position))
+            Memory.write_i64(block + 8, high)
+    else:
+        high: i64 = Memory.read_i64(block + 8)
+        high = high | (bits << (position - 64))
+        Memory.write_i64(block + 8, high)
+
+fun cook_texture_bc4_value(endpoint0: i32, endpoint1: i32, index: i32) -> i32:
+    if index == 0:
+        return endpoint0
+    if index == 1:
+        return endpoint1
+    if endpoint0 > endpoint1:
+        return (((8 - index) * endpoint0 + (index - 1) * endpoint1 + 3) / 7)
+    if index == 6:
+        return 0
+    if index == 7:
+        return 255
+    return (((6 - index) * endpoint0 + (index - 1) * endpoint1 + 2) / 5)
+
+fun cook_texture_encode_bc4_block(image: Image, block_x: i32, block_y: i32, channel: i32, output: i64):
+    Memory.write_i64(output, 0)
+    minimum: i32 = 255
+    maximum: i32 = 0
+    pixel: i32 = 0
+    while pixel < 16:
+        value: i32 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), channel)
+        if value < minimum:
+            minimum = value
+        if value > maximum:
+            maximum = value
+        pixel = pixel + 1
+    endpoint0: i32 = maximum
+    endpoint1: i32 = minimum
+    Memory.write_i8(output, endpoint0 as i8)
+    Memory.write_i8(output + 1, endpoint1 as i8)
+    pixel = 0
+    while pixel < 16:
+        source_value: i32 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), channel)
+        best_index: i32 = 0
+        best_error: i32 = 2147483647
+        index: i32 = 0
+        while index < 8:
+            decoded: i32 = cook_texture_bc4_value(endpoint0, endpoint1, index)
+            delta: i32 = source_value - decoded
+            error: i32 = delta * delta
+            if error < best_error:
+                best_error = error
+                best_index = index
+            index = index + 1
+        cook_texture_put_bits(output, 16 + pixel * 3, best_index as i64, 3)
+        pixel = pixel + 1
+
+fun cook_texture_bc7_quantize(r: i32, g: i32, b: i32, a: i32) -> CookBc7Endpoint:
+    best: CookBc7Endpoint = CookBc7Endpoint()
+    best_error: i32 = 2147483647
+    p: i32 = 0
+    while p < 2:
+        qr: i32 = (r - p + 1) / 2
+        qg: i32 = (g - p + 1) / 2
+        qb: i32 = (b - p + 1) / 2
+        qa: i32 = (a - p + 1) / 2
+        if qr < 0:
+            qr = 0
+        if qg < 0:
+            qg = 0
+        if qb < 0:
+            qb = 0
+        if qa < 0:
+            qa = 0
+        if qr > 127:
+            qr = 127
+        if qg > 127:
+            qg = 127
+        if qb > 127:
+            qb = 127
+        if qa > 127:
+            qa = 127
+        dr: i32 = r - (qr * 2 + p)
+        dg: i32 = g - (qg * 2 + p)
+        db: i32 = b - (qb * 2 + p)
+        da: i32 = a - (qa * 2 + p)
+        error: i32 = dr * dr + dg * dg + db * db + da * da
+        if error < best_error:
+            best_error = error
+            best = CookBc7Endpoint(r=qr, g=qg, b=qb, a=qa, p=p)
+        p = p + 1
+    return best
+
+fun cook_texture_bc7_weight(index: i32) -> i32:
+    if index == 0:
+        return 0
+    if index == 1:
+        return 4
+    if index == 2:
+        return 9
+    if index == 3:
+        return 13
+    if index == 4:
+        return 17
+    if index == 5:
+        return 21
+    if index == 6:
+        return 26
+    if index == 7:
+        return 30
+    if index == 8:
+        return 34
+    if index == 9:
+        return 38
+    if index == 10:
+        return 43
+    if index == 11:
+        return 47
+    if index == 12:
+        return 51
+    if index == 13:
+        return 55
+    if index == 14:
+        return 60
+    return 64
+
+fun cook_texture_bc7_index(image: Image, block_x: i32, block_y: i32, pixel: i32, endpoint0: CookBc7Endpoint, endpoint1: CookBc7Endpoint) -> i32:
+    source_r: i32 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 0)
+    source_g: i32 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 1)
+    source_b: i32 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 2)
+    source_a: i32 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 3)
+    r0: i32 = endpoint0.r * 2 + endpoint0.p
+    g0: i32 = endpoint0.g * 2 + endpoint0.p
+    b0: i32 = endpoint0.b * 2 + endpoint0.p
+    a0: i32 = endpoint0.a * 2 + endpoint0.p
+    r1: i32 = endpoint1.r * 2 + endpoint1.p
+    g1: i32 = endpoint1.g * 2 + endpoint1.p
+    b1: i32 = endpoint1.b * 2 + endpoint1.p
+    a1: i32 = endpoint1.a * 2 + endpoint1.p
+    best_index: i32 = 0
+    best_error: i32 = 2147483647
+    index: i32 = 0
+    while index < 16:
+        weight: i32 = cook_texture_bc7_weight(index)
+        decoded_r: i32 = ((64 - weight) * r0 + weight * r1 + 32) / 64
+        decoded_g: i32 = ((64 - weight) * g0 + weight * g1 + 32) / 64
+        decoded_b: i32 = ((64 - weight) * b0 + weight * b1 + 32) / 64
+        decoded_a: i32 = ((64 - weight) * a0 + weight * a1 + 32) / 64
+        dr: i32 = source_r - decoded_r
+        dg: i32 = source_g - decoded_g
+        db: i32 = source_b - decoded_b
+        da: i32 = source_a - decoded_a
+        error: i32 = dr * dr + dg * dg + db * db + da * da
+        if error < best_error:
+            best_error = error
+            best_index = index
+        index = index + 1
+    return best_index
+
+fun cook_texture_bc7_solve(p: i64, q: i64, aa: i64, ab: i64, bb: i64, determinant: i64, first: i32) -> i32:
+    numerator: i64 = 0
+    if first == 1:
+        numerator = 64 * (p * bb - q * ab)
+    else:
+        numerator = 64 * (q * aa - p * ab)
+    value: i64 = 0
+    if numerator >= 0:
+        value = (numerator + determinant / 2) / determinant
+    else:
+        value = (numerator - determinant / 2) / determinant
+    if value < 0:
+        value = 0
+    if value > 255:
+        value = 255
+    return value as i32
+
+fun cook_texture_bc7_refine(image: Image, block_x: i32, block_y: i32, endpoint0: CookBc7Endpoint, endpoint1: CookBc7Endpoint) -> CookBc7Endpoints:
+    aa: i64 = 0
+    ab: i64 = 0
+    bb: i64 = 0
+    pr: i64 = 0
+    pg: i64 = 0
+    pb: i64 = 0
+    pa: i64 = 0
+    qr: i64 = 0
+    qg: i64 = 0
+    qb: i64 = 0
+    qa: i64 = 0
+    pixel: i32 = 0
+    while pixel < 16:
+        index: i32 = cook_texture_bc7_index(image, block_x, block_y, pixel, endpoint0, endpoint1)
+        right: i64 = cook_texture_bc7_weight(index) as i64
+        left: i64 = 64 - right
+        r: i64 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 0) as i64
+        g: i64 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 1) as i64
+        b: i64 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 2) as i64
+        a: i64 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 3) as i64
+        aa = aa + left * left
+        ab = ab + left * right
+        bb = bb + right * right
+        pr = pr + left * r
+        pg = pg + left * g
+        pb = pb + left * b
+        pa = pa + left * a
+        qr = qr + right * r
+        qg = qg + right * g
+        qb = qb + right * b
+        qa = qa + right * a
+        pixel = pixel + 1
+    determinant: i64 = aa * bb - ab * ab
+    if determinant <= 0:
+        return CookBc7Endpoints(first=endpoint0, second=endpoint1)
+    first_r: i32 = cook_texture_bc7_solve(pr, qr, aa, ab, bb, determinant, 1)
+    first_g: i32 = cook_texture_bc7_solve(pg, qg, aa, ab, bb, determinant, 1)
+    first_b: i32 = cook_texture_bc7_solve(pb, qb, aa, ab, bb, determinant, 1)
+    first_a: i32 = cook_texture_bc7_solve(pa, qa, aa, ab, bb, determinant, 1)
+    second_r: i32 = cook_texture_bc7_solve(pr, qr, aa, ab, bb, determinant, 0)
+    second_g: i32 = cook_texture_bc7_solve(pg, qg, aa, ab, bb, determinant, 0)
+    second_b: i32 = cook_texture_bc7_solve(pb, qb, aa, ab, bb, determinant, 0)
+    second_a: i32 = cook_texture_bc7_solve(pa, qa, aa, ab, bb, determinant, 0)
+    return CookBc7Endpoints(
+        first=cook_texture_bc7_quantize(first_r, first_g, first_b, first_a),
+        second=cook_texture_bc7_quantize(second_r, second_g, second_b, second_a)
+    )
+
+fun cook_texture_encode_bc7_block(image: Image, block_x: i32, block_y: i32, output: i64):
+    Memory.write_i64(output, 0)
+    Memory.write_i64(output + 8, 0)
+    min_r: i32 = 255
+    min_g: i32 = 255
+    min_b: i32 = 255
+    min_a: i32 = 255
+    max_r: i32 = 0
+    max_g: i32 = 0
+    max_b: i32 = 0
+    max_a: i32 = 0
+    pixel: i32 = 0
+    while pixel < 16:
+        r: i32 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 0)
+        g: i32 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 1)
+        b: i32 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 2)
+        a: i32 = cook_texture_channel(image, block_x * 4 + (pixel % 4), block_y * 4 + (pixel / 4), 3)
+        if r < min_r:
+            min_r = r
+        if g < min_g:
+            min_g = g
+        if b < min_b:
+            min_b = b
+        if a < min_a:
+            min_a = a
+        if r > max_r:
+            max_r = r
+        if g > max_g:
+            max_g = g
+        if b > max_b:
+            max_b = b
+        if a > max_a:
+            max_a = a
+        pixel = pixel + 1
+    endpoint0: CookBc7Endpoint = cook_texture_bc7_quantize(max_r, max_g, max_b, max_a)
+    endpoint1: CookBc7Endpoint = cook_texture_bc7_quantize(min_r, min_g, min_b, min_a)
+    refinement: i32 = 0
+    while refinement < 2:
+        refined: CookBc7Endpoints = cook_texture_bc7_refine(image, block_x, block_y, endpoint0, endpoint1)
+        endpoint0 = refined.first
+        endpoint1 = refined.second
+        refinement = refinement + 1
+    anchor: i32 = cook_texture_bc7_index(image, block_x, block_y, 0, endpoint0, endpoint1)
+    if anchor >= 8:
+        swap: CookBc7Endpoint = endpoint0
+        endpoint0 = endpoint1
+        endpoint1 = swap
+    position: i32 = 0
+    cook_texture_put_bits(output, position, 64, 7)
+    position = position + 7
+    cook_texture_put_bits(output, position, endpoint0.r as i64, 7)
+    position = position + 7
+    cook_texture_put_bits(output, position, endpoint1.r as i64, 7)
+    position = position + 7
+    cook_texture_put_bits(output, position, endpoint0.g as i64, 7)
+    position = position + 7
+    cook_texture_put_bits(output, position, endpoint1.g as i64, 7)
+    position = position + 7
+    cook_texture_put_bits(output, position, endpoint0.b as i64, 7)
+    position = position + 7
+    cook_texture_put_bits(output, position, endpoint1.b as i64, 7)
+    position = position + 7
+    cook_texture_put_bits(output, position, endpoint0.a as i64, 7)
+    position = position + 7
+    cook_texture_put_bits(output, position, endpoint1.a as i64, 7)
+    position = position + 7
+    cook_texture_put_bits(output, position, endpoint0.p as i64, 1)
+    position = position + 1
+    cook_texture_put_bits(output, position, endpoint1.p as i64, 1)
+    position = position + 1
+    pixel = 0
+    while pixel < 16:
+        index: i32 = cook_texture_bc7_index(image, block_x, block_y, pixel, endpoint0, endpoint1)
+        bits: i32 = 4
+        if pixel == 0:
+            bits = 3
+        cook_texture_put_bits(output, position, index as i64, bits)
+        position = position + bits
+        pixel = pixel + 1
+
+fun cook_texture_encode_level(image: Image, format: i32, kind: i32, output: i64):
+    if format == COOK_TEXTURE_FORMAT_RGBA8:
+        Memory.copy(output, image.data, image.byte_size())
+        return
+    blocks_x: i32 = (image.width + 3) / 4
+    blocks_y: i32 = (image.height + 3) / 4
+    block_size: i64 = 16
+    if format == COOK_TEXTURE_FORMAT_BC4:
+        block_size = 8
+    block_y: i32 = 0
+    while block_y < blocks_y:
+        block_x: i32 = 0
+        while block_x < blocks_x:
+            destination: i64 = output + ((block_y as i64) * (blocks_x as i64) + (block_x as i64)) * block_size
+            if format == COOK_TEXTURE_FORMAT_BC7:
+                cook_texture_encode_bc7_block(image, block_x, block_y, destination)
+            elif format == COOK_TEXTURE_FORMAT_BC5:
+                first_channel: i32 = 0
+                second_channel: i32 = 1
+                if kind == COOK_TEXTURE_KIND_METALLIC_ROUGHNESS:
+                    first_channel = 1
+                    second_channel = 2
+                cook_texture_encode_bc4_block(image, block_x, block_y, first_channel, destination)
+                cook_texture_encode_bc4_block(image, block_x, block_y, second_channel, destination + 8)
+            else:
+                cook_texture_encode_bc4_block(image, block_x, block_y, 0, destination)
+            block_x = block_x + 1
+        block_y = block_y + 1
+
+fun cook_texture_infer_kind(source: str, requested: i32) -> i32:
+    if requested != COOK_TEXTURE_KIND_AUTO:
+        return requested
+    lower: str = Str.to_lower(source)
+    kind: i32 = COOK_TEXTURE_KIND_COLOR
+    if Str.contains(lower, "normal"):
+        kind = COOK_TEXTURE_KIND_NORMAL
+    elif Str.contains(lower, "metallicroughness") or Str.contains(lower, "metallic_roughness") or Str.contains(lower, "metallic-roughness"):
+        kind = COOK_TEXTURE_KIND_METALLIC_ROUGHNESS
+    elif Str.contains(lower, "occlusion") or Str.contains(lower, "ambientocclusion") or Str.contains(lower, "_ao.") or Str.contains(lower, "_ao_"):
+        kind = COOK_TEXTURE_KIND_OCCLUSION
+    Memory.free(lower as i64)
+    return kind
+
+fun cook_texture_kind_from_name(name: str) -> i32:
+    lower: str = Str.to_lower(name)
+    result: i32 = 0 - 1
+    if Str.equals(lower, "auto"):
+        result = COOK_TEXTURE_KIND_AUTO
+    elif Str.equals(lower, "color") or Str.equals(lower, "albedo") or Str.equals(lower, "emission"):
+        result = COOK_TEXTURE_KIND_COLOR
+    elif Str.equals(lower, "normal"):
+        result = COOK_TEXTURE_KIND_NORMAL
+    elif Str.equals(lower, "metallic-roughness") or Str.equals(lower, "metallicroughness") or Str.equals(lower, "mr"):
+        result = COOK_TEXTURE_KIND_METALLIC_ROUGHNESS
+    elif Str.equals(lower, "occlusion") or Str.equals(lower, "ao"):
+        result = COOK_TEXTURE_KIND_OCCLUSION
+    elif Str.equals(lower, "data"):
+        result = COOK_TEXTURE_KIND_DATA
+    elif Str.equals(lower, "lossless") or Str.equals(lower, "rgba8"):
+        result = COOK_TEXTURE_KIND_LOSSLESS
+    Memory.free(lower as i64)
+    return result
+
+fun cook_texture_format_name(format: i32) -> str:
+    if format == COOK_TEXTURE_FORMAT_BC7:
+        return "BC7"
+    if format == COOK_TEXTURE_FORMAT_BC5:
+        return "BC5"
+    if format == COOK_TEXTURE_FORMAT_BC4:
+        return "BC4"
+    return "RGBA8"
+
+fun cook_texture_v2(source: str, output: str, requested_kind: i32):
+    image: Image = PNG.load(source)
+    if image.is_valid() == 0:
+        cook_fail(@"could not decode texture: {source}")
+    texture_width: i32 = image.width
+    texture_height: i32 = image.height
+    kind: i32 = cook_texture_infer_kind(source, requested_kind)
+    format: i32 = COOK_TEXTURE_FORMAT_BC7
+    swizzle: i32 = COOK_TEXTURE_SWIZZLE_IDENTITY
+    if kind == COOK_TEXTURE_KIND_NORMAL:
+        format = COOK_TEXTURE_FORMAT_BC5
+    elif kind == COOK_TEXTURE_KIND_METALLIC_ROUGHNESS:
+        format = COOK_TEXTURE_FORMAT_BC5
+        swizzle = COOK_TEXTURE_SWIZZLE_GB_FROM_RG
+    elif kind == COOK_TEXTURE_KIND_OCCLUSION:
+        format = COOK_TEXTURE_FORMAT_BC4
+    elif kind == COOK_TEXTURE_KIND_LOSSLESS:
+        format = COOK_TEXTURE_FORMAT_RGBA8
+    mip_count: i32 = cook_texture_mip_count(texture_width, texture_height)
+    table_offset: i64 = COOK_TEXTURE_HEADER_SIZE
+    data_offset: i64 = cook_texture_align16(table_offset + (mip_count as i64) * COOK_TEXTURE_LEVEL_SIZE)
+    data_size: i64 = 0
+    level_width: i32 = texture_width
+    level_height: i32 = texture_height
+    level: i32 = 0
+    while level < mip_count:
+        data_size = data_size + cook_texture_level_size(level_width, level_height, format)
+        if level_width > 1:
+            level_width = level_width / 2
+        if level_height > 1:
+            level_height = level_height / 2
+        level = level + 1
+    total_size: i64 = data_offset + data_size
+    if total_size <= 0 or total_size > 2147483647:
+        image.free()
+        cook_fail(@"texture is too large: {source}")
+    file_data: i64 = Memory.malloc_zeroed(total_size)
+    if file_data == 0:
+        image.free()
+        cook_fail("out of memory creating cooked texture")
+    flags: i32 = 1
+    if kind == COOK_TEXTURE_KIND_COLOR or kind == COOK_TEXTURE_KIND_LOSSLESS:
+        flags = flags | 2
+    Memory.write_i32(file_data, COOK_TEXTURE_MAGIC)
+    Memory.write_i32(file_data + 4, COOK_TEXTURE_VERSION)
+    Memory.write_i32(file_data + 8, texture_width)
+    Memory.write_i32(file_data + 12, texture_height)
+    Memory.write_i32(file_data + 16, format)
+    Memory.write_i32(file_data + 20, flags)
+    Memory.write_i32(file_data + 24, mip_count)
+    Memory.write_i32(file_data + 28, swizzle)
+    Memory.write_i32(file_data + 32, table_offset as i32)
+    Memory.write_i32(file_data + 36, COOK_TEXTURE_LEVEL_SIZE as i32)
+    Memory.write_i32(file_data + 40, data_offset as i32)
+    Memory.write_i32(file_data + 44, data_size as i32)
+    Memory.write_i32(file_data + 48, kind)
+    current: Image = image
+    relative_offset: i64 = 0
+    level = 0
+    while level < mip_count:
+        level_size: i64 = cook_texture_level_size(current.width, current.height, format)
+        entry: i64 = file_data + table_offset + (level as i64) * COOK_TEXTURE_LEVEL_SIZE
+        Memory.write_i32(entry, relative_offset as i32)
+        Memory.write_i32(entry + 4, level_size as i32)
+        Memory.write_i32(entry + 8, current.width)
+        Memory.write_i32(entry + 12, current.height)
+        cook_texture_encode_level(current, format, kind, file_data + data_offset + relative_offset)
+        relative_offset = relative_offset + level_size
+        if level + 1 < mip_count:
+            next: Image = cook_texture_next_mip(current, kind)
+            current.free()
+            current = next
+        level = level + 1
+    current.free()
+    file: File = File.open_cwd(output, "w")
+    if file.is_valid() == false:
+        Memory.free(file_data)
+        cook_fail(@"could not create output: {output}")
+    written: i32 = file.write_bytes(file_data, total_size as i32)
+    file.close()
+    Memory.free(file_data)
+    if written != (total_size as i32):
+        cook_fail(@"could not write complete output: {output}")
+    format_name: str = cook_texture_format_name(format)
+    print(@"source: {source}")
+    print(@"output: {output}")
+    print(@"texture: {texture_width}x{texture_height} {format_name} mips={mip_count}")
+    print(@"bytes: {total_size}")

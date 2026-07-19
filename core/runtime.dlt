@@ -248,12 +248,13 @@ attach EngineRuntime:
                 if PathOps.exists(cooked_resolved):
                     cooked: CookedTexture = FrogTextureLoader.load(cooked_resolved)
                     if cooked.valid == 1:
-                        cooked_image: Image = Image.wrap_rgba(cooked.width, cooked.height, cooked.pixels)
-                        cooked_tid: i32 = self.renderer.upload_texture_image_spec(self.render_pass, self.render_pass.vk_command_pool, cooked_image, spec)
+                        cooked_tid: i32 = self.renderer.upload_texture_cooked_spec(self.render_pass, self.render_pass.vk_command_pool, cooked, spec)
                         cooked.free()
-                        return cooked_tid
-                    print(@"Cooked texture load failed: {cooked_path}")
-                    return 0 - 1
+                        if cooked_tid >= 0:
+                            return cooked_tid
+                        print(@"Cooked texture format unsupported; using PNG fallback: {cooked_path}")
+                    else:
+                        print(@"Cooked texture load failed; using PNG fallback: {cooked_path}")
         img: Image = PNG.load(resolved)
         if img.is_valid() == 0:
             print(@"Texture load failed: {path}")

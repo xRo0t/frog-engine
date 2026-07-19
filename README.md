@@ -81,6 +81,11 @@ cook-models = true
 cook-textures = true
 texture-roots = ["assets/textures"]
 texture-excludes = ["@channels="]
+# Optional overrides; filename inference handles common normal/MR/AO names.
+texture-normal-patterns = ["_n.png", "normal.png"]
+texture-metallic-roughness-patterns = ["metallicRoughness.png"]
+texture-occlusion-patterns = ["_ao.png"]
+texture-lossless-patterns = ["ui/pixel-art/"]
 # keep-source-textures = true # optional PNG fallback in packaged builds
 lods = [0.45, 0.22]
 ```
@@ -88,10 +93,14 @@ lods = [0.45, 0.22]
 Static PNG path literals are discovered automatically. `texture-roots` covers
 textures selected dynamically at runtime, while `texture-excludes` avoids
 cooking source files that the application does not use. Each PNG is cooked to
-an adjacent GPU-ready `.frogtex`; Frog prefers it automatically and falls back
-to decoding the PNG during development when the sidecar is absent. For 3D
-materials, use `TextureSpec.model_color()` for albedo/emission and
-`TextureSpec.model_data()` for normal, metallic-roughness, and occlusion maps.
+an adjacent FrogTexture v2 sidecar with a complete offline mip chain. Color and
+general data use BC7, tangent-space normals and glTF metallic-roughness use BC5,
+single-channel occlusion uses BC4, and explicit `lossless` overrides use RGBA8.
+The runtime validates the mip table and GPU format support, uploads the payload
+without CPU decompression or runtime mip generation, and falls back to the PNG
+during development when the sidecar cannot be used. For 3D materials, use
+`TextureSpec.model_color()` for albedo/emission and `TextureSpec.model_data()`
+for normal, metallic-roughness, and occlusion maps.
 Packaged builds omit a PNG only when its cooked sidecar validates; set
 `keep-source-textures = true` when a release must retain both representations.
 

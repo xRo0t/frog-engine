@@ -392,6 +392,16 @@ attach Renderer:
             return 0 - 1
         return tid
 
+    fun upload_texture_cooked_spec(self, rp: RenderPass, cmd_pool: i64, cooked: CookedTexture, spec: TextureSpec) -> i32:
+        gtex: GpuTexture = gpu_texture_upload_cooked_spec(self.core.device, self.core.phys_device, self.core.gfx_queue, cmd_pool, cooked, spec)
+        if gtex.ok == 0:
+            return 0 - 1
+        tid: i32 = self.core.register_texture(rp, gtex)
+        if tid < 0:
+            gpu_texture_destroy(self.core.device, gtex)
+            return 0 - 1
+        return tid
+
     fun rebuild_texture_descriptors(self, rp: RenderPass) -> i32:
         return self.core.rebuild_texture_descriptors(rp)
 
