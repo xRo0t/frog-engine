@@ -1,0 +1,45 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D sourceDepth;
+layout(r32f, binding = 1) uniform writeonly image2D coarseDepth;
+
+layout(std430, binding = 2) buffer HzbState {
+    mat4 previousViewProjection;
+    vec4 params; // width, height, valid, conservative depth bias
+} state;
+
+layout(push_constant) uniform HzbPush {
+    mat4 viewProjection;
+    ivec4 dimensions; // source width/height, destination width/height
+} push;
+
+void main() {
+    ivec2 dst = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = max(push.dimensions.zw, ivec2(1));
+    ivec2 srcSize = max(push.dimensions.xy, ivec2(1));
+
+    if (dst.x == 0 && dst.y == 0) {
+        state.previousViewProjection = push.viewProjection;
+        state.params = vec4(dstSize, 1.0, 0.0025);
+    }
+
+    if (any(greaterThanEqual(dst, dstSize))) {
+        return;
+    }
+
+    // Store the farthest depth in this exact source tile. Occlusion remains
+    // conservative because the culler tests every coarse tile it overlaps.
+    ivec2 lo = (dst * srcSize) / dstSize;
+    ivec2 hi = ((dst + ivec2(1)) * srcSize + dstSize - ivec2(1)) / dstSize;
+    hi = clamp(hi, lo + ivec2(1), srcSize);
+
+    float farthest = 0.0;
+    for (int y = lo.y; y < hi.y; ++y) {
+        for (int x = lo.x; x < hi.x; ++x) {
+            farthest = max(farthest, texelFetch(sourceDepth, ivec2(x, y), 0).r);
+        }
+    }
+    imageStore(coarseDepth, dst, vec4(farthest));
+}

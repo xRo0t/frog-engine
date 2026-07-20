@@ -533,6 +533,14 @@ struct GpuRendererCore:
     # 0 = CPU path (default, safe). Set via set_gpu_culling.
     gpu_culling_enabled: i32 = 0
     gpu_cull_ptr: i64 = 0    # borrowed GpuCullPipeline (owned by runtime)
+    gpu_hzb_ptr: i64 = 0     # borrowed GpuHzb (owned by runtime)
+    gpu_hzb_use_frame: i32 = 0
+    gpu_hzb_camera_valid: i32 = 0
+    gpu_hzb_prev_x: f32 = 0.0
+    gpu_hzb_prev_y: f32 = 0.0
+    gpu_hzb_prev_z: f32 = 0.0
+    gpu_hzb_prev_pitch: f32 = 0.0
+    gpu_hzb_prev_yaw: f32 = 0.0
     gpu_cull_verify_enabled: i32 = 0   # debug: print GPU vs CPU visible counts
     # Phase 3 step 2: actually DRAW from the GPU-culled output (indirect).
     # Separate flag so verification (above) and drawing can be toggled apart.
@@ -1132,6 +1140,11 @@ attach GpuRendererCore:
         else:
             self.gpu_culling_enabled = 1
 
+    fun set_gpu_hzb(self, hzb_ptr: i64):
+        self.gpu_hzb_ptr = hzb_ptr
+        self.gpu_hzb_use_frame = 0
+        self.gpu_hzb_camera_valid = 0
+
     # Phase 3 step 2: toggle the GPU-driven indirect DRAW path for the main
     # pass. Requires set_gpu_culling to have provided the pipeline. Default
     # off; the CPU draw path stays the safe fallback.
@@ -1619,7 +1632,10 @@ attach GpuRendererCore:
         push: i64 = self.gpu_cull_push
         Memory.set(push, 0, FROG_CULL_PUSH_SIZE)
         frog_cull_extract_planes(vp_mat, push)
-        Memory.write_f32(push + 124, 0.0 - 1.0)
+        static_mode: f32 = 0.0 - 1.0
+        if self.gpu_hzb_use_frame == 1:
+            static_mode = 0.0 - 2.0
+        Memory.write_f32(push + 124, static_mode)
         cmd_base: i32 = cull.slot_cmd_base(slot)
         self.gpu_static_cmd_base = cmd_base
         cull.barrier_before_dispatches(cmd)
@@ -4176,8 +4192,10 @@ attach GpuRendererCore:
             Memory.free(depth_out)
             self.destroy_render_scale_target()
             return 0
-        # DEPTH_STENCIL_ATTACHMENT(32), VK_FORMAT_D32_SFLOAT(126)
-        if gpu_make_image_usage(self.device, self.phys_device, width, height, 126, 32, depth_out, depth_mem_out) == 0:
+        depth_usage: i32 = 32
+        if self.gpu_hzb_ptr != 0:
+            depth_usage = 36 # DEPTH_STENCIL_ATTACHMENT | SAMPLED
+        if gpu_make_image_usage(self.device, self.phys_device, width, height, 126, depth_usage, depth_out, depth_mem_out) == 0:
             Memory.free(depth_out)
             Memory.free(depth_mem_out)
             self.destroy_render_scale_target()
@@ -4745,6 +4763,12 @@ attach GpuRendererCore:
             fb = self.scale_framebuffer
         else:
             return
+        if self.gpu_hzb_ptr != 0:
+            hzb_target: GpuHzb = self.gpu_hzb_ptr as GpuHzb
+            if hzb_target.ensure_target(rw, rh, self.scale_depth_view) == 1:
+                if self.gpu_cull_ptr != 0:
+                    hzb_cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
+                    hzb_cull.set_hzb_resources(hzb_target.image_view, hzb_target.sampler, hzb_target.state_buffer)
         self.ensure_white_texture(rp, rp.vk_command_pool)
         swap_img: i64 = 0
         swap_old_layout: i32 = 0
@@ -5321,6 +5345,32 @@ attach GpuRendererCore:
             frame_slot = 0
         if frame_slot > 1:
             frame_slot = 1
+        hzb_cam_x: f32 = Memory.read_f32(self.render_state + 64)
+        hzb_cam_y: f32 = Memory.read_f32(self.render_state + 68)
+        hzb_cam_z: f32 = Memory.read_f32(self.render_state + 72)
+        hzb_cam_pitch: f32 = Memory.read_f32(self.render_state + 76)
+        hzb_cam_yaw: f32 = Memory.read_f32(self.render_state + 80)
+        self.gpu_hzb_use_frame = 0
+        if self.gpu_hzb_ptr != 0 and self.gpu_hzb_camera_valid == 1:
+            hzb_history: GpuHzb = self.gpu_hzb_ptr as GpuHzb
+            if hzb_history.history_valid == 1:
+                hzb_dx: f32 = hzb_cam_x - self.gpu_hzb_prev_x
+                hzb_dy: f32 = hzb_cam_y - self.gpu_hzb_prev_y
+                hzb_dz: f32 = hzb_cam_z - self.gpu_hzb_prev_z
+                hzb_move2: f32 = hzb_dx * hzb_dx + hzb_dy * hzb_dy + hzb_dz * hzb_dz
+                hzb_pitch_delta: f32 = hzb_cam_pitch - self.gpu_hzb_prev_pitch
+                if hzb_pitch_delta < 0.0:
+                    hzb_pitch_delta = 0.0 - hzb_pitch_delta
+                hzb_yaw_delta: f32 = hzb_cam_yaw - self.gpu_hzb_prev_yaw
+                if hzb_yaw_delta < 0.0:
+                    hzb_yaw_delta = 0.0 - hzb_yaw_delta
+                if hzb_yaw_delta > 180.0:
+                    hzb_yaw_delta = 360.0 - hzb_yaw_delta
+                # Camera cuts/fast turns disable temporal occlusion for one
+                # frame; ordinary motion remains GPU-occluded continuously.
+                if hzb_move2 <= 0.25:
+                    if hzb_pitch_delta <= 2.0 and hzb_yaw_delta <= 2.0:
+                        self.gpu_hzb_use_frame = 1
         shadow_global_mapped_ptrs: i64 = Memory.read_ptr(self.render_state + 56)
         shadow_global_buffers: i64 = Memory.read_ptr(self.render_state + 40)
         if shadow_global_mapped_ptrs == 0 or shadow_global_buffers == 0:
@@ -5895,6 +5945,20 @@ attach GpuRendererCore:
             self._record_collision_debug(cmd, rp, debug_vp, width, height)
 
         vkCmdEndRenderPass(cmd)
+        if self.gpu_hzb_ptr != 0:
+            hzb_build: GpuHzb = self.gpu_hzb_ptr as GpuHzb
+            hzb_vp: i64 = self.scratch_vp_matrix
+            if hzb_vp != 0 and cam_view != 0 and cam_proj != 0:
+                _frog_multiply_4x4_into(cam_proj, cam_view, hzb_vp)
+                if hzb_build.record_build(cmd, self.scale_depth_image, hzb_vp, width, height) == 1:
+                    self.gpu_hzb_prev_x = hzb_cam_x
+                    self.gpu_hzb_prev_y = hzb_cam_y
+                    self.gpu_hzb_prev_z = hzb_cam_z
+                    self.gpu_hzb_prev_pitch = hzb_cam_pitch
+                    self.gpu_hzb_prev_yaw = hzb_cam_yaw
+                    self.gpu_hzb_camera_valid = 1
+                else:
+                    self.gpu_hzb_camera_valid = 0
         # GPU-timer: boundary after the main render pass (sky + scene draws).
         self.profiler.mark(cmd, 2)
         if use_scaled == 1:

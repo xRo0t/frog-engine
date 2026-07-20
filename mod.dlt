@@ -50,6 +50,7 @@ load frog/render/gpu_culling
 load frog/render/platform/{platform}/gpu_vulkan_context
 load frog/render/gpu_swapchain
 load frog/render/gpu_texture
+load frog/render/gpu_hzb
 load frog/render/gpu_shadow
 load frog/render/gpu_sky
 load frog/render/gpu_bloom

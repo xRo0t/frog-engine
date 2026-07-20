@@ -10,6 +10,7 @@
     render_pass: RenderPass = RenderPass()
     renderer: Renderer = Renderer.create()
     cull: GpuCullPipeline = GpuCullPipeline()
+    hzb: GpuHzb = GpuHzb()
     width: i32 = 0
     height: i32 = 0
     ready_flag: i32 = 0
@@ -88,12 +89,22 @@ attach EngineRuntime:
         renderer.init(ctx.vk_device, ctx.vk_physical_device, ctx.vk_graphics_queue, ctx.vk_present_queue)
         runtime.renderer = renderer
 
+        # Conservative previous-frame depth is initialized before culling so
+        # every statically-used cull descriptor is valid from the self-test on.
+        hzb: GpuHzb = GpuHzb()
+        hzb_ready: i32 = hzb.init(ctx.vk_device, ctx.vk_physical_device)
+        if hzb_ready == 1:
+            hzb_ready = hzb.ensure_target(width, height, swapchain.depth_view)
+        runtime.hzb = hzb
+
         # GPU-driven culling: create the compute pipeline (Phase 0). This
         # does NOT yet feed the graphics pass — it only proves the compute
         # pipeline + descriptor layout build on the real device. Failure is
         # non-fatal: the engine falls back to CPU culling.
         cull: GpuCullPipeline = GpuCullPipeline()
         if cull.init(ctx.vk_device, ctx.vk_physical_device) == 1:
+            if hzb_ready == 1:
+                cull.set_hzb_resources(hzb.image_view, hzb.sampler, hzb.state_buffer)
             print("[frog.cull] GPU culling pipeline ready")
             cull.self_test(render_pass.vk_command_pool, ctx.vk_graphics_queue)
         else:
@@ -145,6 +156,8 @@ attach EngineRuntime:
             return
         if self.cull.ready == 1:
             self.renderer.core.set_gpu_culling(1, self.cull as i64)
+            if self.hzb.ready == 1:
+                self.renderer.core.set_gpu_hzb(self.hzb as i64)
 
     fun ready(self) -> i32:
         return self.ready_flag
@@ -462,6 +475,7 @@ attach EngineRuntime:
         self.release_mouse()
         vkDeviceWaitIdle(self.ctx.vk_device)
         self.cull.cleanup()
+        self.hzb.cleanup()
         self.renderer.cleanup()
         self.render_pass.cleanup(self.ctx.vk_device)
         self.swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)

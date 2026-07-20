@@ -1,0 +1,404 @@
+##############################
+# Frog - Conservative GPU Occlusion Buffer
+# Builds a coarse farthest-depth buffer after the main pass. The next frame's
+# static-arena cull consumes it without CPU readback or queue stalls.
+##############################
+
+FROG_HZB_FORMAT: i32 = 100 # VK_FORMAT_R32_SFLOAT
+FROG_HZB_PUSH_SIZE: i32 = 80
+
+fun frog_hzb_format_supported(phys_device: i64) -> i32:
+    # Scene depth must be sampleable. The coarse R32 image must support both
+    # sampled and storage-image access; otherwise the renderer keeps its
+    # ordinary GPU-frustum/CPU fallback paths without weakening compatibility.
+    if gpu_tex_format_supported(phys_device, 126) == 0:
+        return 0
+    properties: i64 = Memory.malloc_zeroed(12)
+    if properties == 0:
+        return 0
+    vkGetPhysicalDeviceFormatProperties(phys_device, FROG_HZB_FORMAT as i64, properties)
+    optimal_features: i32 = Memory.read_i32(properties + 4)
+    Memory.free(properties)
+    if (optimal_features & 3) != 3:
+        return 0
+    return 1
+
+@heap struct GpuHzb:
+    device: i64 = 0
+    phys_device: i64 = 0
+    desc_set_layout: i64 = 0
+    pipeline_layout: i64 = 0
+    pipeline: i64 = 0
+    shader_module: i64 = 0
+    desc_pool: i64 = 0
+    desc_set: i64 = 0
+    image: i64 = 0
+    image_memory: i64 = 0
+    image_view: i64 = 0
+    sampler: i64 = 0
+    state_buffer: i64 = 0
+    state_memory: i64 = 0
+    state_mapped: i64 = 0
+    depth_view: i64 = 0
+    width: i32 = 0
+    height: i32 = 0
+    initialized: i32 = 0
+    history_valid: i32 = 0
+    ready: i32 = 0
+
+fun _frog_hzb_depth_barrier(cmd: i64, image: i64, old_layout: i32, new_layout: i32, src_access: i32, dst_access: i32, src_stage: i64, dst_stage: i64):
+    barrier: i64 = Memory.malloc_zeroed(72)
+    if barrier == 0:
+        return
+    Memory.write_i32(barrier, 45)          # IMAGE_MEMORY_BARRIER
+    Memory.write_i32(barrier + 16, src_access)
+    Memory.write_i32(barrier + 20, dst_access)
+    Memory.write_i32(barrier + 24, old_layout)
+    Memory.write_i32(barrier + 28, new_layout)
+    Memory.write_i32(barrier + 32, 0 - 1)
+    Memory.write_i32(barrier + 36, 0 - 1)
+    Memory.write_ptr(barrier + 40, image)
+    Memory.write_i32(barrier + 48, 2)      # ASPECT_DEPTH
+    Memory.write_i32(barrier + 52, 0)
+    Memory.write_i32(barrier + 56, 1)
+    Memory.write_i32(barrier + 60, 0)
+    Memory.write_i32(barrier + 64, 1)
+    vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, 0, 0, 0, 1, barrier)
+    Memory.free(barrier)
+
+attach GpuHzb:
+
+    fun init(self, device: i64, phys_device: i64) -> i32:
+        self.device = device
+        self.phys_device = phys_device
+        if frog_hzb_format_supported(phys_device) == 0:
+            return 0
+
+        # Previous-frame view-projection + dimensions/valid/bias. It is
+        # written by the HZB build dispatch, keeping history GPU-ordered.
+        state_out: i64 = Memory.malloc_zeroed(8)
+        state_mem_out: i64 = Memory.malloc_zeroed(8)
+        state_map_out: i64 = Memory.malloc_zeroed(8)
+        if _frog_cull_make_buffer(device, phys_device, 80, 32, state_out, state_mem_out, state_map_out) == 0:
+            Memory.free(state_out)
+            Memory.free(state_mem_out)
+            Memory.free(state_map_out)
+            return 0
+        self.state_buffer = Memory.read_ptr(state_out)
+        self.state_memory = Memory.read_ptr(state_mem_out)
+        self.state_mapped = Memory.read_ptr(state_map_out)
+        Memory.free(state_out)
+        Memory.free(state_mem_out)
+        Memory.free(state_map_out)
+        if self.state_mapped != 0:
+            Memory.set(self.state_mapped, 0, 80)
+
+        sample_spec: TextureSpec = TextureSpec.pixel()
+        self.sampler = gpu_tex_make_sampler(device, sample_spec)
+        if self.sampler == 0:
+            self.cleanup()
+            return 0
+
+        # binding 0 = sampled scene depth, 1 = storage coarse depth,
+        # 2 = GPU-written history state.
+        bindings: i64 = Memory.malloc_zeroed(72)
+        if bindings == 0:
+            self.cleanup()
+            return 0
+        Memory.write_i32(bindings, 0)
+        Memory.write_i32(bindings + 4, 1)   # COMBINED_IMAGE_SAMPLER
+        Memory.write_i32(bindings + 8, 1)
+        Memory.write_i32(bindings + 12, 32)
+        Memory.write_i32(bindings + 24, 1)
+        Memory.write_i32(bindings + 28, 3)  # STORAGE_IMAGE
+        Memory.write_i32(bindings + 32, 1)
+        Memory.write_i32(bindings + 36, 32)
+        Memory.write_i32(bindings + 48, 2)
+        Memory.write_i32(bindings + 52, 7)  # STORAGE_BUFFER
+        Memory.write_i32(bindings + 56, 1)
+        Memory.write_i32(bindings + 60, 32)
+
+        layout_info: i64 = Memory.malloc_zeroed(40)
+        Memory.write_i32(layout_info, 32)
+        Memory.write_i32(layout_info + 20, 3)
+        Memory.write_ptr(layout_info + 24, bindings)
+        layout_out: i64 = Memory.malloc_zeroed(8)
+        layout_result: i32 = vkCreateDescriptorSetLayout(device, layout_info, 0, layout_out)
+        self.desc_set_layout = Memory.read_ptr(layout_out)
+        Memory.free(layout_out)
+        Memory.free(layout_info)
+        Memory.free(bindings)
+        if layout_result != 0:
+            self.cleanup()
+            return 0
+
+        push_range: i64 = Memory.malloc_zeroed(12)
+        Memory.write_i32(push_range, 32)
+        Memory.write_i32(push_range + 8, FROG_HZB_PUSH_SIZE)
+        set_layout_ptr: i64 = Memory.malloc_zeroed(8)
+        Memory.write_ptr(set_layout_ptr, self.desc_set_layout)
+        pipeline_layout_info: i64 = Memory.malloc_zeroed(56)
+        Memory.write_i32(pipeline_layout_info, 30)
+        Memory.write_i32(pipeline_layout_info + 20, 1)
+        Memory.write_ptr(pipeline_layout_info + 24, set_layout_ptr)
+        Memory.write_i32(pipeline_layout_info + 32, 1)
+        Memory.write_ptr(pipeline_layout_info + 40, push_range)
+        pipeline_layout_out: i64 = Memory.malloc_zeroed(8)
+        pipeline_layout_result: i32 = vkCreatePipelineLayout(device, pipeline_layout_info, 0, pipeline_layout_out)
+        self.pipeline_layout = Memory.read_ptr(pipeline_layout_out)
+        Memory.free(pipeline_layout_out)
+        Memory.free(pipeline_layout_info)
+        Memory.free(set_layout_ptr)
+        Memory.free(push_range)
+        if pipeline_layout_result != 0:
+            self.cleanup()
+            return 0
+
+        shader: EmbeddedShader = get_hzb_compute_shader()
+        if shader.data == 0:
+            self.cleanup()
+            return 0
+        shader_info: i64 = Memory.malloc_zeroed(40)
+        Memory.write_i32(shader_info, 12)
+        Memory.write_i64(shader_info + 24, shader.size)
+        Memory.write_ptr(shader_info + 32, shader.data)
+        shader_out: i64 = Memory.malloc_zeroed(8)
+        shader_result: i32 = vkCreateShaderModule(device, shader_info, 0, shader_out)
+        self.shader_module = Memory.read_ptr(shader_out)
+        Memory.free(shader_out)
+        Memory.free(shader_info)
+        shader.release()
+        if shader_result != 0:
+            self.cleanup()
+            return 0
+
+        entry: str = "main"
+        stage: i64 = Memory.malloc_zeroed(48)
+        Memory.write_i32(stage, 18)
+        Memory.write_i32(stage + 20, 32)
+        Memory.write_ptr(stage + 24, self.shader_module)
+        Memory.write_ptr(stage + 32, entry as i64)
+        pipeline_info: i64 = Memory.malloc_zeroed(104)
+        Memory.write_i32(pipeline_info, 29)
+        Memory.copy(pipeline_info + 24, stage, 48)
+        Memory.write_ptr(pipeline_info + 72, self.pipeline_layout)
+        Memory.write_i32(pipeline_info + 88, 0 - 1)
+        pipeline_out: i64 = Memory.malloc_zeroed(8)
+        pipeline_result: i32 = vkCreateComputePipelines(device, 0, 1, pipeline_info, 0, pipeline_out)
+        self.pipeline = Memory.read_ptr(pipeline_out)
+        Memory.free(pipeline_out)
+        Memory.free(pipeline_info)
+        Memory.free(stage)
+        if pipeline_result != 0:
+            self.cleanup()
+            return 0
+
+        pool_sizes: i64 = Memory.malloc_zeroed(24)
+        Memory.write_i32(pool_sizes, 1)
+        Memory.write_i32(pool_sizes + 4, 1)
+        Memory.write_i32(pool_sizes + 8, 3)
+        Memory.write_i32(pool_sizes + 12, 1)
+        Memory.write_i32(pool_sizes + 16, 7)
+        Memory.write_i32(pool_sizes + 20, 1)
+        pool_info: i64 = Memory.malloc_zeroed(40)
+        Memory.write_i32(pool_info, 33)
+        Memory.write_i32(pool_info + 20, 1)
+        Memory.write_i32(pool_info + 24, 3)
+        Memory.write_ptr(pool_info + 32, pool_sizes)
+        pool_out: i64 = Memory.malloc_zeroed(8)
+        pool_result: i32 = vkCreateDescriptorPool(device, pool_info, 0, pool_out)
+        self.desc_pool = Memory.read_ptr(pool_out)
+        Memory.free(pool_out)
+        Memory.free(pool_info)
+        Memory.free(pool_sizes)
+        if pool_result != 0:
+            self.cleanup()
+            return 0
+
+        layout_slot: i64 = Memory.malloc_zeroed(8)
+        Memory.write_ptr(layout_slot, self.desc_set_layout)
+        allocate_info: i64 = Memory.malloc_zeroed(40)
+        Memory.write_i32(allocate_info, 34)
+        Memory.write_ptr(allocate_info + 16, self.desc_pool)
+        Memory.write_i32(allocate_info + 24, 1)
+        Memory.write_ptr(allocate_info + 32, layout_slot)
+        set_out: i64 = Memory.malloc_zeroed(8)
+        set_result: i32 = vkAllocateDescriptorSets(device, allocate_info, set_out)
+        self.desc_set = Memory.read_ptr(set_out)
+        Memory.free(set_out)
+        Memory.free(allocate_info)
+        Memory.free(layout_slot)
+        if set_result != 0:
+            self.cleanup()
+            return 0
+
+        self.ready = 1
+        print("[frog.hzb] conservative GPU occlusion ready")
+        return 1
+
+    fun ensure_target(self, source_width: i32, source_height: i32, source_depth_view: i64) -> i32:
+        if self.ready == 0 or source_depth_view == 0:
+            return 0
+        target_width: i32 = (source_width + 7) / 8
+        target_height: i32 = (source_height + 7) / 8
+        if target_width < 32:
+            target_width = 32
+        if target_height < 32:
+            target_height = 32
+        if target_width > 256:
+            target_width = 256
+        if target_height > 256:
+            target_height = 256
+        if self.image != 0:
+            if self.width == target_width and self.height == target_height and self.depth_view == source_depth_view:
+                return 1
+            self.destroy_target()
+
+        image_out: i64 = Memory.malloc_zeroed(8)
+        memory_out: i64 = Memory.malloc_zeroed(8)
+        if gpu_make_image_usage(self.device, self.phys_device, target_width, target_height, FROG_HZB_FORMAT, 12, image_out, memory_out) == 0:
+            Memory.free(image_out)
+            Memory.free(memory_out)
+            return 0
+        self.image = Memory.read_ptr(image_out)
+        self.image_memory = Memory.read_ptr(memory_out)
+        Memory.free(image_out)
+        Memory.free(memory_out)
+        self.image_view = gpu_make_image_view_aspect(self.device, self.image, FROG_HZB_FORMAT, 1)
+        if self.image_view == 0:
+            self.destroy_target()
+            return 0
+        self.width = target_width
+        self.height = target_height
+        self.depth_view = source_depth_view
+        self.initialized = 0
+        self.history_valid = 0
+        if self.state_mapped != 0:
+            Memory.set(self.state_mapped, 0, 80)
+        self.update_descriptors()
+        return 1
+
+    fun update_descriptors(self):
+        if self.desc_set == 0 or self.image_view == 0 or self.depth_view == 0:
+            return
+        images: i64 = Memory.malloc_zeroed(48)
+        Memory.write_ptr(images, self.sampler)
+        Memory.write_ptr(images + 8, self.depth_view)
+        Memory.write_i32(images + 16, 5)    # SHADER_READ_ONLY_OPTIMAL
+        Memory.write_ptr(images + 24, 0)
+        Memory.write_ptr(images + 32, self.image_view)
+        Memory.write_i32(images + 40, 1)    # GENERAL
+        buffer_info: i64 = Memory.malloc_zeroed(24)
+        Memory.write_ptr(buffer_info, self.state_buffer)
+        Memory.write_i64(buffer_info + 8, 0)
+        Memory.write_i64(buffer_info + 16, 80)
+        writes: i64 = Memory.malloc_zeroed(192)
+        Memory.write_i32(writes, 35)
+        Memory.write_ptr(writes + 16, self.desc_set)
+        Memory.write_i32(writes + 24, 0)
+        Memory.write_i32(writes + 32, 1)
+        Memory.write_i32(writes + 36, 1)
+        Memory.write_ptr(writes + 40, images)
+        Memory.write_i32(writes + 64, 35)
+        Memory.write_ptr(writes + 80, self.desc_set)
+        Memory.write_i32(writes + 88, 1)
+        Memory.write_i32(writes + 96, 1)
+        Memory.write_i32(writes + 100, 3)
+        Memory.write_ptr(writes + 104, images + 24)
+        Memory.write_i32(writes + 128, 35)
+        Memory.write_ptr(writes + 144, self.desc_set)
+        Memory.write_i32(writes + 152, 2)
+        Memory.write_i32(writes + 160, 1)
+        Memory.write_i32(writes + 164, 7)
+        Memory.write_ptr(writes + 176, buffer_info)
+        vkUpdateDescriptorSets(self.device, 3, writes, 0, 0)
+        Memory.free(writes)
+        Memory.free(buffer_info)
+        Memory.free(images)
+
+    fun record_build(self, cmd: i64, source_depth_image: i64, view_projection: i64, source_width: i32, source_height: i32) -> i32:
+        if self.ready == 0 or self.image == 0 or source_depth_image == 0 or view_projection == 0:
+            return 0
+        _frog_hzb_depth_barrier(cmd, source_depth_image, 3, 5, 1024, 32, 512, 2048)
+        if self.initialized == 0:
+            gpu_tex_barrier(cmd, self.image, 0, 1, 0, 64, 1, 2048)
+        else:
+            gpu_tex_barrier(cmd, self.image, 1, 1, 32, 64, 2048, 2048)
+
+        vkCmdBindPipeline(cmd, 1, self.pipeline)
+        set_ptr: i64 = Memory.malloc_zeroed(8)
+        Memory.write_ptr(set_ptr, self.desc_set)
+        vkCmdBindDescriptorSets(cmd, 1, self.pipeline_layout, 0, 1, set_ptr, 0, 0)
+        Memory.free(set_ptr)
+        push: i64 = Memory.malloc_zeroed(FROG_HZB_PUSH_SIZE)
+        Memory.copy(push, view_projection, 64)
+        Memory.write_i32(push + 64, source_width)
+        Memory.write_i32(push + 68, source_height)
+        Memory.write_i32(push + 72, self.width)
+        Memory.write_i32(push + 76, self.height)
+        vkCmdPushConstants(cmd, self.pipeline_layout, 32, 0, FROG_HZB_PUSH_SIZE, push)
+        Memory.free(push)
+        vkCmdDispatch(cmd, (self.width + 7) / 8, (self.height + 7) / 8, 1)
+
+        gpu_tex_barrier(cmd, self.image, 1, 1, 64, 32, 2048, 2048)
+        state_barrier: i64 = Memory.malloc_zeroed(56)
+        Memory.write_i32(state_barrier, 44)
+        Memory.write_i32(state_barrier + 16, 64)
+        Memory.write_i32(state_barrier + 20, 32)
+        Memory.write_i32(state_barrier + 24, 0 - 1)
+        Memory.write_i32(state_barrier + 28, 0 - 1)
+        Memory.write_ptr(state_barrier + 32, self.state_buffer)
+        Memory.write_i64(state_barrier + 40, 0)
+        Memory.write_i64(state_barrier + 48, 80)
+        vkCmdPipelineBarrier(cmd, 2048, 2048, 0, 0, 0, 1, state_barrier, 0, 0)
+        Memory.free(state_barrier)
+        _frog_hzb_depth_barrier(cmd, source_depth_image, 5, 3, 32, 1024, 2048, 256)
+        self.initialized = 1
+        self.history_valid = 1
+        return 1
+
+    fun destroy_target(self):
+        if self.image_view != 0:
+            vkDestroyImageView(self.device, self.image_view, 0)
+            self.image_view = 0
+        if self.image != 0:
+            vkDestroyImage(self.device, self.image, 0)
+            self.image = 0
+        if self.image_memory != 0:
+            vkFreeMemory(self.device, self.image_memory, 0)
+            self.image_memory = 0
+        self.depth_view = 0
+        self.width = 0
+        self.height = 0
+        self.initialized = 0
+        self.history_valid = 0
+
+    fun cleanup(self):
+        self.destroy_target()
+        if self.pipeline != 0:
+            vkDestroyPipeline(self.device, self.pipeline, 0)
+            self.pipeline = 0
+        if self.shader_module != 0:
+            vkDestroyShaderModule(self.device, self.shader_module, 0)
+            self.shader_module = 0
+        if self.pipeline_layout != 0:
+            vkDestroyPipelineLayout(self.device, self.pipeline_layout, 0)
+            self.pipeline_layout = 0
+        if self.desc_pool != 0:
+            vkDestroyDescriptorPool(self.device, self.desc_pool, 0)
+            self.desc_pool = 0
+            self.desc_set = 0
+        if self.desc_set_layout != 0:
+            vkDestroyDescriptorSetLayout(self.device, self.desc_set_layout, 0)
+            self.desc_set_layout = 0
+        if self.sampler != 0:
+            vkDestroySampler(self.device, self.sampler, 0)
+            self.sampler = 0
+        if self.state_buffer != 0:
+            vkDestroyBuffer(self.device, self.state_buffer, 0)
+            self.state_buffer = 0
+        if self.state_memory != 0:
+            vkFreeMemory(self.device, self.state_memory, 0)
+            self.state_memory = 0
+            self.state_mapped = 0
+        self.ready = 0

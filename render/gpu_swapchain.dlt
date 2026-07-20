@@ -233,7 +233,10 @@ attach Swapchain:
         Memory.write_i32(img_ci + 44, 1)
         Memory.write_i32(img_ci + 48, 1)
         Memory.write_i32(img_ci + 52, 0)
-        Memory.write_i32(img_ci + 56, 32)
+        depth_usage: i32 = 32              # DEPTH_STENCIL_ATTACHMENT
+        if gpu_tex_format_supported(phys_dev, depth_format) == 1:
+            depth_usage = 36               # plus SAMPLED for GPU occlusion
+        Memory.write_i32(img_ci + 56, depth_usage)
         Memory.write_i32(img_ci + 60, 0)
         Memory.write_i32(img_ci + 64, 0)
         Memory.write_ptr(img_ci + 72, 0)
