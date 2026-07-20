@@ -2015,6 +2015,25 @@ attach GpuRendererCore:
             Memory.free(self.gpu_cand_gi)
         self.gpu_cand_gi = new_cand_gi
 
+    # Reserve mesh/instance registry slots before a streaming workload starts.
+    # Growing these parallel arrays in the middle of a frame can otherwise
+    # create a visible hitch at power-of-two boundaries.
+    fun reserve_mesh_capacity(self, needed: i32) -> i32:
+        if needed <= 0:
+            return 0
+        while self.vb_capacity < needed:
+            previous: i32 = self.vb_capacity
+            self._grow_vb_arrays()
+            if self.vb_capacity <= previous:
+                return 0
+        if self._ensure_instance_capacity(needed) == 0:
+            return 0
+        if self.gpu_cull_ptr != 0:
+            cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
+            if cull.ensure_capacity(needed) == 0:
+                return 0
+        return self.vb_capacity
+
     fun _take_pooled_buffer(self, data_size: i64, usage: i32) -> GpuBufferUpload:
         if self.pooled_count <= 0:
             return GpuBufferUpload()
