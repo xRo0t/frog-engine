@@ -220,6 +220,18 @@ attach EngineRuntime:
     fun reserve_mesh_capacity(self, needed: i32) -> i32:
         return self.renderer.reserve_mesh_capacity(needed)
 
+    fun reserve_dynamic_mesh_arena(self, vertex_bytes: i64, index_bytes: i64) -> i32:
+        return self.renderer.reserve_dynamic_mesh_arena(vertex_bytes, index_bytes)
+
+    fun upload_dynamic_mesh_data(self, mesh: GpuMeshData) -> i32:
+        return self.renderer.upload_dynamic_mesh_data(mesh)
+
+    fun replace_dynamic_mesh_data(self, mesh_id: i32, mesh: GpuMeshData) -> i32:
+        return self.renderer.replace_dynamic_mesh_data(mesh_id, mesh)
+
+    fun set_mesh_static_batch(self, mesh_id: i32, on: i32) -> i32:
+        return self.renderer.set_mesh_static_batch(mesh_id, on)
+
     fun replace_mesh_data(self, mesh_id: i32, mesh: GpuMeshData) -> i32:
         return self.renderer.replace_mesh_data(mesh_id, mesh)
 

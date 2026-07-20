@@ -8,6 +8,15 @@ struct GpuBufferUpload:
     handle: i64 = 0
     memory: i64 = 0
     capacity: i64 = 0
+    mapped: i64 = 0
+    ok: i32 = 0
+
+struct GpuArenaSlice:
+    page: i32 = -1
+    first_vertex: i32 = 0
+    first_index: i32 = 0
+    vertex_capacity: i64 = 0
+    index_capacity: i64 = 0
     ok: i32 = 0
 
 struct GpuMeshBounds:
@@ -458,10 +467,16 @@ struct GpuRendererCore:
     vb_memories:       i64 = 0
     vb_alloc_sizes:    i64 = 0
     vb_vert_counts:    i64 = 0
+    vb_first_vertices: i64 = 0
     ib_handles:        i64 = 0
     ib_memories:       i64 = 0
     ib_alloc_sizes:    i64 = 0
     ib_index_counts:   i64 = 0
+    ib_first_indices:  i64 = 0
+    mesh_arena_pages:  i64 = 0
+    mesh_arena_vb_caps: i64 = 0
+    mesh_arena_ib_caps: i64 = 0
+    mesh_static_batches: i64 = 0 # i32[]: 1 = world-space arena mesh eligible for page MDI
     model_matrices:    i64 = 0
     mesh_bound_xs:     i64 = 0
     mesh_bound_ys:     i64 = 0
@@ -633,6 +648,31 @@ struct GpuRendererCore:
     pooled_bytes:       i64 = 0
     pooled_byte_limit:  i64 = 0
     frame_serial:       i32 = 0
+    # Streaming meshes share a small number of persistently mapped buffer
+    # pages. Registry entries keep firstVertex/firstIndex slices into a page,
+    # eliminating one VkBuffer + VkDeviceMemory allocation per dynamic mesh.
+    arena_page_vbs: i64 = 0
+    arena_page_vmems: i64 = 0
+    arena_page_vmaps: i64 = 0
+    arena_page_vcursors: i64 = 0
+    arena_page_vcaps: i64 = 0
+    arena_page_ibs: i64 = 0
+    arena_page_imems: i64 = 0
+    arena_page_imaps: i64 = 0
+    arena_page_icursors: i64 = 0
+    arena_page_icaps: i64 = 0
+    arena_page_count: i32 = 0
+    arena_page_capacity: i32 = 0
+    arena_default_vbytes: i64 = 67108864
+    arena_default_ibytes: i64 = 16777216
+    arena_free_pages: i64 = 0
+    arena_free_first_vertices: i64 = 0
+    arena_free_first_indices: i64 = 0
+    arena_free_vcaps: i64 = 0
+    arena_free_icaps: i64 = 0
+    arena_free_frames: i64 = 0
+    arena_free_count: i32 = 0
+    arena_free_capacity: i32 = 0
     # Compact render state block:
     # 0 directional light, 8/16/24 shadow instance arrays, 32 capacity,
     # 40/48/56 global arrays, 64/68/72 camera position, 76/80 pitch/yaw.
@@ -654,10 +694,20 @@ attach GpuRendererCore:
         self.vb_memories = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.vb_alloc_sizes = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.vb_vert_counts = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.vb_first_vertices = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.ib_handles = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.ib_memories = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.ib_alloc_sizes = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.ib_index_counts = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.ib_first_indices = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.mesh_arena_pages = Memory.malloc_zeroed(self.vb_capacity * 4)
+        self.mesh_arena_vb_caps = Memory.malloc_zeroed(self.vb_capacity * 8)
+        self.mesh_arena_ib_caps = Memory.malloc_zeroed(self.vb_capacity * 8)
+        self.mesh_static_batches = Memory.malloc_zeroed(self.vb_capacity * 4)
+        arena_mesh_i: i32 = 0
+        while arena_mesh_i < self.vb_capacity:
+            Memory.write_i32(self.mesh_arena_pages + arena_mesh_i * 4, -1)
+            arena_mesh_i = arena_mesh_i + 1
         self.model_matrices = Memory.malloc_zeroed(self.vb_capacity * 8)
         self.mesh_bound_xs = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.mesh_bound_ys = Memory.malloc_zeroed(self.vb_capacity * 4)
@@ -1162,7 +1212,7 @@ attach GpuRendererCore:
         frog_cull_extract_planes(vp_mat, push)
         Memory.write_i32(push + 96, cand)
 
-        cull.prepare_group_cmd(0, 36, 0)
+        cull.prepare_group_cmd(0, 36, 0, 0, 0)
         cmd: i64 = gpu_tex_begin_oneshot(self.device, cmd_pool)
         if cmd == 0:
             Memory.free(push)
@@ -1233,9 +1283,15 @@ attach GpuRendererCore:
             group_n: i32 = Memory.read_i32(self.gpu_grp_count + g * 4)
             indexed: i32 = Memory.read_i32(self.gpu_grp_indexed + g * 4)
             draw_count: i32 = Memory.read_i32(self.gpu_grp_draw + g * 4)
+            rep_mi: i32 = Memory.read_i32(self.gpu_grp_mi + g * 4)
+            first_index: i32 = Memory.read_i32(self.ib_first_indices + rep_mi * 4)
+            vertex_offset: i32 = Memory.read_i32(self.vb_first_vertices + rep_mi * 4)
+            if indexed == 0:
+                first_index = vertex_offset
+                vertex_offset = 0
             cmd_index: i32 = cmd_base0 + g
             out_base: i32 = out_cursor
-            cull.prepare_group_cmd(cmd_index, draw_count, indexed)
+            cull.prepare_group_cmd(cmd_index, draw_count, indexed, first_index, vertex_offset)
             # firstInstance stays 0 (prepare_group_cmd zeroed it). The active
             # per-group draw binds the instance buffer at out_base directly, so
             # it must be 0. (Only the disabled SSBO batched path would set it.)
@@ -1274,6 +1330,8 @@ attach GpuRendererCore:
             vc: i32 = Memory.read_i32(self.vb_vert_counts + mi * 4)
             ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
             ic: i32 = Memory.read_i32(self.ib_index_counts + mi * 4)
+            first_vertex: i32 = Memory.read_i32(self.vb_first_vertices + mi * 4)
+            first_index: i32 = Memory.read_i32(self.ib_first_indices + mi * 4)
             model_ptr: i64 = 0
             if self.model_matrices != 0:
                 model_ptr = Memory.read_ptr(self.model_matrices + mi * 8)
@@ -1299,6 +1357,8 @@ attach GpuRendererCore:
                     g_vc: i32 = Memory.read_i32(self.vb_vert_counts + gi * 4)
                     g_ib: i64 = Memory.read_ptr(self.ib_handles + gi * 8)
                     g_ic: i32 = Memory.read_i32(self.ib_index_counts + gi * 4)
+                    g_first_vertex: i32 = Memory.read_i32(self.vb_first_vertices + gi * 4)
+                    g_first_index: i32 = Memory.read_i32(self.ib_first_indices + gi * 4)
                     g_model: i64 = Memory.read_ptr(self.model_matrices + gi * 8)
                     if g_vb != vb_handle:
                         gi = self.vb_count
@@ -1307,6 +1367,10 @@ attach GpuRendererCore:
                     elif g_ib != ib_handle:
                         gi = self.vb_count
                     elif g_ic != ic:
+                        gi = self.vb_count
+                    elif g_first_vertex != first_vertex:
+                        gi = self.vb_count
+                    elif g_first_index != first_index:
                         gi = self.vb_count
                     elif self.bindless_enabled == 0 and self._grp_tex(self.mesh_tex_ids, gi) != g_tex0:
                         gi = self.vb_count
@@ -1876,10 +1940,20 @@ attach GpuRendererCore:
         new_memories: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_alloc_sizes: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_vert_counts: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_first_vertices: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_ib_handles: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_ib_memories: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_ib_alloc_sizes: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_ib_counts: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_first_indices: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_arena_pages: i64 = Memory.malloc_zeroed(new_cap * 4)
+        new_arena_vcaps: i64 = Memory.malloc_zeroed(new_cap * 8)
+        new_arena_icaps: i64 = Memory.malloc_zeroed(new_cap * 8)
+        new_static_batches: i64 = Memory.malloc_zeroed(new_cap * 4)
+        arena_init_i: i32 = 0
+        while arena_init_i < new_cap:
+            Memory.write_i32(new_arena_pages + arena_init_i * 4, -1)
+            arena_init_i = arena_init_i + 1
         new_matrices: i64 = Memory.malloc_zeroed(new_cap * 8)
         new_bound_xs: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_bound_ys: i64 = Memory.malloc_zeroed(new_cap * 4)
@@ -1917,10 +1991,16 @@ attach GpuRendererCore:
         Memory.copy(new_memories, self.vb_memories, self.vb_capacity * 8)
         Memory.copy(new_alloc_sizes, self.vb_alloc_sizes, self.vb_capacity * 8)
         Memory.copy(new_vert_counts, self.vb_vert_counts, self.vb_capacity * 4)
+        Memory.copy(new_first_vertices, self.vb_first_vertices, self.vb_capacity * 4)
         Memory.copy(new_ib_handles, self.ib_handles, self.vb_capacity * 8)
         Memory.copy(new_ib_memories, self.ib_memories, self.vb_capacity * 8)
         Memory.copy(new_ib_alloc_sizes, self.ib_alloc_sizes, self.vb_capacity * 8)
         Memory.copy(new_ib_counts, self.ib_index_counts, self.vb_capacity * 4)
+        Memory.copy(new_first_indices, self.ib_first_indices, self.vb_capacity * 4)
+        Memory.copy(new_arena_pages, self.mesh_arena_pages, self.vb_capacity * 4)
+        Memory.copy(new_arena_vcaps, self.mesh_arena_vb_caps, self.vb_capacity * 8)
+        Memory.copy(new_arena_icaps, self.mesh_arena_ib_caps, self.vb_capacity * 8)
+        Memory.copy(new_static_batches, self.mesh_static_batches, self.vb_capacity * 4)
         Memory.copy(new_matrices, self.model_matrices, self.vb_capacity * 8)
         Memory.copy(new_bound_xs, self.mesh_bound_xs, self.vb_capacity * 4)
         Memory.copy(new_bound_ys, self.mesh_bound_ys, self.vb_capacity * 4)
@@ -1952,10 +2032,16 @@ attach GpuRendererCore:
         Memory.free(self.vb_memories)
         Memory.free(self.vb_alloc_sizes)
         Memory.free(self.vb_vert_counts)
+        Memory.free(self.vb_first_vertices)
         Memory.free(self.ib_handles)
         Memory.free(self.ib_memories)
         Memory.free(self.ib_alloc_sizes)
         Memory.free(self.ib_index_counts)
+        Memory.free(self.ib_first_indices)
+        Memory.free(self.mesh_arena_pages)
+        Memory.free(self.mesh_arena_vb_caps)
+        Memory.free(self.mesh_arena_ib_caps)
+        Memory.free(self.mesh_static_batches)
         Memory.free(self.model_matrices)
         Memory.free(self.mesh_bound_xs)
         Memory.free(self.mesh_bound_ys)
@@ -1987,10 +2073,16 @@ attach GpuRendererCore:
         self.vb_memories = new_memories
         self.vb_alloc_sizes = new_alloc_sizes
         self.vb_vert_counts = new_vert_counts
+        self.vb_first_vertices = new_first_vertices
         self.ib_handles = new_ib_handles
         self.ib_memories = new_ib_memories
         self.ib_alloc_sizes = new_ib_alloc_sizes
         self.ib_index_counts = new_ib_counts
+        self.ib_first_indices = new_first_indices
+        self.mesh_arena_pages = new_arena_pages
+        self.mesh_arena_vb_caps = new_arena_vcaps
+        self.mesh_arena_ib_caps = new_arena_icaps
+        self.mesh_static_batches = new_static_batches
         self.model_matrices = new_matrices
         self.mesh_bound_xs = new_bound_xs
         self.mesh_bound_ys = new_bound_ys
@@ -2227,6 +2319,316 @@ attach GpuRendererCore:
         vkUnmapMemory(self.device, mem)
 
         return GpuBufferUpload(handle=buf, memory=mem, capacity=data_size, ok=1)
+
+    # Create a host-visible/coherent buffer and keep it mapped for the lifetime
+    # of a streaming arena page. Dynamic mesh uploads then become Memory.copy
+    # into a shared allocation instead of vkCreateBuffer/vkAllocateMemory.
+    fun _create_mapped_buffer(self, data_size: i64, usage: i32) -> GpuBufferUpload:
+        if data_size <= 0:
+            return GpuBufferUpload()
+        buf_ci: i64 = Memory.malloc_zeroed(56)
+        if buf_ci == 0:
+            return GpuBufferUpload()
+        Memory.write_i32(buf_ci, 12)
+        Memory.write_i64(buf_ci + 24, data_size)
+        Memory.write_i32(buf_ci + 32, usage)
+        buf_ptr: i64 = Memory.malloc_zeroed(8)
+        if buf_ptr == 0:
+            Memory.free(buf_ci)
+            return GpuBufferUpload()
+        buf_r: i32 = vkCreateBuffer(self.device, buf_ci, 0, buf_ptr)
+        buf: i64 = Memory.read_ptr(buf_ptr)
+        Memory.free(buf_ptr)
+        Memory.free(buf_ci)
+        if buf_r != 0:
+            return GpuBufferUpload()
+
+        mem_req: i64 = Memory.malloc_zeroed(24)
+        if mem_req == 0:
+            vkDestroyBuffer(self.device, buf, 0)
+            return GpuBufferUpload()
+        vkGetBufferMemoryRequirements(self.device, buf, mem_req)
+        req_size: i64 = Memory.read_i64(mem_req)
+        req_bits: i32 = Memory.read_i32(mem_req + 16)
+        Memory.free(mem_req)
+
+        mem_props: i64 = Memory.malloc_zeroed(520)
+        if mem_props == 0:
+            vkDestroyBuffer(self.device, buf, 0)
+            return GpuBufferUpload()
+        vkGetPhysicalDeviceMemoryProperties(self.phys_device, mem_props)
+        type_count: i32 = Memory.read_i32(mem_props)
+        mem_type_idx: i32 = -1
+        ti: i32 = 0
+        while ti < type_count:
+            bit_check: i32 = 1
+            shift: i32 = 0
+            while shift < ti:
+                bit_check = bit_check * 2
+                shift = shift + 1
+            if (req_bits / bit_check) - (req_bits / (bit_check * 2)) * 2 == 1:
+                flags: i32 = Memory.read_i32(mem_props + 4 + ti * 8)
+                if (flags / 2) - (flags / 4) * 2 == 1:
+                    if (flags / 4) - (flags / 8) * 2 == 1:
+                        mem_type_idx = ti
+                        ti = type_count
+            ti = ti + 1
+        Memory.free(mem_props)
+        if mem_type_idx < 0:
+            vkDestroyBuffer(self.device, buf, 0)
+            return GpuBufferUpload()
+
+        alloc_info: i64 = Memory.malloc_zeroed(32)
+        mem_ptr: i64 = Memory.malloc_zeroed(8)
+        if alloc_info == 0 or mem_ptr == 0:
+            if alloc_info != 0:
+                Memory.free(alloc_info)
+            if mem_ptr != 0:
+                Memory.free(mem_ptr)
+            vkDestroyBuffer(self.device, buf, 0)
+            return GpuBufferUpload()
+        Memory.write_i32(alloc_info, 5)
+        Memory.write_i64(alloc_info + 16, req_size)
+        Memory.write_i32(alloc_info + 24, mem_type_idx)
+        alloc_r: i32 = vkAllocateMemory(self.device, alloc_info, 0, mem_ptr)
+        mem: i64 = Memory.read_ptr(mem_ptr)
+        Memory.free(mem_ptr)
+        Memory.free(alloc_info)
+        if alloc_r != 0:
+            vkDestroyBuffer(self.device, buf, 0)
+            return GpuBufferUpload()
+        vkBindBufferMemory(self.device, buf, mem, 0)
+        map_pp: i64 = Memory.malloc_zeroed(8)
+        if map_pp == 0:
+            vkDestroyBuffer(self.device, buf, 0)
+            vkFreeMemory(self.device, mem, 0)
+            return GpuBufferUpload()
+        map_r: i32 = vkMapMemory(self.device, mem, 0, data_size, 0, map_pp)
+        mapped: i64 = Memory.read_ptr(map_pp)
+        Memory.free(map_pp)
+        if map_r != 0 or mapped == 0:
+            vkDestroyBuffer(self.device, buf, 0)
+            vkFreeMemory(self.device, mem, 0)
+            return GpuBufferUpload()
+        return GpuBufferUpload(handle=buf, memory=mem, capacity=data_size, mapped=mapped, ok=1)
+
+    fun _ensure_arena_page_capacity(self) -> i32:
+        if self.arena_page_capacity <= 0:
+            self.arena_page_capacity = 16
+            self.arena_page_vbs = Memory.malloc_zeroed(self.arena_page_capacity * 8)
+            self.arena_page_vmems = Memory.malloc_zeroed(self.arena_page_capacity * 8)
+            self.arena_page_vmaps = Memory.malloc_zeroed(self.arena_page_capacity * 8)
+            self.arena_page_vcursors = Memory.malloc_zeroed(self.arena_page_capacity * 8)
+            self.arena_page_vcaps = Memory.malloc_zeroed(self.arena_page_capacity * 8)
+            self.arena_page_ibs = Memory.malloc_zeroed(self.arena_page_capacity * 8)
+            self.arena_page_imems = Memory.malloc_zeroed(self.arena_page_capacity * 8)
+            self.arena_page_imaps = Memory.malloc_zeroed(self.arena_page_capacity * 8)
+            self.arena_page_icursors = Memory.malloc_zeroed(self.arena_page_capacity * 8)
+            self.arena_page_icaps = Memory.malloc_zeroed(self.arena_page_capacity * 8)
+            return 1
+        if self.arena_page_count < self.arena_page_capacity:
+            return 1
+        old_cap: i32 = self.arena_page_capacity
+        new_cap: i32 = old_cap * 2
+        nvbs: i64 = Memory.malloc_zeroed(new_cap * 8)
+        nvms: i64 = Memory.malloc_zeroed(new_cap * 8)
+        nvmaps: i64 = Memory.malloc_zeroed(new_cap * 8)
+        nvcursors: i64 = Memory.malloc_zeroed(new_cap * 8)
+        nvcaps: i64 = Memory.malloc_zeroed(new_cap * 8)
+        nibs: i64 = Memory.malloc_zeroed(new_cap * 8)
+        nims: i64 = Memory.malloc_zeroed(new_cap * 8)
+        nimaps: i64 = Memory.malloc_zeroed(new_cap * 8)
+        nicursors: i64 = Memory.malloc_zeroed(new_cap * 8)
+        nicaps: i64 = Memory.malloc_zeroed(new_cap * 8)
+        if nvbs == 0 or nvms == 0 or nvmaps == 0 or nvcursors == 0 or nvcaps == 0 or nibs == 0 or nims == 0 or nimaps == 0 or nicursors == 0 or nicaps == 0:
+            return 0
+        Memory.copy(nvbs, self.arena_page_vbs, old_cap * 8)
+        Memory.copy(nvms, self.arena_page_vmems, old_cap * 8)
+        Memory.copy(nvmaps, self.arena_page_vmaps, old_cap * 8)
+        Memory.copy(nvcursors, self.arena_page_vcursors, old_cap * 8)
+        Memory.copy(nvcaps, self.arena_page_vcaps, old_cap * 8)
+        Memory.copy(nibs, self.arena_page_ibs, old_cap * 8)
+        Memory.copy(nims, self.arena_page_imems, old_cap * 8)
+        Memory.copy(nimaps, self.arena_page_imaps, old_cap * 8)
+        Memory.copy(nicursors, self.arena_page_icursors, old_cap * 8)
+        Memory.copy(nicaps, self.arena_page_icaps, old_cap * 8)
+        Memory.free(self.arena_page_vbs)
+        Memory.free(self.arena_page_vmems)
+        Memory.free(self.arena_page_vmaps)
+        Memory.free(self.arena_page_vcursors)
+        Memory.free(self.arena_page_vcaps)
+        Memory.free(self.arena_page_ibs)
+        Memory.free(self.arena_page_imems)
+        Memory.free(self.arena_page_imaps)
+        Memory.free(self.arena_page_icursors)
+        Memory.free(self.arena_page_icaps)
+        self.arena_page_vbs = nvbs
+        self.arena_page_vmems = nvms
+        self.arena_page_vmaps = nvmaps
+        self.arena_page_vcursors = nvcursors
+        self.arena_page_vcaps = nvcaps
+        self.arena_page_ibs = nibs
+        self.arena_page_imems = nims
+        self.arena_page_imaps = nimaps
+        self.arena_page_icursors = nicursors
+        self.arena_page_icaps = nicaps
+        self.arena_page_capacity = new_cap
+        return 1
+
+    fun _arena_add_page(self, min_vbytes: i64, min_ibytes: i64) -> i32:
+        if self._ensure_arena_page_capacity() == 0:
+            return -1
+        vbytes: i64 = self.arena_default_vbytes
+        ibytes: i64 = self.arena_default_ibytes
+        if vbytes < min_vbytes:
+            vbytes = min_vbytes
+        if ibytes < min_ibytes:
+            ibytes = min_ibytes
+        vb: GpuBufferUpload = self._create_mapped_buffer(vbytes, 128)
+        if vb.ok == 0:
+            return -1
+        ib: GpuBufferUpload = self._create_mapped_buffer(ibytes, 64)
+        if ib.ok == 0:
+            vkUnmapMemory(self.device, vb.memory)
+            vkDestroyBuffer(self.device, vb.handle, 0)
+            vkFreeMemory(self.device, vb.memory, 0)
+            return -1
+        page: i32 = self.arena_page_count
+        Memory.write_ptr(self.arena_page_vbs + page * 8, vb.handle)
+        Memory.write_ptr(self.arena_page_vmems + page * 8, vb.memory)
+        Memory.write_ptr(self.arena_page_vmaps + page * 8, vb.mapped)
+        Memory.write_i64(self.arena_page_vcaps + page * 8, vbytes)
+        Memory.write_ptr(self.arena_page_ibs + page * 8, ib.handle)
+        Memory.write_ptr(self.arena_page_imems + page * 8, ib.memory)
+        Memory.write_ptr(self.arena_page_imaps + page * 8, ib.mapped)
+        Memory.write_i64(self.arena_page_icaps + page * 8, ibytes)
+        self.arena_page_count = page + 1
+        print(@"[frog.mesh_arena] page={page} vertex_bytes={vbytes} index_bytes={ibytes}")
+        return page
+
+    fun reserve_dynamic_mesh_arena(self, vertex_bytes: i64, index_bytes: i64) -> i32:
+        if self.initialized == 0:
+            return 0
+        if vertex_bytes > 0:
+            self.arena_default_vbytes = vertex_bytes
+        if index_bytes > 0:
+            self.arena_default_ibytes = index_bytes
+        if self.arena_page_count <= 0:
+            if self._arena_add_page(self.arena_default_vbytes, self.arena_default_ibytes) < 0:
+                return 0
+        return 1
+
+    fun _grow_arena_free(self) -> i32:
+        old_cap: i32 = self.arena_free_capacity
+        new_cap: i32 = 2048
+        if old_cap > 0:
+            new_cap = old_cap * 2
+        np: i64 = Memory.malloc_zeroed(new_cap * 4)
+        nfv: i64 = Memory.malloc_zeroed(new_cap * 4)
+        nfi: i64 = Memory.malloc_zeroed(new_cap * 4)
+        nvc: i64 = Memory.malloc_zeroed(new_cap * 8)
+        nic: i64 = Memory.malloc_zeroed(new_cap * 8)
+        nf: i64 = Memory.malloc_zeroed(new_cap * 4)
+        if np == 0 or nfv == 0 or nfi == 0 or nvc == 0 or nic == 0 or nf == 0:
+            return 0
+        if old_cap > 0:
+            Memory.copy(np, self.arena_free_pages, old_cap * 4)
+            Memory.copy(nfv, self.arena_free_first_vertices, old_cap * 4)
+            Memory.copy(nfi, self.arena_free_first_indices, old_cap * 4)
+            Memory.copy(nvc, self.arena_free_vcaps, old_cap * 8)
+            Memory.copy(nic, self.arena_free_icaps, old_cap * 8)
+            Memory.copy(nf, self.arena_free_frames, old_cap * 4)
+            Memory.free(self.arena_free_pages)
+            Memory.free(self.arena_free_first_vertices)
+            Memory.free(self.arena_free_first_indices)
+            Memory.free(self.arena_free_vcaps)
+            Memory.free(self.arena_free_icaps)
+            Memory.free(self.arena_free_frames)
+        self.arena_free_pages = np
+        self.arena_free_first_vertices = nfv
+        self.arena_free_first_indices = nfi
+        self.arena_free_vcaps = nvc
+        self.arena_free_icaps = nic
+        self.arena_free_frames = nf
+        self.arena_free_capacity = new_cap
+        return 1
+
+    fun _arena_retire_slice(self, page: i32, first_vertex: i32, first_index: i32, vcap: i64, icap: i64):
+        if page < 0:
+            return
+        if self.arena_free_count >= self.arena_free_capacity:
+            if self._grow_arena_free() == 0:
+                return
+        i: i32 = self.arena_free_count
+        Memory.write_i32(self.arena_free_pages + i * 4, page)
+        Memory.write_i32(self.arena_free_first_vertices + i * 4, first_vertex)
+        Memory.write_i32(self.arena_free_first_indices + i * 4, first_index)
+        Memory.write_i64(self.arena_free_vcaps + i * 8, vcap)
+        Memory.write_i64(self.arena_free_icaps + i * 8, icap)
+        Memory.write_i32(self.arena_free_frames + i * 4, self.frame_serial)
+        self.arena_free_count = i + 1
+
+    fun _arena_alloc_slice(self, vbytes: i64, ibytes: i64, preferred_page: i32) -> GpuArenaSlice:
+        # Reuse only after all frames that could reference the old slice have
+        # retired. Eight frames is deliberately above the renderer's 2 FIF.
+        reuse_pass: i32 = 0
+        while reuse_pass < 2:
+            i: i32 = 0
+            while i < self.arena_free_count:
+                free_page: i32 = Memory.read_i32(self.arena_free_pages + i * 4)
+                page_ok: i32 = 1
+                if reuse_pass == 0 and preferred_page >= 0:
+                    if free_page != preferred_page:
+                        page_ok = 0
+                age: i32 = self.frame_serial - Memory.read_i32(self.arena_free_frames + i * 4)
+                vcap: i64 = Memory.read_i64(self.arena_free_vcaps + i * 8)
+                icap: i64 = Memory.read_i64(self.arena_free_icaps + i * 8)
+                if page_ok == 1 and age >= 8 and vcap >= vbytes and icap >= ibytes:
+                    result: GpuArenaSlice = GpuArenaSlice(page=free_page, first_vertex=Memory.read_i32(self.arena_free_first_vertices + i * 4), first_index=Memory.read_i32(self.arena_free_first_indices + i * 4), vertex_capacity=vcap, index_capacity=icap, ok=1)
+                    last: i32 = self.arena_free_count - 1
+                    if i != last:
+                        Memory.write_i32(self.arena_free_pages + i * 4, Memory.read_i32(self.arena_free_pages + last * 4))
+                        Memory.write_i32(self.arena_free_first_vertices + i * 4, Memory.read_i32(self.arena_free_first_vertices + last * 4))
+                        Memory.write_i32(self.arena_free_first_indices + i * 4, Memory.read_i32(self.arena_free_first_indices + last * 4))
+                        Memory.write_i64(self.arena_free_vcaps + i * 8, Memory.read_i64(self.arena_free_vcaps + last * 8))
+                        Memory.write_i64(self.arena_free_icaps + i * 8, Memory.read_i64(self.arena_free_icaps + last * 8))
+                        Memory.write_i32(self.arena_free_frames + i * 4, Memory.read_i32(self.arena_free_frames + last * 4))
+                    self.arena_free_count = last
+                    return result
+                i = i + 1
+            if preferred_page < 0:
+                reuse_pass = 2
+            else:
+                reuse_pass = reuse_pass + 1
+
+        page: i32 = 0
+        if preferred_page >= 0 and preferred_page < self.arena_page_count:
+            page = preferred_page
+            pvc: i64 = Memory.read_i64(self.arena_page_vcursors + page * 8)
+            pic: i64 = Memory.read_i64(self.arena_page_icursors + page * 8)
+            pvcap: i64 = Memory.read_i64(self.arena_page_vcaps + page * 8)
+            picap: i64 = Memory.read_i64(self.arena_page_icaps + page * 8)
+            if pvc + vbytes <= pvcap and pic + ibytes <= picap:
+                Memory.write_i64(self.arena_page_vcursors + page * 8, pvc + vbytes)
+                Memory.write_i64(self.arena_page_icursors + page * 8, pic + ibytes)
+                return GpuArenaSlice(page=page, first_vertex=(pvc / (FROG_GPU_VERTEX_STRIDE as i64)) as i32, first_index=(pic / 4) as i32, vertex_capacity=vbytes, index_capacity=ibytes, ok=1)
+        page = 0
+        while page < self.arena_page_count:
+            vc: i64 = Memory.read_i64(self.arena_page_vcursors + page * 8)
+            ic: i64 = Memory.read_i64(self.arena_page_icursors + page * 8)
+            vcap2: i64 = Memory.read_i64(self.arena_page_vcaps + page * 8)
+            icap2: i64 = Memory.read_i64(self.arena_page_icaps + page * 8)
+            if vc + vbytes <= vcap2 and ic + ibytes <= icap2:
+                Memory.write_i64(self.arena_page_vcursors + page * 8, vc + vbytes)
+                Memory.write_i64(self.arena_page_icursors + page * 8, ic + ibytes)
+                return GpuArenaSlice(page=page, first_vertex=(vc / (FROG_GPU_VERTEX_STRIDE as i64)) as i32, first_index=(ic / 4) as i32, vertex_capacity=vbytes, index_capacity=ibytes, ok=1)
+            page = page + 1
+        page = self._arena_add_page(vbytes, ibytes)
+        if page < 0:
+            return GpuArenaSlice()
+        Memory.write_i64(self.arena_page_vcursors + page * 8, vbytes)
+        Memory.write_i64(self.arena_page_icursors + page * 8, ibytes)
+        return GpuArenaSlice(page=page, first_vertex=0, first_index=0, vertex_capacity=vbytes, index_capacity=ibytes, ok=1)
 
     fun _ensure_instance_capacity(self, needed: i32) -> i32:
         if needed <= 0:
@@ -2919,10 +3321,15 @@ attach GpuRendererCore:
         Memory.write_ptr(self.vb_memories + idx * 8, uploaded.memory)
         Memory.write_i64(self.vb_alloc_sizes + idx * 8, uploaded.capacity)
         Memory.write_i32(self.vb_vert_counts + idx * 4, vertex_count)
+        Memory.write_i32(self.vb_first_vertices + idx * 4, 0)
         Memory.write_ptr(self.ib_handles + idx * 8, 0)
         Memory.write_ptr(self.ib_memories + idx * 8, 0)
         Memory.write_i64(self.ib_alloc_sizes + idx * 8, 0)
         Memory.write_i32(self.ib_index_counts + idx * 4, 0)
+        Memory.write_i32(self.ib_first_indices + idx * 4, 0)
+        Memory.write_i32(self.mesh_arena_pages + idx * 4, -1)
+        Memory.write_i64(self.mesh_arena_vb_caps + idx * 8, 0)
+        Memory.write_i64(self.mesh_arena_ib_caps + idx * 8, 0)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
         self._write_mesh_bounds(idx, vertices, vertex_count)
         self.vb_count = idx + 1
@@ -2953,14 +3360,104 @@ attach GpuRendererCore:
         Memory.write_ptr(self.vb_memories + idx * 8, uploaded_vb.memory)
         Memory.write_i64(self.vb_alloc_sizes + idx * 8, uploaded_vb.capacity)
         Memory.write_i32(self.vb_vert_counts + idx * 4, vertex_count)
+        Memory.write_i32(self.vb_first_vertices + idx * 4, 0)
         Memory.write_ptr(self.ib_handles + idx * 8, uploaded_ib.handle)
         Memory.write_ptr(self.ib_memories + idx * 8, uploaded_ib.memory)
         Memory.write_i64(self.ib_alloc_sizes + idx * 8, uploaded_ib.capacity)
         Memory.write_i32(self.ib_index_counts + idx * 4, index_count)
+        Memory.write_i32(self.ib_first_indices + idx * 4, 0)
+        Memory.write_i32(self.mesh_arena_pages + idx * 4, -1)
+        Memory.write_i64(self.mesh_arena_vb_caps + idx * 8, 0)
+        Memory.write_i64(self.mesh_arena_ib_caps + idx * 8, 0)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
         self._write_mesh_bounds(idx, vertices, vertex_count)
         self.vb_count = idx + 1
         return idx
+
+    fun upload_dynamic_mesh_data(self, mesh: GpuMeshData) -> i32:
+        if self.initialized == 0:
+            return -1
+        if mesh.vertices == 0 or mesh.vertex_count <= 0:
+            return -1
+        if mesh.indices == 0 or mesh.index_count <= 0:
+            return -1
+        if self.vb_count >= self.vb_capacity:
+            self._grow_vb_arrays()
+        vbytes: i64 = (mesh.vertex_count as i64) * (FROG_GPU_VERTEX_STRIDE as i64)
+        ibytes: i64 = (mesh.index_count as i64) * 4
+        slice: GpuArenaSlice = self._arena_alloc_slice(vbytes, ibytes, -1)
+        if slice.ok == 0:
+            return -1
+        vmap: i64 = Memory.read_ptr(self.arena_page_vmaps + slice.page * 8)
+        imap: i64 = Memory.read_ptr(self.arena_page_imaps + slice.page * 8)
+        if vmap == 0 or imap == 0:
+            self._arena_retire_slice(slice.page, slice.first_vertex, slice.first_index, slice.vertex_capacity, slice.index_capacity)
+            return -1
+        Memory.copy(vmap + (slice.first_vertex as i64) * (FROG_GPU_VERTEX_STRIDE as i64), mesh.vertices, vbytes)
+        Memory.copy(imap + (slice.first_index as i64) * 4, mesh.indices, ibytes)
+        idx: i32 = self.vb_count
+        Memory.write_ptr(self.vb_handles + idx * 8, Memory.read_ptr(self.arena_page_vbs + slice.page * 8))
+        Memory.write_ptr(self.vb_memories + idx * 8, 0)
+        Memory.write_i64(self.vb_alloc_sizes + idx * 8, 0)
+        Memory.write_i32(self.vb_vert_counts + idx * 4, mesh.vertex_count)
+        Memory.write_i32(self.vb_first_vertices + idx * 4, slice.first_vertex)
+        Memory.write_ptr(self.ib_handles + idx * 8, Memory.read_ptr(self.arena_page_ibs + slice.page * 8))
+        Memory.write_ptr(self.ib_memories + idx * 8, 0)
+        Memory.write_i64(self.ib_alloc_sizes + idx * 8, 0)
+        Memory.write_i32(self.ib_index_counts + idx * 4, mesh.index_count)
+        Memory.write_i32(self.ib_first_indices + idx * 4, slice.first_index)
+        Memory.write_i32(self.mesh_arena_pages + idx * 4, slice.page)
+        Memory.write_i64(self.mesh_arena_vb_caps + idx * 8, slice.vertex_capacity)
+        Memory.write_i64(self.mesh_arena_ib_caps + idx * 8, slice.index_capacity)
+        Memory.write_ptr(self.model_matrices + idx * 8, 0)
+        self._write_mesh_bounds(idx, mesh.vertices, mesh.vertex_count)
+        self.vb_count = idx + 1
+        self._mark_cull_dirty_struct()
+        return idx
+
+    fun replace_dynamic_mesh_data(self, mesh_id: i32, mesh: GpuMeshData) -> i32:
+        if self.initialized == 0:
+            return -1
+        if mesh_id < 0 or mesh_id >= self.vb_count:
+            return -1
+        if mesh.vertices == 0 or mesh.vertex_count <= 0:
+            return -1
+        if mesh.indices == 0 or mesh.index_count <= 0:
+            return -1
+        old_page: i32 = Memory.read_i32(self.mesh_arena_pages + mesh_id * 4)
+        if old_page < 0:
+            return -1
+        vbytes: i64 = (mesh.vertex_count as i64) * (FROG_GPU_VERTEX_STRIDE as i64)
+        ibytes: i64 = (mesh.index_count as i64) * 4
+        slice: GpuArenaSlice = self._arena_alloc_slice(vbytes, ibytes, old_page)
+        if slice.ok == 0:
+            return -1
+        vmap: i64 = Memory.read_ptr(self.arena_page_vmaps + slice.page * 8)
+        imap: i64 = Memory.read_ptr(self.arena_page_imaps + slice.page * 8)
+        if vmap == 0 or imap == 0:
+            self._arena_retire_slice(slice.page, slice.first_vertex, slice.first_index, slice.vertex_capacity, slice.index_capacity)
+            return -1
+        Memory.copy(vmap + (slice.first_vertex as i64) * (FROG_GPU_VERTEX_STRIDE as i64), mesh.vertices, vbytes)
+        Memory.copy(imap + (slice.first_index as i64) * 4, mesh.indices, ibytes)
+
+        old_first_vertex: i32 = Memory.read_i32(self.vb_first_vertices + mesh_id * 4)
+        old_first_index: i32 = Memory.read_i32(self.ib_first_indices + mesh_id * 4)
+        old_vcap: i64 = Memory.read_i64(self.mesh_arena_vb_caps + mesh_id * 8)
+        old_icap: i64 = Memory.read_i64(self.mesh_arena_ib_caps + mesh_id * 8)
+        self._arena_retire_slice(old_page, old_first_vertex, old_first_index, old_vcap, old_icap)
+
+        Memory.write_ptr(self.vb_handles + mesh_id * 8, Memory.read_ptr(self.arena_page_vbs + slice.page * 8))
+        Memory.write_i32(self.vb_vert_counts + mesh_id * 4, mesh.vertex_count)
+        Memory.write_i32(self.vb_first_vertices + mesh_id * 4, slice.first_vertex)
+        Memory.write_ptr(self.ib_handles + mesh_id * 8, Memory.read_ptr(self.arena_page_ibs + slice.page * 8))
+        Memory.write_i32(self.ib_index_counts + mesh_id * 4, mesh.index_count)
+        Memory.write_i32(self.ib_first_indices + mesh_id * 4, slice.first_index)
+        Memory.write_i32(self.mesh_arena_pages + mesh_id * 4, slice.page)
+        Memory.write_i64(self.mesh_arena_vb_caps + mesh_id * 8, slice.vertex_capacity)
+        Memory.write_i64(self.mesh_arena_ib_caps + mesh_id * 8, slice.index_capacity)
+        self._write_mesh_bounds(mesh_id, mesh.vertices, mesh.vertex_count)
+        self._mark_cull_dirty_struct()
+        return mesh_id
 
     fun replace_mesh_data(self, mesh_id: i32, mesh: GpuMeshData) -> i32:
         if self.initialized == 0:
@@ -2972,6 +3469,8 @@ attach GpuRendererCore:
         if mesh.vertices == 0:
             return 0 - 1
         if mesh.vertex_count <= 0:
+            return 0 - 1
+        if Memory.read_i32(self.mesh_arena_pages + mesh_id * 4) >= 0:
             return 0 - 1
 
         old_shared_vb: i64 = Memory.read_ptr(self.vb_handles + mesh_id * 8)
@@ -3021,11 +3520,14 @@ attach GpuRendererCore:
         Memory.write_ptr(self.vb_memories + mesh_id * 8, uploaded_vb.memory)
         Memory.write_i64(self.vb_alloc_sizes + mesh_id * 8, uploaded_vb.capacity)
         Memory.write_i32(self.vb_vert_counts + mesh_id * 4, mesh.vertex_count)
+        Memory.write_i32(self.vb_first_vertices + mesh_id * 4, 0)
         Memory.write_ptr(self.ib_handles + mesh_id * 8, uploaded_ib.handle)
         Memory.write_ptr(self.ib_memories + mesh_id * 8, uploaded_ib.memory)
         Memory.write_i64(self.ib_alloc_sizes + mesh_id * 8, uploaded_ib.capacity)
         Memory.write_i32(self.ib_index_counts + mesh_id * 4, mesh.index_count)
+        Memory.write_i32(self.ib_first_indices + mesh_id * 4, 0)
         self._write_mesh_bounds(mesh_id, mesh.vertices, mesh.vertex_count)
+        self._mark_cull_dirty_struct()
         return mesh_id
 
     # Register an instance that shares VkBuffer with source but gets own model matrix
@@ -3035,6 +3537,8 @@ attach GpuRendererCore:
         if src_vb_idx < 0:
             return 0 - 1
         if src_vb_idx >= self.vb_count:
+            return 0 - 1
+        if Memory.read_i32(self.mesh_arena_pages + src_vb_idx * 4) >= 0:
             return 0 - 1
         if self.vb_count >= self.vb_capacity:
             self._grow_vb_arrays()
@@ -3048,10 +3552,13 @@ attach GpuRendererCore:
         Memory.write_ptr(self.vb_memories + idx * 8, 0)
         Memory.write_i64(self.vb_alloc_sizes + idx * 8, 0)
         Memory.write_i32(self.vb_vert_counts + idx * 4, src_vc)
+        Memory.write_i32(self.vb_first_vertices + idx * 4, Memory.read_i32(self.vb_first_vertices + src_vb_idx * 4))
         Memory.write_ptr(self.ib_handles + idx * 8, src_ib_handle)
         Memory.write_ptr(self.ib_memories + idx * 8, 0)
         Memory.write_i64(self.ib_alloc_sizes + idx * 8, 0)
         Memory.write_i32(self.ib_index_counts + idx * 4, src_ic)
+        Memory.write_i32(self.ib_first_indices + idx * 4, Memory.read_i32(self.ib_first_indices + src_vb_idx * 4))
+        Memory.write_i32(self.mesh_arena_pages + idx * 4, -1)
         Memory.write_ptr(self.model_matrices + idx * 8, 0)
         if self.mesh_tex_ids != 0:
             Memory.write_i32(self.mesh_tex_ids + idx * 4, Memory.read_i32(self.mesh_tex_ids + src_vb_idx * 4))
@@ -3106,6 +3613,24 @@ attach GpuRendererCore:
                             self.transparent_visible_count = 0
         Memory.write_i32(self.vb_visible + mesh_id * 4, v)
         self._mark_cull_dirty_struct()
+
+    # Mark a dynamic-arena mesh whose vertices are already in world space.
+    # Eligible meshes on the same arena page must share opaque material state;
+    # they are emitted as one multi-draw-indirect batch with one identity
+    # instance record. This keeps meshes independently replaceable while
+    # collapsing hundreds of static terrain draws to a few page submissions.
+    fun set_mesh_static_batch(self, mesh_id: i32, on: i32) -> i32:
+        if self.mesh_static_batches == 0:
+            return 0
+        if mesh_id < 0 or mesh_id >= self.vb_count:
+            return 0
+        if Memory.read_i32(self.mesh_arena_pages + mesh_id * 4) < 0:
+            return 0
+        v: i32 = 0
+        if on != 0:
+            v = 1
+        Memory.write_i32(self.mesh_static_batches + mesh_id * 4, v)
+        return 1
 
     fun set_model_matrix(self, vb_idx: i32, mat_ptr: i64) -> void:
         if vb_idx < 0:
@@ -4207,8 +4732,14 @@ attach GpuRendererCore:
                 in_base: i32 = Memory.read_i32(self.gpu_grp_inbase + g * 4)
                 group_n: i32 = Memory.read_i32(self.gpu_grp_count + g * 4)
                 draw_count: i32 = Memory.read_i32(self.gpu_grp_draw + g * 4)
+                shadow_mi: i32 = Memory.read_i32(self.gpu_grp_mi + g * 4)
+                shadow_first_index: i32 = Memory.read_i32(self.ib_first_indices + shadow_mi * 4)
+                shadow_vertex_offset: i32 = Memory.read_i32(self.vb_first_vertices + shadow_mi * 4)
+                if Memory.read_i32(self.gpu_grp_indexed + g * 4) == 0:
+                    shadow_first_index = shadow_vertex_offset
+                    shadow_vertex_offset = 0
                 cmd_index: i32 = s_cmd_base0 + g
-                cull.prepare_shadow_cmd(cmd_index, draw_count)
+                cull.prepare_shadow_cmd(cmd_index, draw_count, shadow_first_index, shadow_vertex_offset)
                 cull.dispatch_shadow_group(cmd, group_n, in_base, out_cursor, cmd_index, push)
                 out_cursor = out_cursor + group_n
                 g = g + 1
@@ -4422,6 +4953,8 @@ attach GpuRendererCore:
                 vc: i32 = Memory.read_i32(self.vb_vert_counts + mi * 4)
                 ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
                 ic: i32 = Memory.read_i32(self.ib_index_counts + mi * 4)
+                first_vertex: i32 = Memory.read_i32(self.vb_first_vertices + mi * 4)
+                first_index: i32 = Memory.read_i32(self.ib_first_indices + mi * 4)
                 model_ptr: i64 = Memory.read_ptr(self.model_matrices + mi * 8)
                 if vb_handle == 0 or vc <= 0 or model_ptr == 0:
                     mi = mi + 1
@@ -4434,6 +4967,8 @@ attach GpuRendererCore:
                         g_vc: i32 = Memory.read_i32(self.vb_vert_counts + gi * 4)
                         g_ib: i64 = Memory.read_ptr(self.ib_handles + gi * 8)
                         g_ic: i32 = Memory.read_i32(self.ib_index_counts + gi * 4)
+                        g_first_vertex: i32 = Memory.read_i32(self.vb_first_vertices + gi * 4)
+                        g_first_index: i32 = Memory.read_i32(self.ib_first_indices + gi * 4)
                         g_model: i64 = Memory.read_ptr(self.model_matrices + gi * 8)
                         if g_vb != vb_handle:
                             break
@@ -4442,6 +4977,10 @@ attach GpuRendererCore:
                         elif g_ib != ib_handle:
                             break
                         elif g_ic != ic:
+                            break
+                        elif g_first_vertex != first_vertex:
+                            break
+                        elif g_first_index != first_index:
                             break
                         elif g_model == 0:
                             break
@@ -4494,11 +5033,11 @@ attach GpuRendererCore:
                                 if ib_handle != last_index_bound:
                                     vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
                                     last_index_bound = ib_handle
-                                vkCmdDrawIndexed(cmd, ic, group_count, 0, 0, 0)
+                                vkCmdDrawIndexed(cmd, ic, group_count, first_index, first_vertex, 0)
                             else:
-                                vkCmdDraw(cmd, vc, group_count, 0, 0)
+                                vkCmdDraw(cmd, vc, group_count, first_vertex, 0)
                         else:
-                            vkCmdDraw(cmd, vc, group_count, 0, 0)
+                            vkCmdDraw(cmd, vc, group_count, first_vertex, 0)
                     mi = gi
             cascade_index = cascade_index + 1
         if render_begun == 1:
@@ -4864,6 +5403,87 @@ attach GpuRendererCore:
                         cull_body: @heap fun(i32) = fun(gi: i32) _frog_cull_one(cull_self_addr, cull_vp, gi, cull_res)
                         engine_parallel_for(self.vb_count, cull_body)
 
+                # World-space dynamic arena meshes can keep independent
+                # replaceable slices yet render in one MDI submission per
+                # arena page. All commands use one identity/material instance
+                # record (firstInstance=0 relative to the bound record), so the
+                # path does not depend on drawIndirectFirstInstance support.
+                static_batch_active: i32 = 0
+                if self.gpu_draw_enabled == 0 and mapped_instances != 0:
+                    if self.gpu_cull_ptr != 0:
+                        static_cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
+                        static_ind_buf: i64 = static_cull.indirect_handle()
+                        if static_cull.ready == 1 and static_ind_buf != 0:
+                            static_batch_active = 1
+                            static_cmd_base: i32 = static_cull.slot_cmd_base(inst_slot)
+                            static_cmd_cursor: i32 = 0
+                            static_page: i32 = 0
+                            while static_page < self.arena_page_count:
+                                static_rep: i32 = -1
+                                static_scan: i32 = 0
+                                while static_scan < self.vb_count:
+                                    if Memory.read_i32(self.mesh_static_batches + static_scan * 4) == 1:
+                                        if Memory.read_i32(self.mesh_arena_pages + static_scan * 4) == static_page:
+                                            static_vis: i32 = Memory.read_i32(self.vb_cull_result + static_scan * 4)
+                                            if static_vis == 1:
+                                                static_rep = static_scan
+                                                static_scan = self.vb_count
+                                    static_scan = static_scan + 1
+
+                                if static_rep >= 0:
+                                    static_model: i64 = Memory.read_ptr(self.model_matrices + static_rep * 8)
+                                    static_dst: i64 = mapped_instances + ((instance_write as i64) * (FROG_GPU_INSTANCE_STRIDE as i64))
+                                    Memory.copy(static_dst, static_model, 64)
+                                    if self.mesh_material_params != 0:
+                                        Memory.copy(static_dst + FROG_GPU_INSTANCE_MATERIAL_OFFSET, self.mesh_material_params + static_rep * 32, 32)
+                                    receive_shadow: i32 = 1
+                                    if self.mesh_shadow_flags != 0:
+                                        static_shadow_flags: i32 = Memory.read_i32(self.mesh_shadow_flags + static_rep * 4)
+                                        receive_shadow = (static_shadow_flags / 2) - (static_shadow_flags / 4) * 2
+                                    if receive_shadow == 1:
+                                        static_packed_material: f32 = Memory.read_f32(static_dst + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 12)
+                                        Memory.write_f32(static_dst + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 12, static_packed_material + 65536.0)
+                                    self._write_record_texidx(static_dst, static_rep)
+
+                                    static_vb: i64 = Memory.read_ptr(self.arena_page_vbs + static_page * 8)
+                                    static_ib: i64 = Memory.read_ptr(self.arena_page_ibs + static_page * 8)
+                                    Memory.write_ptr(self.scratch_vb_arr, static_vb)
+                                    vkCmdBindVertexBuffers(cmd, 0, 1, self.scratch_vb_arr, self.scratch_off_arr)
+                                    Memory.write_ptr(self.scratch_inst_vb_arr, frame_inst_buf)
+                                    Memory.write_i64(self.scratch_inst_off_arr, (instance_write as i64) * (FROG_GPU_INSTANCE_STRIDE as i64))
+                                    vkCmdBindVertexBuffers(cmd, 1, 1, self.scratch_inst_vb_arr, self.scratch_inst_off_arr)
+                                    vkCmdBindIndexBuffer(cmd, static_ib, 0, 1)
+                                    if use_bindless == 0:
+                                        static_desc: i64 = self.mesh_descriptor_set(rp, static_rep)
+                                        if static_desc != 0:
+                                            Memory.write_ptr(self.scratch_desc_arr, static_desc)
+                                            vkCmdBindDescriptorSets(cmd, 0, active_layout, 0, 1, self.scratch_desc_arr, 0, 0)
+
+                                    page_cmd_start: i32 = static_cmd_cursor
+                                    static_scan = 0
+                                    while static_scan < self.vb_count:
+                                        if Memory.read_i32(self.mesh_static_batches + static_scan * 4) == 1:
+                                            if Memory.read_i32(self.mesh_arena_pages + static_scan * 4) == static_page:
+                                                if Memory.read_i32(self.vb_cull_result + static_scan * 4) == 1:
+                                                    static_ic: i32 = Memory.read_i32(self.ib_index_counts + static_scan * 4)
+                                                    if static_ic > 0 and static_cmd_cursor < FROG_CULL_MAX_GROUPS:
+                                                        static_first_index: i32 = Memory.read_i32(self.ib_first_indices + static_scan * 4)
+                                                        static_vertex_offset: i32 = Memory.read_i32(self.vb_first_vertices + static_scan * 4)
+                                                        static_cmd: i32 = static_cmd_base + static_cmd_cursor
+                                                        static_cull.prepare_group_cmd(static_cmd, static_ic, 1, static_first_index, static_vertex_offset)
+                                                        static_cull.set_cmd_instance_count(static_cmd, 1)
+                                                        static_cmd_cursor = static_cmd_cursor + 1
+                                        static_scan = static_scan + 1
+                                    page_cmd_count: i32 = static_cmd_cursor - page_cmd_start
+                                    if page_cmd_count > 0:
+                                        static_first_cmd: i32 = static_cmd_base + page_cmd_start
+                                        vkCmdDrawIndexedIndirect(cmd, static_ind_buf, static_cull.group_cmd_offset(static_first_cmd), page_cmd_count, 20)
+                                        frame_draw_calls = frame_draw_calls + 1
+                                        frame_indexed_draw_calls = frame_indexed_draw_calls + 1
+                                        frame_visible_instances = frame_visible_instances + page_cmd_count
+                                        instance_write = instance_write + 1
+                                static_page = static_page + 1
+
                 # CPU draw path uses two registry scans: opaque first, then
                 # transparent with blending + depth writes disabled. If the
                 # transparent variant could not be created, retain the old
@@ -4888,6 +5508,8 @@ attach GpuRendererCore:
                     vc: i32 = Memory.read_i32(self.vb_vert_counts + mi * 4)
                     ib_handle: i64 = Memory.read_ptr(self.ib_handles + mi * 8)
                     ic: i32 = Memory.read_i32(self.ib_index_counts + mi * 4)
+                    first_vertex: i32 = Memory.read_i32(self.vb_first_vertices + mi * 4)
+                    first_index: i32 = Memory.read_i32(self.ib_first_indices + mi * 4)
                     model_ptr: i64 = 0
                     if self.model_matrices != 0:
                         model_ptr = Memory.read_ptr(self.model_matrices + mi * 8)
@@ -4901,6 +5523,8 @@ attach GpuRendererCore:
                     elif vb_handle == 0:
                         mi = mi + 1
                     elif vc <= 0:
+                        mi = mi + 1
+                    elif static_batch_active == 1 and Memory.read_i32(self.mesh_static_batches + mi * 4) == 1:
                         mi = mi + 1
                     elif model_ptr == 0:
                         mi = mi + 1
@@ -4931,6 +5555,8 @@ attach GpuRendererCore:
                             g_vc: i32 = Memory.read_i32(self.vb_vert_counts + gi * 4)
                             g_ib: i64 = Memory.read_ptr(self.ib_handles + gi * 8)
                             g_ic: i32 = Memory.read_i32(self.ib_index_counts + gi * 4)
+                            g_first_vertex: i32 = Memory.read_i32(self.vb_first_vertices + gi * 4)
+                            g_first_index: i32 = Memory.read_i32(self.ib_first_indices + gi * 4)
                             g_tex: i32 = 0 - 1
                             if self.mesh_tex_ids != 0:
                                 g_tex = Memory.read_i32(self.mesh_tex_ids + gi * 4)
@@ -4960,6 +5586,10 @@ attach GpuRendererCore:
                             elif g_ib != ib_handle:
                                 break
                             elif g_ic != ic:
+                                break
+                            elif g_first_vertex != first_vertex:
+                                break
+                            elif g_first_index != first_index:
                                 break
                             elif use_bindless == 0 and g_tex != group_tex_id:
                                 break
@@ -5033,14 +5663,14 @@ attach GpuRendererCore:
                                     if ib_handle != last_index_bound:
                                         vkCmdBindIndexBuffer(cmd, ib_handle, 0, 1)
                                         last_index_bound = ib_handle
-                                    vkCmdDrawIndexed(cmd, ic, group_count, 0, 0, 0)
+                                    vkCmdDrawIndexed(cmd, ic, group_count, first_index, first_vertex, 0)
                                     frame_draw_calls = frame_draw_calls + 1
                                     frame_indexed_draw_calls = frame_indexed_draw_calls + 1
                                 else:
-                                    vkCmdDraw(cmd, vc, group_count, 0, 0)
+                                    vkCmdDraw(cmd, vc, group_count, first_vertex, 0)
                                     frame_draw_calls = frame_draw_calls + 1
                             else:
-                                vkCmdDraw(cmd, vc, group_count, 0, 0)
+                                vkCmdDraw(cmd, vc, group_count, first_vertex, 0)
                                 frame_draw_calls = frame_draw_calls + 1
                             frame_visible_instances = frame_visible_instances + group_count
 
@@ -5157,6 +5787,49 @@ attach GpuRendererCore:
         self.pooled_capacity = 0
         self.pooled_bytes = 0
         self.pooled_byte_limit = 0
+        # Arena pages own their shared memory; registry entries deliberately
+        # store memory=0 so they are never double-freed below.
+        api: i32 = 0
+        while api < self.arena_page_count:
+            avm: i64 = Memory.read_ptr(self.arena_page_vmems + api * 8)
+            aim: i64 = Memory.read_ptr(self.arena_page_imems + api * 8)
+            avb: i64 = Memory.read_ptr(self.arena_page_vbs + api * 8)
+            aib: i64 = Memory.read_ptr(self.arena_page_ibs + api * 8)
+            if avm != 0:
+                vkUnmapMemory(self.device, avm)
+            if aim != 0:
+                vkUnmapMemory(self.device, aim)
+            if avb != 0:
+                vkDestroyBuffer(self.device, avb, 0)
+            if aib != 0:
+                vkDestroyBuffer(self.device, aib, 0)
+            if avm != 0:
+                vkFreeMemory(self.device, avm, 0)
+            if aim != 0:
+                vkFreeMemory(self.device, aim, 0)
+            api = api + 1
+        if self.arena_page_vbs != 0:
+            Memory.free(self.arena_page_vbs)
+            Memory.free(self.arena_page_vmems)
+            Memory.free(self.arena_page_vmaps)
+            Memory.free(self.arena_page_vcursors)
+            Memory.free(self.arena_page_vcaps)
+            Memory.free(self.arena_page_ibs)
+            Memory.free(self.arena_page_imems)
+            Memory.free(self.arena_page_imaps)
+            Memory.free(self.arena_page_icursors)
+            Memory.free(self.arena_page_icaps)
+        if self.arena_free_pages != 0:
+            Memory.free(self.arena_free_pages)
+            Memory.free(self.arena_free_first_vertices)
+            Memory.free(self.arena_free_first_indices)
+            Memory.free(self.arena_free_vcaps)
+            Memory.free(self.arena_free_icaps)
+            Memory.free(self.arena_free_frames)
+        self.arena_page_count = 0
+        self.arena_page_capacity = 0
+        self.arena_free_count = 0
+        self.arena_free_capacity = 0
         # Only destroy VkBuffers/Memory that are owned (memory != 0)
         # Shared instances have memory = 0
         if self.vb_handles != 0:
@@ -5187,6 +5860,8 @@ attach GpuRendererCore:
             Memory.free(self.vb_alloc_sizes)
         if self.vb_vert_counts != 0:
             Memory.free(self.vb_vert_counts)
+        if self.vb_first_vertices != 0:
+            Memory.free(self.vb_first_vertices)
         if self.ib_handles != 0:
             Memory.free(self.ib_handles)
         if self.ib_memories != 0:
@@ -5195,6 +5870,16 @@ attach GpuRendererCore:
             Memory.free(self.ib_alloc_sizes)
         if self.ib_index_counts != 0:
             Memory.free(self.ib_index_counts)
+        if self.ib_first_indices != 0:
+            Memory.free(self.ib_first_indices)
+        if self.mesh_arena_pages != 0:
+            Memory.free(self.mesh_arena_pages)
+        if self.mesh_arena_vb_caps != 0:
+            Memory.free(self.mesh_arena_vb_caps)
+        if self.mesh_arena_ib_caps != 0:
+            Memory.free(self.mesh_arena_ib_caps)
+        if self.mesh_static_batches != 0:
+            Memory.free(self.mesh_static_batches)
         if self.model_matrices != 0:
             Memory.free(self.model_matrices)
         if self.mesh_bound_xs != 0:

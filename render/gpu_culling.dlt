@@ -487,7 +487,7 @@ attach GpuCullPipeline:
     # Pre-fill a shadow group's indirect command (indexCount + zero
     # instanceCount for the compute to atomic-increment). firstInstance=0;
     # the draw binds the instance buffer at the group's byte offset.
-    fun prepare_shadow_cmd(self, g: i32, count: i32):
+    fun prepare_shadow_cmd(self, g: i32, count: i32, first_index: i32, vertex_offset: i32):
         if self.shadow_cmd_mapped == 0:
             return
         if g < 0:
@@ -497,8 +497,8 @@ attach GpuCullPipeline:
         base: i64 = self.shadow_cmd_mapped + (g as i64) * 20
         Memory.write_i32(base + 0, count)         # indexCount
         Memory.write_i32(base + 4, 0)             # instanceCount = 0
-        Memory.write_i32(base + 8, 0)             # firstIndex
-        Memory.write_i32(base + 12, 0)            # vertexOffset
+        Memory.write_i32(base + 8, first_index)   # firstIndex
+        Memory.write_i32(base + 12, vertex_offset) # vertexOffset
         Memory.write_i32(base + 16, 0)            # firstInstance
 
     fun shadow_group_visible_count(self, g: i32) -> i32:
@@ -806,7 +806,7 @@ attach GpuCullPipeline:
     # is zeroed for the compute shader to atomic-increment. firstInstance is
     # kept 0 — the graphics pass binds the instance vertex buffer at the
     # group's byte offset, so we never need drawIndirectFirstInstance.
-    fun prepare_group_cmd(self, g: i32, count: i32, indexed: i32):
+    fun prepare_group_cmd(self, g: i32, count: i32, indexed: i32, first_index: i32, vertex_offset: i32):
         if self.count_mapped == 0:
             return
         if g < 0:
@@ -816,8 +816,8 @@ attach GpuCullPipeline:
         base: i64 = self.count_mapped + self.group_cmd_offset(g)
         Memory.write_i32(base + 0, count)         # indexCount / vertexCount
         Memory.write_i32(base + 4, 0)             # instanceCount = 0
-        Memory.write_i32(base + 8, 0)             # firstIndex / firstVertex
-        Memory.write_i32(base + 12, 0)            # vertexOffset / firstInstance
+        Memory.write_i32(base + 8, first_index)   # firstIndex / firstVertex
+        Memory.write_i32(base + 12, vertex_offset) # vertexOffset / firstInstance
         Memory.write_i32(base + 16, 0)            # firstInstance (indexed only)
 
     # R2: set group g's firstInstance field (offset +16 in
@@ -832,6 +832,15 @@ attach GpuCullPipeline:
         if g >= FROG_CULL_MAX_GROUPS * FROG_CULL_SLOTS:
             return
         Memory.write_i32(self.count_mapped + self.group_cmd_offset(g) + 16, first_instance)
+
+    fun set_cmd_instance_count(self, g: i32, instance_count: i32):
+        if self.count_mapped == 0:
+            return
+        if g < 0:
+            return
+        if g >= FROG_CULL_MAX_GROUPS * FROG_CULL_SLOTS:
+            return
+        Memory.write_i32(self.count_mapped + self.group_cmd_offset(g) + 4, instance_count)
 
     # Visible count the GPU computed for group g.
     fun group_visible_count(self, g: i32) -> i32:
@@ -1101,7 +1110,7 @@ attach GpuCullPipeline:
         Memory.write_f32(push + 80 + 12, 100000.0)
         Memory.write_i32(push + 96, 4)
 
-        self.prepare_group_cmd(0, 36, 0)
+        self.prepare_group_cmd(0, 36, 0, 0, 0)
         cmd: i64 = gpu_tex_begin_oneshot(self.device, cmd_pool)
         if cmd == 0:
             Memory.free(push)

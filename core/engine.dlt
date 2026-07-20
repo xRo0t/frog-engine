@@ -564,6 +564,18 @@ attach Engine:
     static fun reserve_mesh_capacity(needed: i32) -> i32:
         return g_engine_runtime.reserve_mesh_capacity(needed)
 
+    static fun reserve_dynamic_mesh_arena(vertex_bytes: i64, index_bytes: i64) -> i32:
+        return g_engine_runtime.reserve_dynamic_mesh_arena(vertex_bytes, index_bytes)
+
+    static fun upload_dynamic_mesh_data(mesh: GpuMeshData) -> i32:
+        return g_engine_runtime.upload_dynamic_mesh_data(mesh)
+
+    static fun replace_dynamic_mesh_data(mesh_id: i32, mesh: GpuMeshData) -> i32:
+        return g_engine_runtime.replace_dynamic_mesh_data(mesh_id, mesh)
+
+    static fun set_mesh_static_batch(mesh_id: i32, on: i32) -> i32:
+        return g_engine_runtime.set_mesh_static_batch(mesh_id, on)
+
     static fun replace_mesh_data(mesh_id: i32, mesh: GpuMeshData) -> i32:
         return g_engine_runtime.replace_mesh_data(mesh_id, mesh)
 
