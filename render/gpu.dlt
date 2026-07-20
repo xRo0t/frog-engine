@@ -96,10 +96,17 @@ fun gpu_camera_view(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32) ->
     return m
 
 fun gpu_camera_proj_into(fov: f32, aspect: f32, m: i64):
+    gpu_camera_proj_into_range(fov, aspect, 0.1, 1000.0, m)
+
+fun gpu_camera_proj_into_range(fov: f32, aspect: f32, near_plane: f32, far_plane: f32, m: i64):
     if m == 0:
         return
-    near: f32 = 0.1
-    far: f32 = 1000.0
+    near: f32 = near_plane
+    if near < 0.001:
+        near = 0.001
+    far: f32 = far_plane
+    if far <= near + 0.001:
+        far = near + 1000.0
     pi: f32 = 3.14159265
     half: f32 = fov * pi / 360.0
     f: f32 = @cos(half) / @sin(half)
@@ -673,7 +680,7 @@ attach GpuRendererCore:
         view: i64 = self.scratch_camera_view
         proj: i64 = self.scratch_camera_proj
         gpu_camera_view_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y, view)
-        gpu_camera_proj_into(camera.fov, (width as f32) / (height as f32), proj)
+        gpu_camera_proj_into_range(camera.fov, (width as f32) / (height as f32), camera.near_z, camera.far_z, proj)
         self.set_shadow_camera(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y)
         self.render_frame_with_environment(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height, env)
 
@@ -684,6 +691,6 @@ attach GpuRendererCore:
         view: i64 = self.scratch_camera_view
         proj: i64 = self.scratch_camera_proj
         gpu_camera_view_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y, view)
-        gpu_camera_proj_into(camera.fov, (render_width as f32) / (render_height as f32), proj)
+        gpu_camera_proj_into_range(camera.fov, (render_width as f32) / (render_height as f32), camera.near_z, camera.far_z, proj)
         self.set_shadow_camera(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y)
         self.render_frame_scaled_with_environment(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height, render_width, render_height, env)

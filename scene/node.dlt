@@ -332,6 +332,17 @@ attach Camera3D:
         self.fov = fov
         return self
 
+    fun set_clip_planes(self, near_z: f32, far_z: f32) -> Camera3D:
+        clip_near: f32 = near_z
+        if clip_near < 0.001:
+            clip_near = 0.001
+        clip_far: f32 = far_z
+        if clip_far <= clip_near + 0.001:
+            clip_far = clip_near + 1000.0
+        self.near_z = clip_near
+        self.far_z = clip_far
+        return self
+
     fun make_current(self) -> Camera3D:
         self.current = 1
         Engine.scene.set_camera(self)
