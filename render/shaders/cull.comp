@@ -111,6 +111,23 @@ void main() {
         }
     }
 
+    // Static-arena command mode. cmds[cmdIndex].instanceCount is a page-local
+    // atomic draw counter/header; visible slices append compact commands after
+    // it. The graphics pass consumes only that compact prefix through
+    // vkCmdDrawIndexedIndirectCount, so invisible commands cost no MDI parsing.
+    if (push.camDistance.w < 0.0) {
+        if (visible) {
+            uint drawSlot = atomicAdd(cmds[push.cmdIndex].instanceCount, 1u);
+            uint command = push.cmdIndex + 1u + drawSlot;
+            cmds[command].indexCount = inst.texIndex1.y;
+            cmds[command].instanceCount = 1u;
+            cmds[command].firstIndex = inst.texIndex1.z;
+            cmds[command].vertexOffset = int(inst.texIndex1.w);
+            cmds[command].firstInstance = 0u;
+        }
+        return;
+    }
+
     if (visible) {
         uint local_slot = atomicAdd(cmds[push.cmdIndex].instanceCount, 1u);
         uint slot = push.outBase + local_slot;

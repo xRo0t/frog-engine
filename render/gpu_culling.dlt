@@ -29,8 +29,11 @@ FROG_CULL_OUT_STRIDE: i32 = 128
 # = 96 + 16 + 16 = 128 bytes. camDistance = cull origin (xyz) + max distance
 # (w); w <= 0 disables the optional distance cull (main camera pass).
 FROG_CULL_PUSH_SIZE: i32 = 128
-# Max distinct mesh groups per frame (size of the indirect-command array).
-FROG_CULL_MAX_GROUPS: i32 = 4096
+# Max indirect commands per frame. This also covers world-space static-arena
+# slices, where every independently culled terrain cluster owns one command.
+# 65K keeps very large streamed worlds GPU-driven without a CPU fallback while
+# costing only a few MiB across the double-buffered main/shadow command arrays.
+FROG_CULL_MAX_GROUPS: i32 = 65536
 # Frames-in-flight slots the cull buffers are partitioned into, so the
 # compute pass for frame N never writes memory frame N-1 is still reading.
 FROG_CULL_SLOTS: i32 = 2
@@ -352,10 +355,11 @@ attach GpuCullPipeline:
         self._free_buffers()
 
         slots: i64 = FROG_CULL_SLOTS as i64
-        # Input (candidates) is READ-ONLY on the GPU and identical every
-        # frame, so it is a SINGLE region (not slot-partitioned) uploaded
-        # once via the dirty flag — no per-frame re-upload.
-        in_size: i64 = (new_cap as i64) * (FROG_CULL_INSTANCE_STRIDE as i64)
+        # Input is also slot-partitioned. Regular instance culling keeps using
+        # slot 0 as persistent read-only data, while dynamic static-arena
+        # rebuilds use the current frame slot so host writes cannot race a
+        # previous frame's compute dispatch.
+        in_size: i64 = (new_cap as i64) * (FROG_CULL_INSTANCE_STRIDE as i64) * slots
         # Output + indirect commands ARE written per frame by compute and
         # read by the draw, so they stay slot-partitioned for frames-in-flight.
         out_size: i64 = (new_cap as i64) * (FROG_CULL_OUT_STRIDE as i64) * slots
@@ -449,8 +453,8 @@ attach GpuCullPipeline:
     fun slot_capacity(self) -> i32:
         return self.slot_cap
 
-    # The candidate input buffer is a SINGLE shared region (uploaded once,
-    # not slot-partitioned), so its base is always 0.
+    # Regular persistent instance culling uses the shared slot-0 region.
+    # Static-arena dispatches select their explicit slot directly.
     fun slot_in_base(self, slot: i32) -> i32:
         return 0
 
@@ -949,6 +953,38 @@ attach GpuCullPipeline:
         Memory.write_f32(dst + 136, cz)
         Memory.write_f32(dst + 140, radius)
 
+    # Write one world-space static-arena draw candidate. Its geometry is
+    # already baked into arena coordinates, so the model is identity and the
+    # bounds are world-space. The three spare texture-index words carry the
+    # indexed draw range consumed by cull.comp's static-command mode:
+    #   y=indexCount, z=firstIndex, w=vertexOffset bits.
+    fun write_static_draw(self, slot: i32, idx: i32, index_count: i32, first_index: i32, vertex_offset: i32, cx: f32, cy: f32, cz: f32, radius: f32):
+        if self.in_mapped == 0:
+            return
+        if idx < 0:
+            return
+        if idx >= self.slot_cap:
+            return
+        s: i32 = slot
+        if s < 0:
+            s = 0
+        if s >= FROG_CULL_SLOTS:
+            s = FROG_CULL_SLOTS - 1
+        absolute_idx: i32 = s * self.slot_cap + idx
+        dst: i64 = self.in_mapped + (absolute_idx as i64) * (FROG_CULL_INSTANCE_STRIDE as i64)
+        Memory.set(dst, 0, FROG_CULL_INSTANCE_STRIDE)
+        Memory.write_f32(dst + 0, 1.0)
+        Memory.write_f32(dst + 20, 1.0)
+        Memory.write_f32(dst + 40, 1.0)
+        Memory.write_f32(dst + 60, 1.0)
+        Memory.write_i32(dst + 116, index_count)
+        Memory.write_i32(dst + 120, first_index)
+        Memory.write_i32(dst + 124, vertex_offset)
+        Memory.write_f32(dst + 128, cx)
+        Memory.write_f32(dst + 132, cy)
+        Memory.write_f32(dst + 136, cz)
+        Memory.write_f32(dst + 140, radius)
+
     # Transform-only fast path: overwrite ONLY the 64-byte model matrix of
     # the candidate already living at slot `idx`, leaving material/uv/bounds
     # untouched. Used when an instance just moved (structure unchanged), so
@@ -960,7 +996,7 @@ attach GpuCullPipeline:
             return
         if idx < 0:
             return
-        if idx >= self.capacity:
+        if idx >= self.slot_cap:
             return
         dst: i64 = self.in_mapped + (idx as i64) * (FROG_CULL_INSTANCE_STRIDE as i64)
         Memory.copy(dst, model_ptr, 64)

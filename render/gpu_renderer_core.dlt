@@ -423,7 +423,12 @@ fun _frog_cull_one(self_addr: i64, vp: i64, gi: i32, res: i64):
     if core.vb_visible != 0:
         if Memory.read_i32(core.vb_visible + gi * 4) == 0:
             visible = 0
-    if visible == 1:
+    static_gpu_owned: i32 = 0
+    if core.gpu_static_active == 1:
+        if core.mesh_static_batches != 0:
+            if Memory.read_i32(core.mesh_static_batches + gi * 4) == 1:
+                static_gpu_owned = 1
+    if visible == 1 and static_gpu_owned == 0:
         if core.instance_culling_enabled == 1:
             g_model: i64 = 0
             if core.model_matrices != 0:
@@ -558,6 +563,19 @@ struct GpuRendererCore:
     gpu_cull_push: i64 = 0     # 112B push-constant scratch (planes + group fields)
     gpu_cull_rec: i64 = 0      # 128B instance-record scratch (model+material+uv+texidx)
     gpu_cull_slot: i32 = 0     # frame slot the current precull wrote into
+    # GPU-generated MDI for world-space arena slices. Candidate data and the
+    # page ranges are rebuilt only when static mesh structure changes; every
+    # frame compute compacts visible slices into page-local command prefixes.
+    gpu_static_dirty: i32 = 1
+    gpu_static_active: i32 = 0
+    gpu_static_candidate_count: i32 = 0
+    gpu_static_cmd_base: i32 = 0
+    gpu_static_page_bases: i64 = 0 # i32[] candidate/command offset per page
+    gpu_static_page_counts: i64 = 0 # i32[] command count per page
+    gpu_static_page_reps: i64 = 0   # i32[] representative mesh per page
+    gpu_static_page_cmds: i64 = 0   # i32[] page counter/header command offset
+    gpu_static_page_capacity: i32 = 0
+    gpu_static_slot_dirty: i64 = 0  # i32[FROG_CULL_SLOTS]
     debug_render_stats_enabled: i32 = 0
     debug_frame_count: i32 = 0
     debug_draw_calls: i32 = 0
@@ -801,6 +819,11 @@ attach GpuRendererCore:
         self.gpu_cull_rec = Memory.malloc_zeroed(128)
         self.gpu_slot_grpn = Memory.malloc_zeroed((FROG_CULL_SLOTS as i64) * 4)
         self.gpu_slot_cmdbase = Memory.malloc_zeroed((FROG_CULL_SLOTS as i64) * 4)
+        self.gpu_static_slot_dirty = Memory.malloc_zeroed((FROG_CULL_SLOTS as i64) * 4)
+        static_dirty_slot: i32 = 0
+        while static_dirty_slot < FROG_CULL_SLOTS:
+            Memory.write_i32(self.gpu_static_slot_dirty + static_dirty_slot * 4, 1)
+            static_dirty_slot = static_dirty_slot + 1
         self.retire_capacity = 0
         self.retire_count = 0
         self.pooled_capacity = 2048
@@ -1453,9 +1476,167 @@ attach GpuRendererCore:
     # STRUCTURE changed: instance added/removed, visibility/material change),
     # so the next precull regroups + repacks the candidate buffer.
     fun _mark_cull_dirty_struct(self):
+        self.gpu_static_dirty = 1
+        if self.gpu_static_slot_dirty != 0:
+            static_dirty_slot: i32 = 0
+            while static_dirty_slot < FROG_CULL_SLOTS:
+                Memory.write_i32(self.gpu_static_slot_dirty + static_dirty_slot * 4, 1)
+                static_dirty_slot = static_dirty_slot + 1
         if self.gpu_cull_ptr != 0:
             cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
             cull.mark_dirty()
+
+    fun _ensure_gpu_static_page_capacity(self, needed: i32) -> i32:
+        if needed <= self.gpu_static_page_capacity:
+            return 1
+        new_cap: i32 = self.gpu_static_page_capacity
+        if new_cap < 16:
+            new_cap = 16
+        while new_cap < needed:
+            new_cap = new_cap * 2
+        new_bases: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
+        new_counts: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
+        new_reps: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
+        new_cmds: i64 = Memory.malloc_zeroed((new_cap as i64) * 4)
+        if new_bases == 0 or new_counts == 0 or new_reps == 0 or new_cmds == 0:
+            if new_bases != 0:
+                Memory.free(new_bases)
+            if new_counts != 0:
+                Memory.free(new_counts)
+            if new_reps != 0:
+                Memory.free(new_reps)
+            if new_cmds != 0:
+                Memory.free(new_cmds)
+            return 0
+        if self.gpu_static_page_capacity > 0:
+            old_bytes: i64 = (self.gpu_static_page_capacity as i64) * 4
+            Memory.copy(new_bases, self.gpu_static_page_bases, old_bytes)
+            Memory.copy(new_counts, self.gpu_static_page_counts, old_bytes)
+            Memory.copy(new_reps, self.gpu_static_page_reps, old_bytes)
+            Memory.copy(new_cmds, self.gpu_static_page_cmds, old_bytes)
+            Memory.free(self.gpu_static_page_bases)
+            Memory.free(self.gpu_static_page_counts)
+            Memory.free(self.gpu_static_page_reps)
+            Memory.free(self.gpu_static_page_cmds)
+        self.gpu_static_page_bases = new_bases
+        self.gpu_static_page_counts = new_counts
+        self.gpu_static_page_reps = new_reps
+        self.gpu_static_page_cmds = new_cmds
+        self.gpu_static_page_capacity = new_cap
+        return 1
+
+    # Repack static arena slices page-by-page into the compute input. Page
+    # contiguity lets the render pass issue exactly one MDI call per page.
+    fun _gpu_static_rebuild(self, cull: GpuCullPipeline, slot: i32) -> i32:
+        if self._ensure_gpu_static_page_capacity(self.arena_page_count) == 0:
+            return 0
+        cursor: i32 = 0
+        command_cursor: i32 = 0
+        page: i32 = 0
+        while page < self.arena_page_count:
+            page_base: i32 = cursor
+            rep: i32 = 0 - 1
+            mi: i32 = 0
+            while mi < self.vb_count:
+                if Memory.read_i32(self.mesh_static_batches + mi * 4) == 1:
+                    if Memory.read_i32(self.mesh_arena_pages + mi * 4) == page:
+                        if Memory.read_i32(self.vb_visible + mi * 4) != 0:
+                            index_count: i32 = Memory.read_i32(self.ib_index_counts + mi * 4)
+                            if index_count > 0:
+                                if cursor >= FROG_CULL_MAX_GROUPS:
+                                    self.gpu_static_candidate_count = 0
+                                    return 0
+                                if rep < 0:
+                                    rep = mi
+                                cx: f32 = Memory.read_f32(self.mesh_bound_xs + mi * 4)
+                                cy: f32 = Memory.read_f32(self.mesh_bound_ys + mi * 4)
+                                cz: f32 = Memory.read_f32(self.mesh_bound_zs + mi * 4)
+                                radius: f32 = Memory.read_f32(self.mesh_bound_rs + mi * 4)
+                                if radius <= 0.0:
+                                    radius = 8.0
+                                first_index: i32 = Memory.read_i32(self.ib_first_indices + mi * 4)
+                                vertex_offset: i32 = Memory.read_i32(self.vb_first_vertices + mi * 4)
+                                cull.write_static_draw(slot, cursor, index_count, first_index, vertex_offset, cx, cy, cz, radius)
+                                cursor = cursor + 1
+                mi = mi + 1
+            Memory.write_i32(self.gpu_static_page_bases + page * 4, page_base)
+            page_count: i32 = cursor - page_base
+            if command_cursor + page_count + 1 > FROG_CULL_MAX_GROUPS:
+                self.gpu_static_candidate_count = 0
+                return 0
+            Memory.write_i32(self.gpu_static_page_counts + page * 4, page_count)
+            Memory.write_i32(self.gpu_static_page_reps + page * 4, rep)
+            Memory.write_i32(self.gpu_static_page_cmds + page * 4, command_cursor)
+            command_cursor = command_cursor + page_count + 1
+            page = page + 1
+        self.gpu_static_candidate_count = cursor
+        if self.gpu_static_slot_dirty != 0:
+            Memory.write_i32(self.gpu_static_slot_dirty + slot * 4, 0)
+            other_dirty: i32 = 0
+            dirty_scan: i32 = 0
+            while dirty_scan < FROG_CULL_SLOTS:
+                if Memory.read_i32(self.gpu_static_slot_dirty + dirty_scan * 4) != 0:
+                    other_dirty = 1
+                dirty_scan = dirty_scan + 1
+            self.gpu_static_dirty = other_dirty
+        else:
+            self.gpu_static_dirty = 0
+        return 1
+
+    # Record static-arena frustum culling before the graphics render pass.
+    # On any unsupported/failed condition the caller transparently keeps the
+    # existing CPU-cull + CPU-command MDI fallback.
+    fun gpu_precull_static(self, cmd: i64, vp_mat: i64, slot: i32) -> i32:
+        self.gpu_static_active = 0
+        # The compact path requires indirect-count. Devices without it keep
+        # the proven CPU-compacted static MDI fallback.
+        if self.ssbo_draw_enabled == 0:
+            return 0
+        if self.gpu_cull_ptr == 0 or vp_mat == 0:
+            return 0
+        cull: GpuCullPipeline = self.gpu_cull_ptr as GpuCullPipeline
+        if cull.ready == 0 or self.vb_count <= 0:
+            return 0
+        old_capacity: i32 = cull.capacity
+        if cull.ensure_capacity(self.vb_count) == 0:
+            return 0
+        if cull.capacity != old_capacity:
+            self.gpu_static_dirty = 1
+            if self.gpu_static_slot_dirty != 0:
+                dirty_slot: i32 = 0
+                while dirty_slot < FROG_CULL_SLOTS:
+                    Memory.write_i32(self.gpu_static_slot_dirty + dirty_slot * 4, 1)
+                    dirty_slot = dirty_slot + 1
+        slot_dirty: i32 = self.gpu_static_dirty
+        if self.gpu_static_slot_dirty != 0:
+            slot_dirty = Memory.read_i32(self.gpu_static_slot_dirty + slot * 4)
+        if slot_dirty == 1:
+            if self._gpu_static_rebuild(cull, slot) == 0:
+                return 0
+        if self.gpu_static_candidate_count <= 0:
+            return 0
+
+        push: i64 = self.gpu_cull_push
+        Memory.set(push, 0, FROG_CULL_PUSH_SIZE)
+        frog_cull_extract_planes(vp_mat, push)
+        Memory.write_f32(push + 124, 0.0 - 1.0)
+        cmd_base: i32 = cull.slot_cmd_base(slot)
+        self.gpu_static_cmd_base = cmd_base
+        cull.barrier_before_dispatches(cmd)
+        page: i32 = 0
+        while page < self.arena_page_count:
+            page_base: i32 = Memory.read_i32(self.gpu_static_page_bases + page * 4)
+            page_count: i32 = Memory.read_i32(self.gpu_static_page_counts + page * 4)
+            if page_count > 0:
+                slot_in_base: i32 = slot * cull.slot_cap + page_base
+                page_cmd: i32 = Memory.read_i32(self.gpu_static_page_cmds + page * 4)
+                page_header: i32 = cmd_base + page_cmd
+                cull.prepare_group_cmd(page_header, 0, 1, 0, 0)
+                cull.dispatch_group(cmd, page_count, slot_in_base, 0, page_header, push)
+            page = page + 1
+        cull.barrier_after_dispatches(cmd)
+        self.gpu_static_active = 1
+        return self.gpu_static_candidate_count
 
     # Phase 1 bindless: resolve a mesh's 5 material texture ids to bindless
     # table slots and write them into the instance record's texidx block
@@ -5209,14 +5390,17 @@ attach GpuRendererCore:
         # into THIS frame command buffer, before the render pass begins. The
         # compute writes a compacted instance buffer + indirect commands that
         # the in-pass draw consumes. Slot-partitioned for frames-in-flight.
-        if self.gpu_draw_enabled == 1:
-            if self.vb_count > 0:
-                if cam_view != 0:
-                    if cam_proj != 0:
-                        precull_vp: i64 = self.scratch_vp_matrix
-                        if precull_vp != 0:
-                            _frog_multiply_4x4_into(cam_proj, cam_view, precull_vp)
+        self.gpu_static_active = 0
+        if self.vb_count > 0:
+            if cam_view != 0:
+                if cam_proj != 0:
+                    precull_vp: i64 = self.scratch_vp_matrix
+                    if precull_vp != 0:
+                        _frog_multiply_4x4_into(cam_proj, cam_view, precull_vp)
+                        if self.gpu_draw_enabled == 1:
                             self.gpu_precull_main(cmd, precull_vp, frame_slot)
+                        else:
+                            self.gpu_precull_static(cmd, precull_vp, frame_slot)
 
         # GPU-timer: boundary after shadow pass + GPU cull pre-pass.
         self.profiler.mark(cmd, 1)
@@ -5419,16 +5603,19 @@ attach GpuRendererCore:
                             static_cmd_cursor: i32 = 0
                             static_page: i32 = 0
                             while static_page < self.arena_page_count:
-                                static_rep: i32 = -1
+                                static_rep: i32 = 0 - 1
                                 static_scan: i32 = 0
-                                while static_scan < self.vb_count:
-                                    if Memory.read_i32(self.mesh_static_batches + static_scan * 4) == 1:
-                                        if Memory.read_i32(self.mesh_arena_pages + static_scan * 4) == static_page:
-                                            static_vis: i32 = Memory.read_i32(self.vb_cull_result + static_scan * 4)
-                                            if static_vis == 1:
-                                                static_rep = static_scan
-                                                static_scan = self.vb_count
-                                    static_scan = static_scan + 1
+                                if self.gpu_static_active == 1:
+                                    static_rep = Memory.read_i32(self.gpu_static_page_reps + static_page * 4)
+                                else:
+                                    while static_scan < self.vb_count:
+                                        if Memory.read_i32(self.mesh_static_batches + static_scan * 4) == 1:
+                                            if Memory.read_i32(self.mesh_arena_pages + static_scan * 4) == static_page:
+                                                static_vis: i32 = Memory.read_i32(self.vb_cull_result + static_scan * 4)
+                                                if static_vis == 1:
+                                                    static_rep = static_scan
+                                                    static_scan = self.vb_count
+                                        static_scan = static_scan + 1
 
                                 if static_rep >= 0:
                                     static_model: i64 = Memory.read_ptr(self.model_matrices + static_rep * 8)
@@ -5460,24 +5647,33 @@ attach GpuRendererCore:
                                             vkCmdBindDescriptorSets(cmd, 0, active_layout, 0, 1, self.scratch_desc_arr, 0, 0)
 
                                     page_cmd_start: i32 = static_cmd_cursor
-                                    static_scan = 0
-                                    while static_scan < self.vb_count:
-                                        if Memory.read_i32(self.mesh_static_batches + static_scan * 4) == 1:
-                                            if Memory.read_i32(self.mesh_arena_pages + static_scan * 4) == static_page:
-                                                if Memory.read_i32(self.vb_cull_result + static_scan * 4) == 1:
-                                                    static_ic: i32 = Memory.read_i32(self.ib_index_counts + static_scan * 4)
-                                                    if static_ic > 0 and static_cmd_cursor < FROG_CULL_MAX_GROUPS:
-                                                        static_first_index: i32 = Memory.read_i32(self.ib_first_indices + static_scan * 4)
-                                                        static_vertex_offset: i32 = Memory.read_i32(self.vb_first_vertices + static_scan * 4)
-                                                        static_cmd: i32 = static_cmd_base + static_cmd_cursor
-                                                        static_cull.prepare_group_cmd(static_cmd, static_ic, 1, static_first_index, static_vertex_offset)
-                                                        static_cull.set_cmd_instance_count(static_cmd, 1)
-                                                        static_cmd_cursor = static_cmd_cursor + 1
-                                        static_scan = static_scan + 1
-                                    page_cmd_count: i32 = static_cmd_cursor - page_cmd_start
+                                    page_cmd_count: i32 = 0
+                                    if self.gpu_static_active == 1:
+                                        page_cmd_start = Memory.read_i32(self.gpu_static_page_cmds + static_page * 4) + 1
+                                        page_cmd_count = Memory.read_i32(self.gpu_static_page_counts + static_page * 4)
+                                    else:
+                                        static_scan = 0
+                                        while static_scan < self.vb_count:
+                                            if Memory.read_i32(self.mesh_static_batches + static_scan * 4) == 1:
+                                                if Memory.read_i32(self.mesh_arena_pages + static_scan * 4) == static_page:
+                                                    if Memory.read_i32(self.vb_cull_result + static_scan * 4) == 1:
+                                                        static_ic: i32 = Memory.read_i32(self.ib_index_counts + static_scan * 4)
+                                                        if static_ic > 0 and static_cmd_cursor < FROG_CULL_MAX_GROUPS:
+                                                            static_first_index: i32 = Memory.read_i32(self.ib_first_indices + static_scan * 4)
+                                                            static_vertex_offset: i32 = Memory.read_i32(self.vb_first_vertices + static_scan * 4)
+                                                            static_cmd: i32 = static_cmd_base + static_cmd_cursor
+                                                            static_cull.prepare_group_cmd(static_cmd, static_ic, 1, static_first_index, static_vertex_offset)
+                                                            static_cull.set_cmd_instance_count(static_cmd, 1)
+                                                            static_cmd_cursor = static_cmd_cursor + 1
+                                            static_scan = static_scan + 1
+                                        page_cmd_count = static_cmd_cursor - page_cmd_start
                                     if page_cmd_count > 0:
                                         static_first_cmd: i32 = static_cmd_base + page_cmd_start
-                                        vkCmdDrawIndexedIndirect(cmd, static_ind_buf, static_cull.group_cmd_offset(static_first_cmd), page_cmd_count, 20)
+                                        if self.gpu_static_active == 1:
+                                            static_header_cmd: i32 = static_first_cmd - 1
+                                            vkCmdDrawIndexedIndirectCount(cmd, static_ind_buf, static_cull.group_cmd_offset(static_first_cmd), static_ind_buf, static_cull.group_cmd_offset(static_header_cmd) + 4, page_cmd_count, 20)
+                                        else:
+                                            vkCmdDrawIndexedIndirect(cmd, static_ind_buf, static_cull.group_cmd_offset(static_first_cmd), page_cmd_count, 20)
                                         frame_draw_calls = frame_draw_calls + 1
                                         frame_indexed_draw_calls = frame_indexed_draw_calls + 1
                                         frame_visible_instances = frame_visible_instances + page_cmd_count
@@ -6040,6 +6236,40 @@ attach GpuRendererCore:
             Memory.free(self.scratch_camera_view)
         if self.scratch_camera_proj != 0:
             Memory.free(self.scratch_camera_proj)
+        if self.gpu_grp_mi != 0:
+            Memory.free(self.gpu_grp_mi)
+        if self.gpu_grp_outbase != 0:
+            Memory.free(self.gpu_grp_outbase)
+        if self.gpu_grp_count != 0:
+            Memory.free(self.gpu_grp_count)
+        if self.gpu_grp_indexed != 0:
+            Memory.free(self.gpu_grp_indexed)
+        if self.gpu_grp_cmd != 0:
+            Memory.free(self.gpu_grp_cmd)
+        if self.gpu_grp_inbase != 0:
+            Memory.free(self.gpu_grp_inbase)
+        if self.gpu_grp_draw != 0:
+            Memory.free(self.gpu_grp_draw)
+        if self.gpu_cand_gi != 0:
+            Memory.free(self.gpu_cand_gi)
+        if self.gpu_slot_grpn != 0:
+            Memory.free(self.gpu_slot_grpn)
+        if self.gpu_slot_cmdbase != 0:
+            Memory.free(self.gpu_slot_cmdbase)
+        if self.gpu_cull_push != 0:
+            Memory.free(self.gpu_cull_push)
+        if self.gpu_cull_rec != 0:
+            Memory.free(self.gpu_cull_rec)
+        if self.gpu_static_page_bases != 0:
+            Memory.free(self.gpu_static_page_bases)
+        if self.gpu_static_page_counts != 0:
+            Memory.free(self.gpu_static_page_counts)
+        if self.gpu_static_page_reps != 0:
+            Memory.free(self.gpu_static_page_reps)
+        if self.gpu_static_page_cmds != 0:
+            Memory.free(self.gpu_static_page_cmds)
+        if self.gpu_static_slot_dirty != 0:
+            Memory.free(self.gpu_static_slot_dirty)
         # Destroy textures (image view + sampler + image + memory).
         # Descriptor sets are freed with the pool in RenderPass.cleanup.
         if self.tex_views != 0:
