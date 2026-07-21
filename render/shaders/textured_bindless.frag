@@ -132,6 +132,11 @@ float hasAlphaClip() {
     return mod(floor(packed / 2097152.0), 2.0);
 }
 
+float isDoubleSided() {
+    float packed = max(floor(fragmentMaterial.w + 0.5), 0.0);
+    return mod(floor(packed / 4194304.0), 2.0);
+}
+
 mat3 normalMapFrame(vec3 normal, vec3 worldPosition, vec2 uv) {
     vec3 dpdx = dFdx(worldPosition);
     vec3 dpdy = dFdy(worldPosition);
@@ -488,6 +493,9 @@ float sampleShadow(vec3 normal, vec3 lightDirection) {
 }
 
 void main() {
+    if (isDoubleSided() < 0.5 && !gl_FrontFacing) {
+        discard;
+    }
     vec4 textureColor = sampleAlbedo(fragmentUv);
     // Alpha cutout (foliage / sprites / icons): drop near-transparent texels
     // so the card shows clean transparent edges. Depth-correct, order-free.

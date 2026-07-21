@@ -115,7 +115,10 @@ fun _frog_pack_material(material: Material3D) -> f32:
     alpha_clip: i32 = 0
     if material.alpha_clip != 0:
         alpha_clip = 1
-    return (r + g * 32 + b * 1024 + unlit * 32768 + emissive_map * 131072 + normal_map * 262144 + metallic_roughness_map * 524288 + occlusion_map * 1048576 + alpha_clip * 2097152) as f32
+    double_sided: i32 = 0
+    if material.double_sided != 0:
+        double_sided = 1
+    return (r + g * 32 + b * 1024 + unlit * 32768 + emissive_map * 131072 + normal_map * 262144 + metallic_roughness_map * 524288 + occlusion_map * 1048576 + alpha_clip * 2097152 + double_sided * 4194304) as f32
 
 fun _frog_mesh_bounds(vertices: i64, vertex_count: i32) -> GpuMeshBounds:
     if vertices == 0:
