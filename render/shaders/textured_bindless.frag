@@ -38,6 +38,7 @@ layout(location = 9) flat in vec4 fragmentShadowFilter;
 layout(location = 10) in vec3 fragmentWorldNormal;
 layout(location = 11) flat in uvec4 fragmentTexIndex0;
 layout(location = 12) flat in uvec4 fragmentTexIndex1;
+layout(location = 13) flat in vec4 fragmentUvTransform;
 
 layout(location = 0) out vec4 outColor;
 
@@ -49,21 +50,75 @@ layout(push_constant) uniform PushConstants {
     vec4 lightDirectionIntensity;
 } pushConstants;
 
+float hasWorldPixelSampling() {
+    float packed = max(floor(fragmentMaterial.w + 0.5), 0.0);
+    return mod(floor(packed / 8388608.0), 2.0);
+}
+
+struct TextureCoordinates {
+    vec2 uv;
+    vec2 dx;
+    vec2 dy;
+};
+
+TextureCoordinates resolveTextureCoordinates(vec2 meshUv, vec2 textureSizePixels) {
+    TextureCoordinates result;
+    result.uv = meshUv;
+    result.dx = dFdx(meshUv);
+    result.dy = dFdy(meshUv);
+    if (hasWorldPixelSampling() < 0.5) {
+        return result;
+    }
+
+    vec2 grid = max(fragmentUvTransform.xy, vec2(1.0));
+    float padding = clamp(fragmentUvTransform.z, 0.0, 0.49);
+    float usable = 1.0 - padding * 2.0;
+    vec3 normalWeight = abs(normalize(fragmentWorldNormal));
+    vec2 worldUv;
+    if (normalWeight.y >= normalWeight.x && normalWeight.y >= normalWeight.z) {
+        worldUv = fragmentWorldPosition.xz;
+    } else if (normalWeight.x >= normalWeight.z) {
+        worldUv = vec2(fragmentWorldPosition.z, -fragmentWorldPosition.y);
+    } else {
+        worldUv = vec2(fragmentWorldPosition.x, -fragmentWorldPosition.y);
+    }
+    vec2 tile = floor(meshUv);
+    result.uv = (tile + vec2(padding) + fract(worldUv) * usable) / grid;
+    result.dx = dFdx(worldUv) * usable / grid;
+    result.dy = dFdy(worldUv) * usable / grid;
+
+    // Never select a mip smaller than one texel per atlas cell. Lower levels
+    // merge neighboring materials and produce distant green/brown color bleed.
+    vec2 cellSize = max(textureSizePixels / grid, vec2(1.0));
+    float maxSafeMip = floor(log2(max(min(cellSize.x, cellSize.y), 1.0)));
+    float maxSafeFootprint = exp2(maxSafeMip);
+    float footprint = max(
+        length(result.dx * textureSizePixels),
+        length(result.dy * textureSizePixels)
+    );
+    if (footprint > maxSafeFootprint) {
+        float gradientScale = maxSafeFootprint / footprint;
+        result.dx *= gradientScale;
+        result.dy *= gradientScale;
+    }
+    return result;
+}
+
 // Bindless sampling helpers — index the global table with a nonuniform index.
-vec4 sampleAlbedo(vec2 uv) {
-    return texture(textures[nonuniformEXT(fragmentTexIndex0.x)], uv);
+vec4 sampleAlbedo(TextureCoordinates coordinates) {
+    return textureGrad(textures[nonuniformEXT(fragmentTexIndex0.x)], coordinates.uv, coordinates.dx, coordinates.dy);
 }
-vec4 sampleEmissive(vec2 uv) {
-    return texture(textures[nonuniformEXT(fragmentTexIndex0.y)], uv);
+vec4 sampleEmissive(TextureCoordinates coordinates) {
+    return textureGrad(textures[nonuniformEXT(fragmentTexIndex0.y)], coordinates.uv, coordinates.dx, coordinates.dy);
 }
-vec4 sampleNormalMap(vec2 uv) {
-    return texture(textures[nonuniformEXT(fragmentTexIndex0.z)], uv);
+vec4 sampleNormalMap(TextureCoordinates coordinates) {
+    return textureGrad(textures[nonuniformEXT(fragmentTexIndex0.z)], coordinates.uv, coordinates.dx, coordinates.dy);
 }
-vec4 sampleMetallicRoughness(vec2 uv) {
-    return texture(textures[nonuniformEXT(fragmentTexIndex0.w)], uv);
+vec4 sampleMetallicRoughness(TextureCoordinates coordinates) {
+    return textureGrad(textures[nonuniformEXT(fragmentTexIndex0.w)], coordinates.uv, coordinates.dx, coordinates.dy);
 }
-vec4 sampleOcclusion(vec2 uv) {
-    return texture(textures[nonuniformEXT(fragmentTexIndex1.x)], uv);
+vec4 sampleOcclusion(TextureCoordinates coordinates) {
+    return textureGrad(textures[nonuniformEXT(fragmentTexIndex1.x)], coordinates.uv, coordinates.dx, coordinates.dy);
 }
 
 vec4 unpackLight() {
@@ -496,7 +551,11 @@ void main() {
     if (isDoubleSided() < 0.5 && !gl_FrontFacing) {
         discard;
     }
-    vec4 textureColor = sampleAlbedo(fragmentUv);
+    TextureCoordinates textureCoordinates = resolveTextureCoordinates(
+        fragmentUv,
+        vec2(textureSize(textures[nonuniformEXT(fragmentTexIndex0.x)], 0))
+    );
+    vec4 textureColor = sampleAlbedo(textureCoordinates);
     // Alpha cutout (foliage / sprites / icons): drop near-transparent texels
     // so the card shows clean transparent edges. Depth-correct, order-free.
     if (hasAlphaClip() > 0.5) {
@@ -522,23 +581,23 @@ void main() {
         }
 
         if (hasNormalMap() > 0.5) {
-            vec2 sampledXY = sampleNormalMap(fragmentUv).xy * 2.0 - 1.0;
+            vec2 sampledXY = sampleNormalMap(textureCoordinates).xy * 2.0 - 1.0;
             float sampledZ = sqrt(max(1.0 - dot(sampledXY, sampledXY), 0.0));
             vec3 sampledNormal = vec3(sampledXY, sampledZ);
-            normal = normalize(normalMapFrame(normal, fragmentWorldPosition, fragmentUv) * sampledNormal);
+            normal = normalize(normalMapFrame(normal, fragmentWorldPosition, textureCoordinates.uv) * sampledNormal);
         }
 
         float metallic = clamp(fragmentMaterial.x, 0.0, 1.0);
         float roughness = clamp(fragmentMaterial.y, 0.045, 1.0);
         if (hasMetallicRoughnessMap() > 0.5) {
-            vec4 metallicRoughness = sampleMetallicRoughness(fragmentUv);
+            vec4 metallicRoughness = sampleMetallicRoughness(textureCoordinates);
             metallic *= metallicRoughness.b;
             roughness = clamp(roughness * metallicRoughness.g, 0.045, 1.0);
         }
 
         float occlusion = 1.0;
         if (hasOcclusionMap() > 0.5) {
-            occlusion = sampleOcclusion(fragmentUv).r;
+            occlusion = sampleOcclusion(textureCoordinates).r;
         }
 
         vec3 cameraPosition = vec3(
@@ -589,7 +648,7 @@ void main() {
     }
     vec3 emissiveColor = emissive.rgb;
     if (hasEmissiveMap() > 0.5) {
-        vec4 emissiveTexel = sampleEmissive(fragmentUv);
+        vec4 emissiveTexel = sampleEmissive(textureCoordinates);
         emissiveColor *= emissiveTexel.rgb * emissiveTexel.a;
     }
     surfaceColor.rgb += emissiveColor * max(fragmentMaterial.z, 0.0);

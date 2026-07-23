@@ -33,6 +33,7 @@ layout(location = 7) flat out vec4 fragmentShadowParams;
 layout(location = 8) flat out vec4 fragmentShadowSplits;
 layout(location = 9) flat out vec4 fragmentShadowFilter;
 layout(location = 10) out vec3 fragmentWorldNormal;
+layout(location = 11) flat out vec4 fragmentUvTransform;
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
@@ -54,7 +55,13 @@ void main() {
 
     gl_Position = clipPosition;
     fragmentColor = inColor;
-    fragmentUv = inUv * instanceUvTransform.xy + instanceUvTransform.zw;
+    float packedMaterial = max(floor(instanceMaterial.w + 0.5), 0.0);
+    float worldPixelSampling = mod(floor(packedMaterial / 8388608.0), 2.0);
+    fragmentUv = inUv;
+    if (worldPixelSampling < 0.5) {
+        fragmentUv = inUv * instanceUvTransform.xy + instanceUvTransform.zw;
+    }
+    fragmentUvTransform = instanceUvTransform;
     fragmentFogDistance = abs(clipPosition.w);
     fragmentWorldPosition = worldPosition.xyz;
     fragmentMaterial = instanceMaterial;

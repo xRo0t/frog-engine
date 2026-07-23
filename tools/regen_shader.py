@@ -21,7 +21,7 @@ in place; otherwise it is appended at end of file.
 """
 import sys, struct, os
 
-WRITES_PER_PART = 500  # keep each fn small (fsWrite-friendly, fast compile)
+WRITES_PER_PART = 120  # keep generated Dolet functions small and fast to compile
 
 
 def emit_block(spv_path, name, getter):
