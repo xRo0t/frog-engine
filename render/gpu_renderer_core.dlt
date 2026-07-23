@@ -3965,10 +3965,30 @@ attach GpuRendererCore:
                             self.transparent_visible_count = 0
             Memory.write_i32(self.mesh_transparent + mesh_id * 4, tflag)
         off: i64 = (mesh_id as i64) * 32
+        packed_material: f32 = _frog_pack_material(material)
+        # GPU-cull instance records contain a snapshot of these values. Mark
+        # them dirty only when the material actually changes so live toggles
+        # such as alpha_clip update correctly without adding per-frame work.
+        if Memory.read_f32(self.mesh_material_params + off) != material.metallic:
+            grouping_changed = 1
+        if Memory.read_f32(self.mesh_material_params + off + 4) != material.roughness:
+            grouping_changed = 1
+        if Memory.read_f32(self.mesh_material_params + off + 8) != material.emissive_strength:
+            grouping_changed = 1
+        if Memory.read_f32(self.mesh_material_params + off + 12) != packed_material:
+            grouping_changed = 1
+        if Memory.read_f32(self.mesh_material_params + off + 16) != material.uv_scale_x:
+            grouping_changed = 1
+        if Memory.read_f32(self.mesh_material_params + off + 20) != material.uv_scale_y:
+            grouping_changed = 1
+        if Memory.read_f32(self.mesh_material_params + off + 24) != material.uv_offset_x:
+            grouping_changed = 1
+        if Memory.read_f32(self.mesh_material_params + off + 28) != material.uv_offset_y:
+            grouping_changed = 1
         Memory.write_f32(self.mesh_material_params + off, material.metallic)
         Memory.write_f32(self.mesh_material_params + off + 4, material.roughness)
         Memory.write_f32(self.mesh_material_params + off + 8, material.emissive_strength)
-        Memory.write_f32(self.mesh_material_params + off + 12, _frog_pack_material(material))
+        Memory.write_f32(self.mesh_material_params + off + 12, packed_material)
         Memory.write_f32(self.mesh_material_params + off + 16, material.uv_scale_x)
         Memory.write_f32(self.mesh_material_params + off + 20, material.uv_scale_y)
         Memory.write_f32(self.mesh_material_params + off + 24, material.uv_offset_x)

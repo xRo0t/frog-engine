@@ -103,6 +103,11 @@ float hasOcclusionMap() {
     return mod(floor(packed / 1048576.0), 2.0);
 }
 
+float hasAlphaClip() {
+    float packed = max(floor(fragmentMaterial.w + 0.5), 0.0);
+    return mod(floor(packed / 2097152.0), 2.0);
+}
+
 float isDoubleSided() {
     float packed = max(floor(fragmentMaterial.w + 0.5), 0.0);
     return mod(floor(packed / 4194304.0), 2.0);
@@ -468,6 +473,11 @@ void main() {
         discard;
     }
     vec4 textureColor = texture(textureSampler, fragmentUv);
+    // Keep the descriptor-set path feature-identical to the bindless path.
+    // Cutout foliage remains in the fast opaque/depth-writing pass.
+    if (hasAlphaClip() > 0.5 && textureColor.a < 0.5) {
+        discard;
+    }
     vec3 albedo = fragmentColor * textureColor.rgb;
     vec4 surfaceColor = vec4(albedo, textureColor.a);
 
