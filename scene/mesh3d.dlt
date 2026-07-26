@@ -328,6 +328,15 @@ attach Mesh3D:
     fun set_model_materials(self, materials: ModelMaterials) -> Mesh3D:
         self.model_materials = materials
         self.has_model_materials = 1
+        # Mesh3D.model() initially takes the fast combined-mesh path. Material
+        # overrides need one GPU instance per authored primitive, so rebuild an
+        # already loaded model into parts the first time overrides are added.
+        # This keeps the documented model(...).set_model_materials(...) order
+        # working while models without overrides retain the faster path.
+        if self.primitive_kind == MESH3D_SHAPE_MODEL:
+            if self.has_model_source == 1:
+                if self.model_part_count <= 0:
+                    return self.set_model(self.model_source)
         return self.apply_material_bindings()
 
     fun clear_model_materials(self) -> Mesh3D:
