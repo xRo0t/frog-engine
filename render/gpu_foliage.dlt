@@ -1,0 +1,60 @@
+##############################
+# Frog - GPU Interactive Foliage
+# Compact, zero-per-plant CPU animation metadata.
+##############################
+
+# Mark a contiguous vertex range as flexible foliage.
+#
+# The existing vec3 color attribute is reused without increasing the 44-byte
+# vertex stride:
+#   color.r = 2 + packed(flexibility8, tintRGB555)
+#   color.g = shared world-space root X
+#   color.b = shared world-space root Z
+#
+# Ordinary colors remain in 0..1, so untagged meshes skip the foliage shader
+# path. Tagged vertices recover their original tint in the vertex shader.
+# RGB555 is deliberately used so the complete integer payload is represented
+# exactly by f32; flexibility keeps 8-bit precision. Calling this function
+# again on an already tagged range preserves its decoded tint.
+fun gpu_tag_interactive_foliage(vertices: i64, first_vertex: i32, vertex_count: i32, root_x: f32, root_y: f32, root_z: f32, flexible_height: f32) -> i32:
+    if vertices == 0:
+        return 0
+    if first_vertex < 0:
+        return 0
+    if vertex_count <= 0:
+        return 0
+    if flexible_height <= 0.00001:
+        return 0
+
+    vertex: i32 = 0
+    while vertex < vertex_count:
+        vertex_index: i32 = first_vertex + vertex
+        off: i64 = (vertex_index as i64) * (FROG_GPU_VERTEX_STRIDE as i64)
+        color_off: i64 = off + (FROG_GPU_VERTEX_COLOR_OFFSET as i64)
+
+        color_r: f32 = Memory.read_f32(vertices + color_off)
+        color_g: f32 = Memory.read_f32(vertices + color_off + 4)
+        color_b: f32 = Memory.read_f32(vertices + color_off + 8)
+        if color_r >= 1.999:
+            old_payload: i32 = (color_r - 2.0 + 0.5) as i32
+            color_r = (((old_payload / 256) % 32) as f32) / 31.0
+            color_g = (((old_payload / 8192) % 32) as f32) / 31.0
+            color_b = (((old_payload / 262144) % 32) as f32) / 31.0
+
+        red5: i32 = (clamp(color_r, 0.0, 1.0) * 31.0 + 0.5) as i32
+        green5: i32 = (clamp(color_g, 0.0, 1.0) * 31.0 + 0.5) as i32
+        blue5: i32 = (clamp(color_b, 0.0, 1.0) * 31.0 + 0.5) as i32
+
+        vertex_y: f32 = Memory.read_f32(vertices + off + 4)
+        flexibility: f32 = clamp((vertex_y - root_y) / flexible_height, 0.0, 1.0)
+        # A cantilever-like curve keeps the root planted while allowing the
+        # flower head/tip to travel naturally.
+        flexibility = flexibility * flexibility
+        flexibility8: i32 = (flexibility * 255.0 + 0.5) as i32
+
+        payload: i32 = flexibility8 + red5 * 256 + green5 * 8192 + blue5 * 262144
+        Memory.write_f32(vertices + color_off, 2.0 + (payload as f32))
+        Memory.write_f32(vertices + color_off + 4, root_x)
+        Memory.write_f32(vertices + color_off + 8, root_z)
+        vertex = vertex + 1
+    return 1

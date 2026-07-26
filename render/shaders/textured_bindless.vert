@@ -60,10 +60,50 @@ void main() {
         instanceColumn3
     );
     vec4 worldPosition = model * vec4(inPosition, 1.0);
+    vec3 vertexColor = inColor;
+
+    // Interactive foliage packs flexibility8 + tintRGB555 into color.r and
+    // stores its shared world-space root XZ in color.gb. Ordinary colors stay
+    // in 0..1 and skip this path. The compact tag adds no vertex bandwidth.
+    if (inColor.r >= 1.999) {
+        float foliagePayload = floor(inColor.r - 2.0 + 0.5);
+        float flexibility = mod(foliagePayload, 256.0) / 255.0;
+        vertexColor = vec3(
+            floor(mod(foliagePayload / 256.0, 32.0)),
+            floor(mod(foliagePayload / 8192.0, 32.0)),
+            floor(mod(foliagePayload / 262144.0, 32.0))
+        ) / 31.0;
+        float interactionPayload = abs(pushConstants.fogShapeProjectionLight.x);
+        float interactionTime = mod(floor(interactionPayload / 2.0), 32768.0) / 32.0;
+        float motionEnergy = floor(interactionPayload / 65536.0) / 255.0;
+        vec3 cameraPosition = pushConstants.fogShapeProjectionLight.yzw;
+        vec2 awayDelta = inColor.gb - cameraPosition.xz;
+        float playerDistance = length(awayDelta);
+        float horizontalInfluence = 1.0 - smoothstep(0.35, 1.55, playerDistance);
+        float verticalInfluence = 1.0 - smoothstep(
+            2.20,
+            3.50,
+            abs(cameraPosition.y - worldPosition.y)
+        );
+        float phaseSeed = fract(sin(dot(inColor.gb, vec2(12.9898, 78.233))) * 43758.5453);
+        float phase = interactionTime * 14.13716694 + phaseSeed * 6.28318531;
+        float releaseEnvelope =
+            smoothstep(0.25, 0.75, playerDistance) *
+            (1.0 - smoothstep(1.25, 2.20, playerDistance));
+        float wobble = sin(phase) * 0.24 * releaseEnvelope * motionEnergy;
+        float bend = flexibility * (horizontalInfluence + wobble) * verticalInfluence;
+        if (abs(bend) > 0.0001) {
+            vec2 away = playerDistance > 0.001
+                ? awayDelta / playerDistance
+                : vec2(0.0, 1.0);
+            worldPosition.xz += away * (0.62 * bend);
+            worldPosition.y -= 0.10 * bend * bend;
+        }
+    }
     vec4 clipPosition = pushConstants.viewProjection * worldPosition;
 
     gl_Position = clipPosition;
-    fragmentColor = inColor;
+    fragmentColor = vertexColor;
     float packedMaterial = max(floor(instanceMaterial.w + 0.5), 0.0);
     float worldPixelSampling = mod(floor(packedMaterial / 8388608.0), 2.0);
     fragmentUv = inUv;
