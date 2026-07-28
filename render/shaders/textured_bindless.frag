@@ -55,6 +55,17 @@ float hasWorldPixelSampling() {
     return mod(floor(packed / 8388608.0), 2.0);
 }
 
+// World-pixel meshes may store inverse sky visibility in the unused fractional
+// V range [0.5, 0.99]. The normal atlas-center value 0.5 remains fully exposed,
+// preserving every existing mesh/material without another vertex attribute.
+float skyVisibility() {
+    if (hasWorldPixelSampling() < 0.5) {
+        return 1.0;
+    }
+    float encodedOcclusion = clamp((fract(fragmentUv.y) - 0.5) / 0.49, 0.0, 1.0);
+    return 1.0 - encodedOcclusion;
+}
+
 struct TextureCoordinates {
     vec2 uv;
     vec2 dx;
@@ -74,8 +85,18 @@ TextureCoordinates resolveTextureCoordinates(vec2 meshUv, vec2 textureSizePixels
     float padding = clamp(fragmentUvTransform.z, 0.0, 0.49);
     float usable = 1.0 - padding * 2.0;
     vec3 normalWeight = abs(normalize(fragmentWorldNormal));
+    // Smooth world-pixel meshes can encode a stable projection axis in the
+    // otherwise-unused fractional mesh U: X=0.125, Y=0.375, Z=0.875.
+    // The legacy 0.5 center keeps automatic dominant-normal projection.
+    float projectionHint = fract(meshUv.x);
     vec2 worldUv;
-    if (normalWeight.y >= normalWeight.x && normalWeight.y >= normalWeight.z) {
+    if (projectionHint < 0.25) {
+        worldUv = vec2(fragmentWorldPosition.z, -fragmentWorldPosition.y);
+    } else if (projectionHint < 0.45) {
+        worldUv = fragmentWorldPosition.xz;
+    } else if (projectionHint > 0.75) {
+        worldUv = vec2(fragmentWorldPosition.x, -fragmentWorldPosition.y);
+    } else if (normalWeight.y >= normalWeight.x && normalWeight.y >= normalWeight.z) {
         worldUv = fragmentWorldPosition.xz;
     } else if (normalWeight.x >= normalWeight.z) {
         worldUv = vec2(fragmentWorldPosition.z, -fragmentWorldPosition.y);
@@ -610,18 +631,29 @@ void main() {
         vec3 irradiance = vec3(0.0);
         bool hasLight = false;
         bool hasSkyLighting = pointLights.environmentLighting.z > 0.5;
+        bool hasVanillaLighting = pointLights.environmentLighting.w > 0.5;
+        float skyLight = skyVisibility();
         if (packedLight > 0.5) {
             vec3 lightDirection = normalize(pushConstants.lightDirectionIntensity.xyz);
             vec4 light = unpackLight();
             float shadow = sampleShadow(normal, lightDirection);
             vec3 directionalRadiance = light.rgb * lightIntensity * shadow;
-            irradiance += albedo * light.a * occlusion;
-            irradiance += evaluatePbrLight(normal, viewDirection, -lightDirection, albedo, metallic, roughness, directionalRadiance);
+            irradiance += albedo * light.a * occlusion * skyLight;
+            if (hasVanillaLighting) {
+                float normalLight = max(dot(normal, -lightDirection), 0.0);
+                irradiance += albedo * directionalRadiance * normalLight * 0.62 * occlusion * skyLight;
+            } else {
+                irradiance += evaluatePbrLight(normal, viewDirection, -lightDirection, albedo, metallic, roughness, directionalRadiance) * skyLight;
+            }
             hasLight = true;
         }
 
         if (hasSkyLighting) {
-            irradiance += evaluateSkyLighting(normal, viewDirection, albedo, metallic, roughness) * occlusion;
+            if (hasVanillaLighting) {
+                irradiance += albedo * sampleSkyLighting(normal) * pointLights.environmentLighting.x * occlusion * skyLight;
+            } else {
+                irradiance += evaluateSkyLighting(normal, viewDirection, albedo, metallic, roughness) * occlusion * skyLight;
+            }
             hasLight = true;
         }
 
@@ -637,7 +669,12 @@ void main() {
                 float normalizedDistance = clamp(1.0 - distanceToLight / lightRange, 0.0, 1.0);
                 float attenuation = normalizedDistance * normalizedDistance;
                 vec3 pointRadiance = pointColorEnergy.rgb * pointColorEnergy.a * attenuation;
-                irradiance += evaluatePbrLight(normal, viewDirection, pointDirection, albedo, metallic, roughness, pointRadiance);
+                if (hasVanillaLighting) {
+                    float normalPoint = max(dot(normal, pointDirection), 0.0);
+                    irradiance += albedo * pointRadiance * normalPoint * occlusion;
+                } else {
+                    irradiance += evaluatePbrLight(normal, viewDirection, pointDirection, albedo, metallic, roughness, pointRadiance);
+                }
                 hasLight = true;
             }
         }

@@ -81,6 +81,31 @@ def main():
     with open(target, "r", encoding="utf-8") as f:
         src = f.read()
 
+    # Older generated files predate the EMBED markers. Migrate that legacy
+    # block in place instead of appending a second copy of the getter and all
+    # SPIR-V writes (which can also push Dolet over its token limit).
+    legacy_begin = f"fun _frog_init_{name}_shader_p0"
+    marker_pos = src.find(begin)
+    legacy_pos = src.find(legacy_begin)
+    if legacy_pos >= 0 and (marker_pos < 0 or legacy_pos < marker_pos):
+        getter_pos = src.find(f"fun {getter}()", legacy_pos)
+        next_fun = src.find("\nfun ", getter_pos + 1)
+        if getter_pos < 0 or next_fun < 0:
+            raise SystemExit(f"could not locate complete legacy block for {name}")
+        src = src[:legacy_pos] + src[next_fun + 1:]
+
+    # `bindless_frag` was an early name for the textured bindless fragment
+    # shader. Keeping both embedded copies wastes tens of thousands of Dolet
+    # tokens and can overflow the compiler even though the old getter is never
+    # referenced. Remove that obsolete generated block during migration.
+    if name == "tex_bindless_frag" and getter == "get_textured_bindless_frag_shader":
+        obsolete_begin = "# >>> EMBED bindless_frag BEGIN"
+        obsolete_end = "# <<< EMBED bindless_frag END"
+        if obsolete_begin in src and obsolete_end in src:
+            obsolete_start = src.index(obsolete_begin)
+            obsolete_stop = src.index(obsolete_end, obsolete_start) + len(obsolete_end)
+            src = src[:obsolete_start].rstrip() + "\n\n" + src[obsolete_stop:].lstrip()
+
     if begin in src and end in src:
         pre = src[: src.index(begin)]
         post = src[src.index(end) + len(end):]

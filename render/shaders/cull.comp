@@ -149,10 +149,10 @@ void main() {
     if (maxScale < 0.001) {
         maxScale = 1.0;
     }
-    // Match the CPU path's generous margin (frog_renderer_core
-    // _frog_instance_visible) so moving objects near the frustum edge are
-    // not culled one frame and kept the next (which looked like flicker).
-    float radius = inst.bounds.w * maxScale * 2.25 + 2.0;
+    // The stored radius already encloses the mesh AABB and includes one world
+    // unit of padding. Match the CPU path's small numerical/motion margin
+    // without the old 2.25x double expansion that retained off-screen chunks.
+    float radius = inst.bounds.w * maxScale * 1.05 + 0.5;
 
     bool visible = true;
     for (int i = 0; i < 6; i++) {
