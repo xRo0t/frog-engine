@@ -82,7 +82,7 @@ fun frog_sky_pass_create_pipeline(device: i64, render_pass: i64) -> i32:
     raster: i64 = Memory.malloc_zeroed(64)
     multisample: i64 = Memory.malloc_zeroed(48)
     depth: i64 = Memory.malloc_zeroed(104)
-    color_attachment: i64 = Memory.malloc_zeroed(32)
+    color_attachment: i64 = Memory.malloc_zeroed(64)
     blend: i64 = Memory.malloc_zeroed(56)
     dynamic_values: i64 = Memory.malloc_zeroed(8)
     dynamic_state: i64 = Memory.malloc_zeroed(32)
@@ -131,8 +131,11 @@ fun frog_sky_pass_create_pipeline(device: i64, render_pass: i64) -> i32:
     Memory.write_i32(color_attachment + 20, 0)
     Memory.write_i32(color_attachment + 24, 0)
     Memory.write_i32(color_attachment + 28, 15)
+    # Sky has no material surface; preserve the cleared G-buffer value.
+    Memory.write_i32(color_attachment + 32, 0)
+    Memory.write_i32(color_attachment + 60, 0)
     Memory.write_i32(blend, 26)
-    Memory.write_i32(blend + 28, 1)
+    Memory.write_i32(blend + 28, 2)
     Memory.write_ptr(blend + 32, color_attachment)
 
     Memory.write_i32(dynamic_values, 0)

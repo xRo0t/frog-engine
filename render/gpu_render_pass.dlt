@@ -149,7 +149,8 @@ attach RenderPass:
     fun init(self, device: i64, phys_device: i64, swapchain_format: i32, sc_image_count: i32, sc_image_views: i64, depth_view: i64, width: i32, height: i32, gfx_family: i32, vert_data: i64, vert_size: i64, frag_data: i64, frag_size: i64, shadow_vert_data: i64, shadow_vert_size: i64) -> i32:
         # 1. Create render pass — color + depth attachments
         # Two attachment descriptions: [0]=color, [1]=depth
-        att_descs: i64 = Memory.malloc_zeroed(72)
+        # HDR color + compact normal/roughness G-buffer + depth.
+        att_descs: i64 = Memory.malloc_zeroed(108)
         if att_descs == 0:
             return 0
         # Color attachment (index 0)
@@ -162,23 +163,35 @@ attach RenderPass:
         Memory.write_i32(att_descs + 24, 2)
         Memory.write_i32(att_descs + 28, 0)
         Memory.write_i32(att_descs + 32, 2)
-        # Depth attachment (index 1) — VK_FORMAT_D32_SFLOAT = 126
+        # Normal/roughness attachment (index 1), RGBA8_UNORM = 37.
         Memory.write_i32(att_descs + 36, 0)
-        Memory.write_i32(att_descs + 40, 126)
+        Memory.write_i32(att_descs + 40, 37)
         Memory.write_i32(att_descs + 44, 1)
         Memory.write_i32(att_descs + 48, 1)
-        Memory.write_i32(att_descs + 52, 2)
+        Memory.write_i32(att_descs + 52, 0)
         Memory.write_i32(att_descs + 56, 2)
         Memory.write_i32(att_descs + 60, 2)
         Memory.write_i32(att_descs + 64, 0)
-        Memory.write_i32(att_descs + 68, 3)
+        Memory.write_i32(att_descs + 68, 2)
+        # Depth attachment (index 2) — VK_FORMAT_D32_SFLOAT = 126.
+        Memory.write_i32(att_descs + 72, 0)
+        Memory.write_i32(att_descs + 76, 126)
+        Memory.write_i32(att_descs + 80, 1)
+        Memory.write_i32(att_descs + 84, 1)
+        Memory.write_i32(att_descs + 88, 2)
+        Memory.write_i32(att_descs + 92, 2)
+        Memory.write_i32(att_descs + 96, 2)
+        Memory.write_i32(att_descs + 100, 0)
+        Memory.write_i32(att_descs + 104, 3)
 
-        att_ref: i64 = Memory.malloc_zeroed(8)
+        att_ref: i64 = Memory.malloc_zeroed(16)
         if att_ref == 0:
             Memory.free(att_descs)
             return 0
         Memory.write_i32(att_ref, 0)
         Memory.write_i32(att_ref + 4, 2)
+        Memory.write_i32(att_ref + 8, 1)
+        Memory.write_i32(att_ref + 12, 2)
 
         # Depth attachment reference (attachment index 1, DEPTH_STENCIL_ATTACHMENT_OPTIMAL = 3)
         depth_ref: i64 = Memory.malloc_zeroed(8)
@@ -186,7 +199,7 @@ attach RenderPass:
             Memory.free(att_descs)
             Memory.free(att_ref)
             return 0
-        Memory.write_i32(depth_ref, 1)
+        Memory.write_i32(depth_ref, 2)
         Memory.write_i32(depth_ref + 4, 3)
 
         sub_desc: i64 = Memory.malloc_zeroed(72)
@@ -199,7 +212,7 @@ attach RenderPass:
         Memory.write_i32(sub_desc + 4, 0)
         Memory.write_i32(sub_desc + 8, 0)
         Memory.write_ptr(sub_desc + 16, 0)
-        Memory.write_i32(sub_desc + 24, 1)
+        Memory.write_i32(sub_desc + 24, 2)
         Memory.write_ptr(sub_desc + 32, att_ref)
         Memory.write_ptr(sub_desc + 48, depth_ref)
 
@@ -213,7 +226,7 @@ attach RenderPass:
         Memory.write_i32(rp_ci, 38)
         Memory.write_ptr(rp_ci + 8, 0)
         Memory.write_i32(rp_ci + 16, 0)
-        Memory.write_i32(rp_ci + 20, 2)
+        Memory.write_i32(rp_ci + 20, 3)
         Memory.write_ptr(rp_ci + 24, att_descs)
         Memory.write_i32(rp_ci + 32, 1)
         Memory.write_ptr(rp_ci + 40, sub_desc)
@@ -961,11 +974,13 @@ attach RenderPass:
         Memory.write_i32(ms + 44, 0)
 
         # Color blend attachment
-        cba: i64 = Memory.malloc_zeroed(32)
+        cba: i64 = Memory.malloc_zeroed(64)
         if cba == 0:
             return 0
         Memory.write_i32(cba, 0)
         Memory.write_i32(cba + 28, 15)
+        Memory.write_i32(cba + 32, 0)
+        Memory.write_i32(cba + 60, 15)
 
         # Color blend state (56 bytes)
         cb: i64 = Memory.malloc_zeroed(56)
@@ -976,7 +991,7 @@ attach RenderPass:
         Memory.write_i32(cb + 16, 0)
         Memory.write_i32(cb + 20, 0)
         Memory.write_i32(cb + 24, 0)
-        Memory.write_i32(cb + 28, 1)
+        Memory.write_i32(cb + 28, 2)
         Memory.write_ptr(cb + 32, cba)
 
         # Depth stencil state (104 bytes — includes StencilOpState front/back)
@@ -1284,17 +1299,19 @@ attach RenderPass:
         Memory.write_i32(ms + 20, 1)
         Memory.write_f32(ms + 28, 1.0)
 
-        cba: i64 = Memory.malloc_zeroed(32)
+        cba: i64 = Memory.malloc_zeroed(64)
         if cba == 0:
             return 0
         Memory.write_i32(cba, 0)
         Memory.write_i32(cba + 28, 15)
+        Memory.write_i32(cba + 32, 0)
+        Memory.write_i32(cba + 60, 15)
 
         cb: i64 = Memory.malloc_zeroed(56)
         if cb == 0:
             return 0
         Memory.write_i32(cb, 26)
-        Memory.write_i32(cb + 28, 1)
+        Memory.write_i32(cb + 28, 2)
         Memory.write_ptr(cb + 32, cba)
 
         ds: i64 = Memory.malloc_zeroed(104)
@@ -1334,7 +1351,7 @@ attach RenderPass:
         # --- Transparent variant: same shaders/layout/vertex-input, but alpha
         # blending ON and depth-write OFF. Reuses stages/vi_ci/ia_ci/vp_ci/
         # rast/ms; only the color-blend attachment and depth-stencil differ.
-        t_cba: i64 = Memory.malloc_zeroed(32)
+        t_cba: i64 = Memory.malloc_zeroed(64)
         t_cb: i64 = Memory.malloc_zeroed(56)
         t_ds: i64 = Memory.malloc_zeroed(104)
         t_pipe_ci: i64 = Memory.malloc_zeroed(144)
@@ -1353,9 +1370,13 @@ attach RenderPass:
             Memory.write_i32(t_cba + 20, 7)
             Memory.write_i32(t_cba + 24, 0)
             Memory.write_i32(t_cba + 28, 15)
+            # Transparent geometry belongs to the forward color layer and
+            # must not replace the opaque surface used by GTAO/TAA.
+            Memory.write_i32(t_cba + 32, 0)
+            Memory.write_i32(t_cba + 60, 0)
 
             Memory.write_i32(t_cb, 26)
-            Memory.write_i32(t_cb + 28, 1)
+            Memory.write_i32(t_cb + 28, 2)
             Memory.write_ptr(t_cb + 32, t_cba)
 
             # Depth: test ON (occluded by opaque), write OFF (don't block others).
@@ -1606,16 +1627,18 @@ attach RenderPass:
         Memory.write_i32(ms + 20, 1)
         Memory.write_f32(ms + 28, 1.0)
 
-        cba: i64 = Memory.malloc_zeroed(32)
+        cba: i64 = Memory.malloc_zeroed(64)
         if cba == 0:
             return 0
         Memory.write_i32(cba + 28, 15)
+        Memory.write_i32(cba + 32, 0)
+        Memory.write_i32(cba + 60, 15)
 
         cb: i64 = Memory.malloc_zeroed(56)
         if cb == 0:
             return 0
         Memory.write_i32(cb, 26)
-        Memory.write_i32(cb + 28, 1)
+        Memory.write_i32(cb + 28, 2)
         Memory.write_ptr(cb + 32, cba)
 
         ds: i64 = Memory.malloc_zeroed(104)

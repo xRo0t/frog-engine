@@ -11,6 +11,7 @@
     renderer: Renderer = Renderer.create()
     cull: GpuCullPipeline = GpuCullPipeline()
     hzb: GpuHzb = GpuHzb()
+    temporal: GpuTemporal = GpuTemporal()
     width: i32 = 0
     height: i32 = 0
     ready_flag: i32 = 0
@@ -89,6 +90,13 @@ attach EngineRuntime:
         renderer.init(ctx.vk_device, ctx.vk_physical_device, ctx.vk_graphics_queue, ctx.vk_present_queue)
         runtime.renderer = renderer
 
+        temporal: GpuTemporal = GpuTemporal()
+        if temporal.init(ctx.vk_device, ctx.vk_physical_device) == 1:
+            print("[frog.post] G-buffer GTAO + TAA pipeline ready")
+        else:
+            print("[frog.post] temporal pipeline unavailable (direct HDR fallback)")
+        runtime.temporal = temporal
+
         # Conservative previous-frame depth is initialized before culling so
         # every statically-used cull descriptor is valid from the self-test on.
         hzb: GpuHzb = GpuHzb()
@@ -158,6 +166,8 @@ attach EngineRuntime:
             self.renderer.core.set_gpu_culling(1, self.cull as i64)
             if self.hzb.ready == 1:
                 self.renderer.core.set_gpu_hzb(self.hzb as i64)
+        if self.temporal.ready == 1:
+            self.renderer.core.set_gpu_temporal(self.temporal as i64)
 
     fun ready(self) -> i32:
         return self.ready_flag
@@ -477,6 +487,7 @@ attach EngineRuntime:
         self.cull.cleanup()
         self.hzb.cleanup()
         self.renderer.cleanup()
+        self.temporal.cleanup()
         self.render_pass.cleanup(self.ctx.vk_device)
         self.swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
         self.ctx.cleanup()

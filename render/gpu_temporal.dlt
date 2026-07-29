@@ -1,0 +1,687 @@
+##############################
+# Frog - Temporal post pipeline
+# Half-resolution GTAO followed by HDR temporal resolve.
+##############################
+
+FROG_GTAO_FORMAT: i32 = 9 # VK_FORMAT_R8_UNORM
+
+fun frog_temporal_shader_module(device: i64, code: i64, size: i64) -> i64:
+    if code == 0 or size <= 0:
+        return 0
+    ci: i64 = Memory.malloc_zeroed(40)
+    out: i64 = Memory.malloc_zeroed(8)
+    if ci == 0 or out == 0:
+        if ci != 0:
+            Memory.free(ci)
+        if out != 0:
+            Memory.free(out)
+        return 0
+    Memory.write_i32(ci, 12)
+    Memory.write_i64(ci + 24, size)
+    Memory.write_ptr(ci + 32, code)
+    result: i32 = vkCreateShaderModule(device, ci, 0, out)
+    handle: i64 = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    if result != 0:
+        return 0
+    return handle
+
+fun frog_temporal_color_render_pass(device: i64, format: i32) -> i64:
+    attachment: i64 = Memory.malloc_zeroed(36)
+    color_ref: i64 = Memory.malloc_zeroed(8)
+    subpass: i64 = Memory.malloc_zeroed(72)
+    ci: i64 = Memory.malloc_zeroed(64)
+    out: i64 = Memory.malloc_zeroed(8)
+    if attachment == 0 or color_ref == 0 or subpass == 0 or ci == 0 or out == 0:
+        return 0
+    Memory.write_i32(attachment + 4, format)
+    Memory.write_i32(attachment + 8, 1)
+    Memory.write_i32(attachment + 12, 1)
+    Memory.write_i32(attachment + 16, 0)
+    Memory.write_i32(attachment + 20, 2)
+    Memory.write_i32(attachment + 24, 0)
+    Memory.write_i32(attachment + 28, 0)
+    Memory.write_i32(attachment + 32, 5) # SHADER_READ_ONLY_OPTIMAL
+    Memory.write_i32(color_ref, 0)
+    Memory.write_i32(color_ref + 4, 2)
+    Memory.write_i32(subpass + 24, 1)
+    Memory.write_ptr(subpass + 32, color_ref)
+    Memory.write_i32(ci, 38)
+    Memory.write_i32(ci + 20, 1)
+    Memory.write_ptr(ci + 24, attachment)
+    Memory.write_i32(ci + 32, 1)
+    Memory.write_ptr(ci + 40, subpass)
+    result: i32 = vkCreateRenderPass(device, ci, 0, out)
+    handle: i64 = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    Memory.free(subpass)
+    Memory.free(color_ref)
+    Memory.free(attachment)
+    if result != 0:
+        return 0
+    return handle
+
+fun frog_temporal_descriptor_layout(device: i64, count: i32) -> i64:
+    if count <= 0:
+        return 0
+    bindings: i64 = Memory.malloc_zeroed((count as i64) * 24)
+    ci: i64 = Memory.malloc_zeroed(32)
+    out: i64 = Memory.malloc_zeroed(8)
+    if bindings == 0 or ci == 0 or out == 0:
+        return 0
+    index: i32 = 0
+    while index < count:
+        binding: i64 = bindings + (index as i64) * 24
+        Memory.write_i32(binding, index)
+        Memory.write_i32(binding + 4, 1)   # COMBINED_IMAGE_SAMPLER
+        Memory.write_i32(binding + 8, 1)
+        Memory.write_i32(binding + 12, 16) # FRAGMENT
+        index = index + 1
+    Memory.write_i32(ci, 32)
+    Memory.write_i32(ci + 20, count)
+    Memory.write_ptr(ci + 24, bindings)
+    result: i32 = vkCreateDescriptorSetLayout(device, ci, 0, out)
+    handle: i64 = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    Memory.free(bindings)
+    if result != 0:
+        return 0
+    return handle
+
+fun frog_temporal_pipeline_layout(device: i64, desc_layout: i64, push_size: i32) -> i64:
+    range: i64 = Memory.malloc_zeroed(12)
+    layouts: i64 = Memory.malloc_zeroed(8)
+    ci: i64 = Memory.malloc_zeroed(48)
+    out: i64 = Memory.malloc_zeroed(8)
+    if range == 0 or layouts == 0 or ci == 0 or out == 0:
+        return 0
+    Memory.write_i32(range, 17) # VERTEX | FRAGMENT
+    Memory.write_i32(range + 8, push_size)
+    Memory.write_ptr(layouts, desc_layout)
+    Memory.write_i32(ci, 30)
+    Memory.write_i32(ci + 20, 1)
+    Memory.write_ptr(ci + 24, layouts)
+    Memory.write_i32(ci + 32, 1)
+    Memory.write_ptr(ci + 40, range)
+    result: i32 = vkCreatePipelineLayout(device, ci, 0, out)
+    handle: i64 = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    Memory.free(layouts)
+    Memory.free(range)
+    if result != 0:
+        return 0
+    return handle
+
+fun frog_temporal_pipeline(device: i64, render_pass: i64, layout: i64, vert_module: i64, frag_module: i64) -> i64:
+    entry: str = "main"
+    stages: i64 = Memory.malloc_zeroed(96)
+    vertex_input: i64 = Memory.malloc_zeroed(48)
+    input_assembly: i64 = Memory.malloc_zeroed(32)
+    viewport_state: i64 = Memory.malloc_zeroed(48)
+    raster: i64 = Memory.malloc_zeroed(64)
+    multisample: i64 = Memory.malloc_zeroed(48)
+    depth: i64 = Memory.malloc_zeroed(104)
+    color_attachment: i64 = Memory.malloc_zeroed(32)
+    blend: i64 = Memory.malloc_zeroed(56)
+    dynamic_values: i64 = Memory.malloc_zeroed(8)
+    dynamic_state: i64 = Memory.malloc_zeroed(32)
+    ci: i64 = Memory.malloc_zeroed(144)
+    out: i64 = Memory.malloc_zeroed(8)
+    if stages == 0 or vertex_input == 0 or input_assembly == 0 or viewport_state == 0 or raster == 0 or multisample == 0 or depth == 0 or color_attachment == 0 or blend == 0 or dynamic_values == 0 or dynamic_state == 0 or ci == 0 or out == 0:
+        return 0
+    Memory.write_i32(stages, 18)
+    Memory.write_i32(stages + 20, 1)
+    Memory.write_ptr(stages + 24, vert_module)
+    Memory.write_ptr(stages + 32, entry)
+    Memory.write_i32(stages + 48, 18)
+    Memory.write_i32(stages + 68, 16)
+    Memory.write_ptr(stages + 72, frag_module)
+    Memory.write_ptr(stages + 80, entry)
+    Memory.write_i32(vertex_input, 19)
+    Memory.write_i32(input_assembly, 20)
+    Memory.write_i32(input_assembly + 20, 3)
+    Memory.write_i32(viewport_state, 22)
+    Memory.write_i32(viewport_state + 20, 1)
+    Memory.write_i32(viewport_state + 32, 1)
+    Memory.write_i32(raster, 23)
+    Memory.write_f32(raster + 56, 1.0)
+    Memory.write_i32(multisample, 24)
+    Memory.write_i32(multisample + 20, 1)
+    Memory.write_f32(multisample + 28, 1.0)
+    Memory.write_i32(depth, 25)
+    Memory.write_i32(color_attachment + 28, 15)
+    Memory.write_i32(blend, 26)
+    Memory.write_i32(blend + 28, 1)
+    Memory.write_ptr(blend + 32, color_attachment)
+    Memory.write_i32(dynamic_values, 0)
+    Memory.write_i32(dynamic_values + 4, 1)
+    Memory.write_i32(dynamic_state, 27)
+    Memory.write_i32(dynamic_state + 20, 2)
+    Memory.write_ptr(dynamic_state + 24, dynamic_values)
+    Memory.write_i32(ci, 28)
+    Memory.write_i32(ci + 20, 2)
+    Memory.write_ptr(ci + 24, stages)
+    Memory.write_ptr(ci + 32, vertex_input)
+    Memory.write_ptr(ci + 40, input_assembly)
+    Memory.write_ptr(ci + 56, viewport_state)
+    Memory.write_ptr(ci + 64, raster)
+    Memory.write_ptr(ci + 72, multisample)
+    Memory.write_ptr(ci + 80, depth)
+    Memory.write_ptr(ci + 88, blend)
+    Memory.write_ptr(ci + 96, dynamic_state)
+    Memory.write_ptr(ci + 104, layout)
+    Memory.write_ptr(ci + 112, render_pass)
+    Memory.write_i32(ci + 136, 0 - 1)
+    result: i32 = vkCreateGraphicsPipelines(device, 0, 1, ci, 0, out)
+    handle: i64 = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    Memory.free(dynamic_state)
+    Memory.free(dynamic_values)
+    Memory.free(blend)
+    Memory.free(color_attachment)
+    Memory.free(depth)
+    Memory.free(multisample)
+    Memory.free(raster)
+    Memory.free(viewport_state)
+    Memory.free(input_assembly)
+    Memory.free(vertex_input)
+    Memory.free(stages)
+    if result != 0:
+        return 0
+    return handle
+
+fun frog_temporal_framebuffer(device: i64, render_pass: i64, view: i64, width: i32, height: i32) -> i64:
+    views: i64 = Memory.malloc_zeroed(8)
+    ci: i64 = Memory.malloc_zeroed(64)
+    out: i64 = Memory.malloc_zeroed(8)
+    if views == 0 or ci == 0 or out == 0:
+        return 0
+    Memory.write_ptr(views, view)
+    Memory.write_i32(ci, 37)
+    Memory.write_ptr(ci + 24, render_pass)
+    Memory.write_i32(ci + 32, 1)
+    Memory.write_ptr(ci + 40, views)
+    Memory.write_i32(ci + 48, width)
+    Memory.write_i32(ci + 52, height)
+    Memory.write_i32(ci + 56, 1)
+    result: i32 = vkCreateFramebuffer(device, ci, 0, out)
+    handle: i64 = Memory.read_ptr(out)
+    Memory.free(out)
+    Memory.free(ci)
+    Memory.free(views)
+    if result != 0:
+        return 0
+    return handle
+
+fun frog_temporal_update_image(device: i64, set: i64, binding: i32, view: i64, sampler: i64):
+    image: i64 = Memory.malloc_zeroed(24)
+    write: i64 = Memory.malloc_zeroed(64)
+    if image == 0 or write == 0:
+        return
+    Memory.write_ptr(image, sampler)
+    Memory.write_ptr(image + 8, view)
+    Memory.write_i32(image + 16, 5)
+    Memory.write_i32(write, 35)
+    Memory.write_ptr(write + 16, set)
+    Memory.write_i32(write + 24, binding)
+    Memory.write_i32(write + 32, 1)
+    Memory.write_i32(write + 36, 1)
+    Memory.write_ptr(write + 40, image)
+    vkUpdateDescriptorSets(device, 1, write, 0, 0)
+    Memory.free(write)
+    Memory.free(image)
+
+fun frog_temporal_depth_barrier(cmd: i64, image: i64, old_layout: i32, new_layout: i32, src_access: i32, dst_access: i32, src_stage: i64, dst_stage: i64):
+    barrier: i64 = Memory.malloc_zeroed(72)
+    if barrier == 0:
+        return
+    Memory.write_i32(barrier, 45)
+    Memory.write_i32(barrier + 16, src_access)
+    Memory.write_i32(barrier + 20, dst_access)
+    Memory.write_i32(barrier + 24, old_layout)
+    Memory.write_i32(barrier + 28, new_layout)
+    Memory.write_i32(barrier + 32, 0 - 1)
+    Memory.write_i32(barrier + 36, 0 - 1)
+    Memory.write_ptr(barrier + 40, image)
+    Memory.write_i32(barrier + 48, 2)
+    Memory.write_i32(barrier + 56, 1)
+    Memory.write_i32(barrier + 64, 1)
+    vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, 0, 0, 0, 1, barrier)
+    Memory.free(barrier)
+
+@heap struct GpuTemporal:
+    device: i64 = 0
+    phys_device: i64 = 0
+    gtao_render_pass: i64 = 0
+    temporal_render_pass: i64 = 0
+    gtao_desc_layout: i64 = 0
+    temporal_desc_layout: i64 = 0
+    gtao_pipeline_layout: i64 = 0
+    temporal_pipeline_layout: i64 = 0
+    gtao_pipeline: i64 = 0
+    temporal_pipeline: i64 = 0
+    vert_module: i64 = 0
+    gtao_frag_module: i64 = 0
+    temporal_frag_module: i64 = 0
+    desc_pool: i64 = 0
+    gtao_set: i64 = 0
+    temporal_set0: i64 = 0
+    temporal_set1: i64 = 0
+    sampler: i64 = 0
+    point_sampler: i64 = 0
+    gtao_image: i64 = 0
+    gtao_memory: i64 = 0
+    gtao_view: i64 = 0
+    gtao_framebuffer: i64 = 0
+    history_image0: i64 = 0
+    history_memory0: i64 = 0
+    history_view0: i64 = 0
+    history_framebuffer0: i64 = 0
+    history_image1: i64 = 0
+    history_memory1: i64 = 0
+    history_view1: i64 = 0
+    history_framebuffer1: i64 = 0
+    bloom_desc0: i64 = 0
+    bloom_desc1: i64 = 0
+    source_color_view: i64 = 0
+    source_depth_view: i64 = 0
+    source_geometry_view: i64 = 0
+    width: i32 = 0
+    height: i32 = 0
+    write_index: i32 = 0
+    output_index: i32 = 0
+    history_valid: i32 = 0
+    images_initialized: i32 = 0
+    ready: i32 = 0
+    previous_vp: i64 = 0
+    scratch_rpi: i64 = 0
+    scratch_clear: i64 = 0
+    scratch_viewport: i64 = 0
+    scratch_scissor: i64 = 0
+    scratch_range: i64 = 0
+    scratch_desc: i64 = 0
+    scratch_push: i64 = 0
+
+attach GpuTemporal:
+
+    fun _allocate_set(self, layout: i64) -> i64:
+        layouts: i64 = Memory.malloc_zeroed(8)
+        ai: i64 = Memory.malloc_zeroed(40)
+        out: i64 = Memory.malloc_zeroed(8)
+        if layouts == 0 or ai == 0 or out == 0:
+            return 0
+        Memory.write_ptr(layouts, layout)
+        Memory.write_i32(ai, 34)
+        Memory.write_ptr(ai + 16, self.desc_pool)
+        Memory.write_i32(ai + 24, 1)
+        Memory.write_ptr(ai + 32, layouts)
+        result: i32 = vkAllocateDescriptorSets(self.device, ai, out)
+        handle: i64 = Memory.read_ptr(out)
+        Memory.free(out)
+        Memory.free(ai)
+        Memory.free(layouts)
+        if result != 0:
+            return 0
+        return handle
+
+    fun init(self, device: i64, phys_device: i64) -> i32:
+        self.device = device
+        self.phys_device = phys_device
+        self.gtao_render_pass = frog_temporal_color_render_pass(device, FROG_GTAO_FORMAT)
+        self.temporal_render_pass = frog_temporal_color_render_pass(device, FROG_HDR_COLOR_FORMAT)
+        self.gtao_desc_layout = frog_temporal_descriptor_layout(device, 2)
+        self.temporal_desc_layout = frog_temporal_descriptor_layout(device, 5)
+        if self.gtao_render_pass == 0 or self.temporal_render_pass == 0 or self.gtao_desc_layout == 0 or self.temporal_desc_layout == 0:
+            self.cleanup()
+            return 0
+        self.gtao_pipeline_layout = frog_temporal_pipeline_layout(device, self.gtao_desc_layout, 64)
+        self.temporal_pipeline_layout = frog_temporal_pipeline_layout(device, self.temporal_desc_layout, 128)
+        if self.gtao_pipeline_layout == 0 or self.temporal_pipeline_layout == 0:
+            self.cleanup()
+            return 0
+
+        vert_shader: EmbeddedShader = get_temporal_vert_shader()
+        gtao_shader: EmbeddedShader = get_gtao_frag_shader()
+        temporal_shader: EmbeddedShader = get_taa_gtao_frag_shader()
+        self.vert_module = frog_temporal_shader_module(device, vert_shader.data, vert_shader.size)
+        self.gtao_frag_module = frog_temporal_shader_module(device, gtao_shader.data, gtao_shader.size)
+        self.temporal_frag_module = frog_temporal_shader_module(device, temporal_shader.data, temporal_shader.size)
+        vert_shader.release()
+        gtao_shader.release()
+        temporal_shader.release()
+        if self.vert_module == 0 or self.gtao_frag_module == 0 or self.temporal_frag_module == 0:
+            self.cleanup()
+            return 0
+        self.gtao_pipeline = frog_temporal_pipeline(device, self.gtao_render_pass, self.gtao_pipeline_layout, self.vert_module, self.gtao_frag_module)
+        self.temporal_pipeline = frog_temporal_pipeline(device, self.temporal_render_pass, self.temporal_pipeline_layout, self.vert_module, self.temporal_frag_module)
+        if self.gtao_pipeline == 0 or self.temporal_pipeline == 0:
+            self.cleanup()
+            return 0
+
+        pool_size: i64 = Memory.malloc_zeroed(8)
+        pool_ci: i64 = Memory.malloc_zeroed(40)
+        pool_out: i64 = Memory.malloc_zeroed(8)
+        if pool_size == 0 or pool_ci == 0 or pool_out == 0:
+            self.cleanup()
+            return 0
+        Memory.write_i32(pool_size, 1)
+        Memory.write_i32(pool_size + 4, 12)
+        Memory.write_i32(pool_ci, 33)
+        Memory.write_i32(pool_ci + 20, 3)
+        Memory.write_i32(pool_ci + 24, 1)
+        Memory.write_ptr(pool_ci + 32, pool_size)
+        pool_result: i32 = vkCreateDescriptorPool(device, pool_ci, 0, pool_out)
+        self.desc_pool = Memory.read_ptr(pool_out)
+        Memory.free(pool_out)
+        Memory.free(pool_ci)
+        Memory.free(pool_size)
+        if pool_result != 0:
+            self.cleanup()
+            return 0
+        self.gtao_set = self._allocate_set(self.gtao_desc_layout)
+        self.temporal_set0 = self._allocate_set(self.temporal_desc_layout)
+        self.temporal_set1 = self._allocate_set(self.temporal_desc_layout)
+        if self.gtao_set == 0 or self.temporal_set0 == 0 or self.temporal_set1 == 0:
+            self.cleanup()
+            return 0
+
+        sampler_spec: TextureSpec = TextureSpec.smooth()
+        sampler_spec = sampler_spec.wrap(2)
+        self.sampler = gpu_tex_make_sampler(device, sampler_spec)
+        point_spec: TextureSpec = TextureSpec.pixel()
+        self.point_sampler = gpu_tex_make_sampler(device, point_spec)
+        self.previous_vp = Memory.malloc_zeroed(64)
+        self.scratch_rpi = Memory.malloc_zeroed(96)
+        self.scratch_clear = Memory.malloc_zeroed(16)
+        self.scratch_viewport = Memory.malloc_zeroed(24)
+        self.scratch_scissor = Memory.malloc_zeroed(16)
+        self.scratch_range = Memory.malloc_zeroed(20)
+        self.scratch_desc = Memory.malloc_zeroed(8)
+        self.scratch_push = Memory.malloc_zeroed(128)
+        if self.sampler == 0 or self.point_sampler == 0 or self.previous_vp == 0 or self.scratch_rpi == 0 or self.scratch_clear == 0 or self.scratch_viewport == 0 or self.scratch_scissor == 0 or self.scratch_range == 0 or self.scratch_desc == 0 or self.scratch_push == 0:
+            self.cleanup()
+            return 0
+        self.ready = 1
+        return 1
+
+    fun destroy_targets(self):
+        if self.gtao_framebuffer != 0:
+            vkDestroyFramebuffer(self.device, self.gtao_framebuffer, 0)
+        if self.history_framebuffer0 != 0:
+            vkDestroyFramebuffer(self.device, self.history_framebuffer0, 0)
+        if self.history_framebuffer1 != 0:
+            vkDestroyFramebuffer(self.device, self.history_framebuffer1, 0)
+        if self.gtao_view != 0:
+            vkDestroyImageView(self.device, self.gtao_view, 0)
+        if self.history_view0 != 0:
+            vkDestroyImageView(self.device, self.history_view0, 0)
+        if self.history_view1 != 0:
+            vkDestroyImageView(self.device, self.history_view1, 0)
+        if self.gtao_image != 0:
+            vkDestroyImage(self.device, self.gtao_image, 0)
+        if self.history_image0 != 0:
+            vkDestroyImage(self.device, self.history_image0, 0)
+        if self.history_image1 != 0:
+            vkDestroyImage(self.device, self.history_image1, 0)
+        if self.gtao_memory != 0:
+            vkFreeMemory(self.device, self.gtao_memory, 0)
+        if self.history_memory0 != 0:
+            vkFreeMemory(self.device, self.history_memory0, 0)
+        if self.history_memory1 != 0:
+            vkFreeMemory(self.device, self.history_memory1, 0)
+        self.gtao_framebuffer = 0
+        self.history_framebuffer0 = 0
+        self.history_framebuffer1 = 0
+        self.gtao_view = 0
+        self.history_view0 = 0
+        self.history_view1 = 0
+        self.gtao_image = 0
+        self.history_image0 = 0
+        self.history_image1 = 0
+        self.gtao_memory = 0
+        self.history_memory0 = 0
+        self.history_memory1 = 0
+        self.bloom_desc0 = 0
+        self.bloom_desc1 = 0
+        self.source_color_view = 0
+        self.source_depth_view = 0
+        self.source_geometry_view = 0
+        self.width = 0
+        self.height = 0
+        self.history_valid = 0
+        self.images_initialized = 0
+        self.write_index = 0
+        self.output_index = 0
+
+    fun ensure_target(self, rp: RenderPass, width: i32, height: i32, color_view: i64, depth_view: i64, geometry_view: i64) -> i32:
+        if self.ready == 0 or width <= 0 or height <= 0:
+            return 0
+        if self.width == width and self.height == height:
+            if self.source_color_view == color_view and self.source_depth_view == depth_view and self.source_geometry_view == geometry_view:
+                return 1
+        self.destroy_targets()
+        ao_width: i32 = (width + 1) / 2
+        ao_height: i32 = (height + 1) / 2
+
+        out_image: i64 = Memory.malloc_zeroed(8)
+        out_memory: i64 = Memory.malloc_zeroed(8)
+        if out_image == 0 or out_memory == 0:
+            return 0
+        if gpu_make_image_usage(self.device, self.phys_device, ao_width, ao_height, FROG_GTAO_FORMAT, 20, out_image, out_memory) == 0:
+            return 0
+        self.gtao_image = Memory.read_ptr(out_image)
+        self.gtao_memory = Memory.read_ptr(out_memory)
+        Memory.set(out_image, 0, 8)
+        Memory.set(out_memory, 0, 8)
+        if gpu_make_image_usage(self.device, self.phys_device, width, height, FROG_HDR_COLOR_FORMAT, 22, out_image, out_memory) == 0:
+            return 0
+        self.history_image0 = Memory.read_ptr(out_image)
+        self.history_memory0 = Memory.read_ptr(out_memory)
+        Memory.set(out_image, 0, 8)
+        Memory.set(out_memory, 0, 8)
+        if gpu_make_image_usage(self.device, self.phys_device, width, height, FROG_HDR_COLOR_FORMAT, 22, out_image, out_memory) == 0:
+            return 0
+        self.history_image1 = Memory.read_ptr(out_image)
+        self.history_memory1 = Memory.read_ptr(out_memory)
+        Memory.free(out_memory)
+        Memory.free(out_image)
+
+        self.gtao_view = gpu_make_image_view_aspect(self.device, self.gtao_image, FROG_GTAO_FORMAT, 1)
+        self.history_view0 = gpu_make_image_view_aspect(self.device, self.history_image0, FROG_HDR_COLOR_FORMAT, 1)
+        self.history_view1 = gpu_make_image_view_aspect(self.device, self.history_image1, FROG_HDR_COLOR_FORMAT, 1)
+        if self.gtao_view == 0 or self.history_view0 == 0 or self.history_view1 == 0:
+            self.destroy_targets()
+            return 0
+        self.gtao_framebuffer = frog_temporal_framebuffer(self.device, self.gtao_render_pass, self.gtao_view, ao_width, ao_height)
+        self.history_framebuffer0 = frog_temporal_framebuffer(self.device, self.temporal_render_pass, self.history_view0, width, height)
+        self.history_framebuffer1 = frog_temporal_framebuffer(self.device, self.temporal_render_pass, self.history_view1, width, height)
+        if self.gtao_framebuffer == 0 or self.history_framebuffer0 == 0 or self.history_framebuffer1 == 0:
+            self.destroy_targets()
+            return 0
+
+        frog_temporal_update_image(self.device, self.gtao_set, 0, depth_view, self.point_sampler)
+        frog_temporal_update_image(self.device, self.gtao_set, 1, geometry_view, self.point_sampler)
+        frog_temporal_update_image(self.device, self.temporal_set0, 0, color_view, self.sampler)
+        frog_temporal_update_image(self.device, self.temporal_set0, 1, depth_view, self.point_sampler)
+        frog_temporal_update_image(self.device, self.temporal_set0, 2, geometry_view, self.point_sampler)
+        frog_temporal_update_image(self.device, self.temporal_set0, 3, self.gtao_view, self.sampler)
+        frog_temporal_update_image(self.device, self.temporal_set0, 4, self.history_view1, self.sampler)
+        frog_temporal_update_image(self.device, self.temporal_set1, 0, color_view, self.sampler)
+        frog_temporal_update_image(self.device, self.temporal_set1, 1, depth_view, self.point_sampler)
+        frog_temporal_update_image(self.device, self.temporal_set1, 2, geometry_view, self.point_sampler)
+        frog_temporal_update_image(self.device, self.temporal_set1, 3, self.gtao_view, self.sampler)
+        frog_temporal_update_image(self.device, self.temporal_set1, 4, self.history_view0, self.sampler)
+        self.bloom_desc0 = rp.make_texture_descriptor(self.device, self.history_view0, self.sampler)
+        self.bloom_desc1 = rp.make_texture_descriptor(self.device, self.history_view1, self.sampler)
+        if self.bloom_desc0 == 0 or self.bloom_desc1 == 0:
+            self.destroy_targets()
+            return 0
+        self.width = width
+        self.height = height
+        self.source_color_view = color_view
+        self.source_depth_view = depth_view
+        self.source_geometry_view = geometry_view
+        return 1
+
+    fun _set_viewport(self, cmd: i64, width: i32, height: i32):
+        Memory.set(self.scratch_viewport, 0, 24)
+        Memory.write_f32(self.scratch_viewport + 8, width as f32)
+        Memory.write_f32(self.scratch_viewport + 12, height as f32)
+        Memory.write_f32(self.scratch_viewport + 20, 1.0)
+        vkCmdSetViewport(cmd, 0, 1, self.scratch_viewport)
+        Memory.set(self.scratch_scissor, 0, 16)
+        Memory.write_i32(self.scratch_scissor + 8, width)
+        Memory.write_i32(self.scratch_scissor + 12, height)
+        vkCmdSetScissor(cmd, 0, 1, self.scratch_scissor)
+
+    fun _begin_pass(self, cmd: i64, render_pass: i64, framebuffer: i64, width: i32, height: i32, clear_value: f32):
+        Memory.set(self.scratch_rpi, 0, 96)
+        Memory.write_i32(self.scratch_rpi, 43)
+        Memory.write_ptr(self.scratch_rpi + 16, render_pass)
+        Memory.write_ptr(self.scratch_rpi + 24, framebuffer)
+        Memory.write_i32(self.scratch_rpi + 40, width)
+        Memory.write_i32(self.scratch_rpi + 44, height)
+        Memory.set(self.scratch_clear, 0, 16)
+        Memory.write_f32(self.scratch_clear, clear_value)
+        Memory.write_f32(self.scratch_clear + 4, clear_value)
+        Memory.write_f32(self.scratch_clear + 8, clear_value)
+        Memory.write_f32(self.scratch_clear + 12, clear_value)
+        Memory.write_i32(self.scratch_rpi + 48, 1)
+        Memory.write_ptr(self.scratch_rpi + 56, self.scratch_clear)
+        vkCmdBeginRenderPass(cmd, self.scratch_rpi, 0)
+
+    fun _initialize_history(self, cmd: i64):
+        if self.images_initialized != 0:
+            return
+        clear_color: i64 = self.scratch_clear
+        range: i64 = self.scratch_range
+        Memory.set(clear_color, 0, 16)
+        Memory.set(range, 0, 20)
+        Memory.write_i32(range, 1)
+        Memory.write_i32(range + 8, 1)
+        Memory.write_i32(range + 16, 1)
+        gpu_tex_barrier(cmd, self.history_image0, 0, 7, 0, 4096, 1, 4096)
+        gpu_tex_barrier(cmd, self.history_image1, 0, 7, 0, 4096, 1, 4096)
+        vkCmdClearColorImage(cmd, self.history_image0, 7, clear_color, 1, range)
+        vkCmdClearColorImage(cmd, self.history_image1, 7, clear_color, 1, range)
+        gpu_tex_barrier(cmd, self.history_image0, 7, 5, 4096, 32, 4096, 128)
+        gpu_tex_barrier(cmd, self.history_image1, 7, 5, 4096, 32, 4096, 128)
+        self.images_initialized = 1
+
+    fun record(self, cmd: i64, color_image: i64, geometry_image: i64, depth_image: i64, depth_is_sampled: i32, current_vp: i64) -> i32:
+        if self.ready == 0 or self.width <= 0 or current_vp == 0:
+            return 0
+        gpu_tex_barrier(cmd, color_image, 2, 5, 256, 32, 1024, 128)
+        gpu_tex_barrier(cmd, geometry_image, 2, 5, 256, 32, 1024, 128)
+        if depth_is_sampled == 0:
+            frog_temporal_depth_barrier(cmd, depth_image, 3, 5, 1024, 32, 512, 128)
+        self._initialize_history(cmd)
+
+        ao_width: i32 = (self.width + 1) / 2
+        ao_height: i32 = (self.height + 1) / 2
+        self._begin_pass(cmd, self.gtao_render_pass, self.gtao_framebuffer, ao_width, ao_height, 1.0)
+        vkCmdBindPipeline(cmd, 0, self.gtao_pipeline)
+        Memory.write_ptr(self.scratch_desc, self.gtao_set)
+        vkCmdBindDescriptorSets(cmd, 0, self.gtao_pipeline_layout, 0, 1, self.scratch_desc, 0, 0)
+        self._set_viewport(cmd, ao_width, ao_height)
+        vkCmdPushConstants(cmd, self.gtao_pipeline_layout, 16, 0, 64, current_vp)
+        vkCmdDraw(cmd, 3, 1, 0, 0)
+        vkCmdEndRenderPass(cmd)
+        gpu_tex_barrier(cmd, self.gtao_image, 5, 5, 256, 32, 1024, 128)
+
+        target_framebuffer: i64 = self.history_framebuffer0
+        target_set: i64 = self.temporal_set0
+        if self.write_index == 1:
+            target_framebuffer = self.history_framebuffer1
+            target_set = self.temporal_set1
+        self._begin_pass(cmd, self.temporal_render_pass, target_framebuffer, self.width, self.height, 0.0)
+        vkCmdBindPipeline(cmd, 0, self.temporal_pipeline)
+        Memory.write_ptr(self.scratch_desc, target_set)
+        vkCmdBindDescriptorSets(cmd, 0, self.temporal_pipeline_layout, 0, 1, self.scratch_desc, 0, 0)
+        self._set_viewport(cmd, self.width, self.height)
+        Memory.copy(self.scratch_push, current_vp, 64)
+        if self.history_valid == 0:
+            Memory.copy(self.previous_vp, current_vp, 64)
+        Memory.copy(self.scratch_push + 64, self.previous_vp, 64)
+        vkCmdPushConstants(cmd, self.temporal_pipeline_layout, 16, 0, 128, self.scratch_push)
+        vkCmdDraw(cmd, 3, 1, 0, 0)
+        vkCmdEndRenderPass(cmd)
+        target_image: i64 = self.history_image0
+        if self.write_index == 1:
+            target_image = self.history_image1
+        gpu_tex_barrier(cmd, target_image, 5, 5, 256, 32, 1024, 128)
+        Memory.copy(self.previous_vp, current_vp, 64)
+        self.history_valid = 1
+        self.output_index = self.write_index
+        self.write_index = 1 - self.write_index
+
+        gpu_tex_barrier(cmd, color_image, 5, 2, 32, 256, 128, 1024)
+        gpu_tex_barrier(cmd, geometry_image, 5, 2, 32, 256, 128, 1024)
+        frog_temporal_depth_barrier(cmd, depth_image, 5, 3, 32, 1024, 128, 512)
+        return 1
+
+    fun output_image(self) -> i64:
+        if self.output_index == 1:
+            return self.history_image1
+        return self.history_image0
+
+    fun output_descriptor(self) -> i64:
+        if self.output_index == 1:
+            return self.bloom_desc1
+        return self.bloom_desc0
+
+    fun invalidate_history(self):
+        self.history_valid = 0
+
+    fun cleanup(self):
+        self.destroy_targets()
+        if self.gtao_pipeline != 0:
+            vkDestroyPipeline(self.device, self.gtao_pipeline, 0)
+        if self.temporal_pipeline != 0:
+            vkDestroyPipeline(self.device, self.temporal_pipeline, 0)
+        if self.gtao_pipeline_layout != 0:
+            vkDestroyPipelineLayout(self.device, self.gtao_pipeline_layout, 0)
+        if self.temporal_pipeline_layout != 0:
+            vkDestroyPipelineLayout(self.device, self.temporal_pipeline_layout, 0)
+        if self.gtao_render_pass != 0:
+            vkDestroyRenderPass(self.device, self.gtao_render_pass, 0)
+        if self.temporal_render_pass != 0:
+            vkDestroyRenderPass(self.device, self.temporal_render_pass, 0)
+        if self.desc_pool != 0:
+            vkDestroyDescriptorPool(self.device, self.desc_pool, 0)
+        if self.gtao_desc_layout != 0:
+            vkDestroyDescriptorSetLayout(self.device, self.gtao_desc_layout, 0)
+        if self.temporal_desc_layout != 0:
+            vkDestroyDescriptorSetLayout(self.device, self.temporal_desc_layout, 0)
+        if self.vert_module != 0:
+            vkDestroyShaderModule(self.device, self.vert_module, 0)
+        if self.gtao_frag_module != 0:
+            vkDestroyShaderModule(self.device, self.gtao_frag_module, 0)
+        if self.temporal_frag_module != 0:
+            vkDestroyShaderModule(self.device, self.temporal_frag_module, 0)
+        if self.sampler != 0:
+            vkDestroySampler(self.device, self.sampler, 0)
+        if self.point_sampler != 0:
+            vkDestroySampler(self.device, self.point_sampler, 0)
+        if self.previous_vp != 0:
+            Memory.free(self.previous_vp)
+        if self.scratch_rpi != 0:
+            Memory.free(self.scratch_rpi)
+        if self.scratch_clear != 0:
+            Memory.free(self.scratch_clear)
+        if self.scratch_viewport != 0:
+            Memory.free(self.scratch_viewport)
+        if self.scratch_scissor != 0:
+            Memory.free(self.scratch_scissor)
+        if self.scratch_range != 0:
+            Memory.free(self.scratch_range)
+        if self.scratch_desc != 0:
+            Memory.free(self.scratch_desc)
+        if self.scratch_push != 0:
+            Memory.free(self.scratch_push)
+        self.ready = 0

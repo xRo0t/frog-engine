@@ -472,6 +472,39 @@ fun _gpu_cull_refresh_one(k: i32):
         cull: GpuCullPipeline = g_refresh_cull as GpuCullPipeline
         cull.write_model_at(k, model_ptr)
 
+fun _frog_taa_halton(index: i32, axis: i32) -> f32:
+    if axis == 0:
+        if index == 0:
+            return 0.5
+        if index == 1:
+            return 0.25
+        if index == 2:
+            return 0.75
+        if index == 3:
+            return 0.125
+        if index == 4:
+            return 0.625
+        if index == 5:
+            return 0.375
+        if index == 6:
+            return 0.875
+        return 0.0625
+    if index == 0:
+        return 0.33333334
+    if index == 1:
+        return 0.66666669
+    if index == 2:
+        return 0.11111111
+    if index == 3:
+        return 0.44444445
+    if index == 4:
+        return 0.77777779
+    if index == 5:
+        return 0.22222222
+    if index == 6:
+        return 0.55555558
+    return 0.88888890
+
 struct GpuRendererCore:
     device:            i64 = 0
     phys_device:       i64 = 0
@@ -544,6 +577,7 @@ struct GpuRendererCore:
     gpu_culling_enabled: i32 = 0
     gpu_cull_ptr: i64 = 0    # borrowed GpuCullPipeline (owned by runtime)
     gpu_hzb_ptr: i64 = 0     # borrowed GpuHzb (owned by runtime)
+    gpu_temporal_ptr: i64 = 0 # borrowed GpuTemporal (owned by runtime)
     gpu_hzb_use_frame: i32 = 0
     gpu_hzb_camera_valid: i32 = 0
     gpu_hzb_prev_x: f32 = 0.0
@@ -665,6 +699,9 @@ struct GpuRendererCore:
     scale_color_view:   i64 = 0
     scale_sampler:      i64 = 0
     scale_desc_set:     i64 = 0
+    scale_geometry_image:  i64 = 0
+    scale_geometry_memory: i64 = 0
+    scale_geometry_view:   i64 = 0
     scale_depth_image:  i64 = 0
     scale_depth_memory: i64 = 0
     scale_depth_view:   i64 = 0
@@ -811,7 +848,7 @@ attach GpuRendererCore:
         self.scratch_map_pp = Memory.malloc_zeroed(8)
         self.scratch_begin_info = Memory.malloc_zeroed(64)
         self.scratch_render_info = Memory.malloc_zeroed(96)
-        self.scratch_clear_values = Memory.malloc_zeroed(32)
+        self.scratch_clear_values = Memory.malloc_zeroed(48)
         self.scratch_viewport = Memory.malloc_zeroed(24)
         self.scratch_scissor = Memory.malloc_zeroed(16)
         self.scratch_sky_att = Memory.malloc_zeroed(24)
@@ -1159,6 +1196,9 @@ attach GpuRendererCore:
         self.gpu_hzb_ptr = hzb_ptr
         self.gpu_hzb_use_frame = 0
         self.gpu_hzb_camera_valid = 0
+
+    fun set_gpu_temporal(self, temporal_ptr: i64):
+        self.gpu_temporal_ptr = temporal_ptr
 
     # Phase 3 step 2: toggle the GPU-driven indirect DRAW path for the main
     # pass. Requires set_gpu_culling to have provided the pipeline. Default
@@ -4224,6 +4264,9 @@ attach GpuRendererCore:
         return dset
 
     fun destroy_render_scale_target(self):
+        if self.gpu_temporal_ptr != 0:
+            temporal_target: GpuTemporal = self.gpu_temporal_ptr as GpuTemporal
+            temporal_target.destroy_targets()
         self.scale_desc_set = 0
         if self.scale_framebuffer != 0:
             vkDestroyFramebuffer(self.device, self.scale_framebuffer, 0)
@@ -4240,6 +4283,15 @@ attach GpuRendererCore:
         if self.scale_color_memory != 0:
             vkFreeMemory(self.device, self.scale_color_memory, 0)
             self.scale_color_memory = 0
+        if self.scale_geometry_view != 0:
+            vkDestroyImageView(self.device, self.scale_geometry_view, 0)
+            self.scale_geometry_view = 0
+        if self.scale_geometry_image != 0:
+            vkDestroyImage(self.device, self.scale_geometry_image, 0)
+            self.scale_geometry_image = 0
+        if self.scale_geometry_memory != 0:
+            vkFreeMemory(self.device, self.scale_geometry_memory, 0)
+            self.scale_geometry_memory = 0
         if self.scale_depth_view != 0:
             vkDestroyImageView(self.device, self.scale_depth_view, 0)
             self.scale_depth_view = 0
@@ -4296,6 +4348,30 @@ attach GpuRendererCore:
             self.destroy_render_scale_target()
             return 0
 
+        geometry_out: i64 = Memory.malloc_zeroed(8)
+        geometry_mem_out: i64 = Memory.malloc_zeroed(8)
+        if geometry_out == 0 or geometry_mem_out == 0:
+            if geometry_out != 0:
+                Memory.free(geometry_out)
+            if geometry_mem_out != 0:
+                Memory.free(geometry_mem_out)
+            self.destroy_render_scale_target()
+            return 0
+        # SAMPLED(4) | COLOR_ATTACHMENT(16)
+        if gpu_make_image_usage(self.device, self.phys_device, width, height, 37, 20, geometry_out, geometry_mem_out) == 0:
+            Memory.free(geometry_out)
+            Memory.free(geometry_mem_out)
+            self.destroy_render_scale_target()
+            return 0
+        self.scale_geometry_image = Memory.read_ptr(geometry_out)
+        self.scale_geometry_memory = Memory.read_ptr(geometry_mem_out)
+        Memory.free(geometry_out)
+        Memory.free(geometry_mem_out)
+        self.scale_geometry_view = gpu_make_image_view_aspect(self.device, self.scale_geometry_image, 37, 1)
+        if self.scale_geometry_view == 0:
+            self.destroy_render_scale_target()
+            return 0
+
         depth_out: i64 = Memory.malloc_zeroed(8)
         depth_mem_out: i64 = Memory.malloc_zeroed(8)
         if depth_out == 0:
@@ -4305,9 +4381,8 @@ attach GpuRendererCore:
             Memory.free(depth_out)
             self.destroy_render_scale_target()
             return 0
-        depth_usage: i32 = 32
-        if self.gpu_hzb_ptr != 0:
-            depth_usage = 36 # DEPTH_STENCIL_ATTACHMENT | SAMPLED
+        # GTAO, TAA reprojection, and HZB all consume scene depth.
+        depth_usage: i32 = 36 # DEPTH_STENCIL_ATTACHMENT | SAMPLED
         if gpu_make_image_usage(self.device, self.phys_device, width, height, 126, depth_usage, depth_out, depth_mem_out) == 0:
             Memory.free(depth_out)
             Memory.free(depth_mem_out)
@@ -4323,12 +4398,13 @@ attach GpuRendererCore:
             self.destroy_render_scale_target()
             return 0
 
-        att_arr: i64 = Memory.malloc_zeroed(16)
+        att_arr: i64 = Memory.malloc_zeroed(24)
         if att_arr == 0:
             self.destroy_render_scale_target()
             return 0
         Memory.write_ptr(att_arr, self.scale_color_view)
-        Memory.write_ptr(att_arr + 8, self.scale_depth_view)
+        Memory.write_ptr(att_arr + 8, self.scale_geometry_view)
+        Memory.write_ptr(att_arr + 16, self.scale_depth_view)
 
         fb_ci: i64 = Memory.malloc_zeroed(64)
         if fb_ci == 0:
@@ -4338,7 +4414,7 @@ attach GpuRendererCore:
         Memory.set(fb_ci, 0, 64)
         Memory.write_i32(fb_ci, 37)
         Memory.write_ptr(fb_ci + 24, rp.vk_render_pass)
-        Memory.write_i32(fb_ci + 32, 2)
+        Memory.write_i32(fb_ci + 32, 3)
         Memory.write_ptr(fb_ci + 40, att_arr)
         Memory.write_i32(fb_ci + 48, width)
         Memory.write_i32(fb_ci + 52, height)
@@ -4836,6 +4912,19 @@ attach GpuRendererCore:
         # Resolve CPU vs GPU-driven culling for this frame (mode-driven).
         self._resolve_culling_mode()
 
+        # TAA's sub-pixel coverage comes from a low-discrepancy 8-sample
+        # Halton sequence. Jitter a private projection copy so the camera
+        # object and gameplay ray calculations remain exact.
+        render_proj: i64 = cam_proj
+        if env.advanced_post != 0 and cam_proj != 0 and self.scratch_camera_proj != 0:
+            Memory.copy(self.scratch_camera_proj, cam_proj, 64)
+            jitter_index: i32 = self.frame_serial - (self.frame_serial / 8) * 8
+            jitter_x: f32 = (_frog_taa_halton(jitter_index, 0) - 0.5) * 2.0 / (render_width as f32)
+            jitter_y: f32 = (_frog_taa_halton(jitter_index, 1) - 0.5) * 2.0 / (render_height as f32)
+            Memory.write_f32(self.scratch_camera_proj + 32, Memory.read_f32(self.scratch_camera_proj + 32) - jitter_x)
+            Memory.write_f32(self.scratch_camera_proj + 36, Memory.read_f32(self.scratch_camera_proj + 36) - jitter_y)
+            render_proj = self.scratch_camera_proj
+
         current_fence: i64 = Memory.read_ptr(rp.in_flight_fences + self.current_frame * 8)
         Memory.write_ptr(rp.frame_fence_arr, current_fence)
         vkWaitForFences(device, 1, rp.frame_fence_arr, 1, 0 - 1)
@@ -4848,8 +4937,8 @@ attach GpuRendererCore:
                 verify_vp: i64 = self.scratch_vp_matrix
                 if verify_vp != 0:
                     if cam_view != 0:
-                        if cam_proj != 0:
-                            _frog_multiply_4x4_into(cam_proj, cam_view, verify_vp)
+                    if render_proj != 0:
+                        _frog_multiply_4x4_into(render_proj, cam_view, verify_vp)
                             self.gpu_cull_verify(rp.vk_command_pool, verify_vp)
 
         # Acquire next image (reset fence AFTER successful acquire to avoid deadlock)
@@ -4876,6 +4965,9 @@ attach GpuRendererCore:
             fb = self.scale_framebuffer
         else:
             return
+        if self.gpu_temporal_ptr != 0:
+            temporal_target: GpuTemporal = self.gpu_temporal_ptr as GpuTemporal
+            temporal_target.ensure_target(rp, rw, rh, self.scale_color_view, self.scale_depth_view, self.scale_geometry_view)
         if self.gpu_hzb_ptr != 0:
             hzb_target: GpuHzb = self.gpu_hzb_ptr as GpuHzb
             if hzb_target.ensure_target(rw, rh, self.scale_depth_view) == 1:
@@ -4888,7 +4980,7 @@ attach GpuRendererCore:
         if sc.images != 0:
             swap_img = Memory.read_ptr(sc.images + img_idx * 8)
         swap_old_layout = sc.image_layout(img_idx)
-        self._record_commands(cmd_buf, fb, present_fb, rp, cam_view, cam_proj, rw, rh, env, use_scaled, self.scale_color_image, swap_img, swap_old_layout, width, height)
+        self._record_commands(cmd_buf, fb, present_fb, rp, cam_view, render_proj, rw, rh, env, use_scaled, self.scale_color_image, swap_img, swap_old_layout, width, height)
         if use_scaled == 1:
             sc.set_image_layout(img_idx, 1000001002)
 
@@ -5362,7 +5454,7 @@ attach GpuRendererCore:
             vkCmdEndRenderPass(cmd)
         return shadow_instance_total
 
-    fun _record_bloom_present(self, cmd: i64, framebuffer: i64, rp: RenderPass, src_image: i64, dst_image: i64, dst_width: i32, dst_height: i32, bloom: Bloom, tone_mapping: ToneMapping):
+    fun _record_bloom_present(self, cmd: i64, framebuffer: i64, rp: RenderPass, src_image: i64, src_desc: i64, src_already_sampled: i32, dst_image: i64, dst_width: i32, dst_height: i32, bloom: Bloom, tone_mapping: ToneMapping):
         if frog_bloom_pass_ready() == 0:
             return
         if framebuffer == 0:
@@ -5373,7 +5465,8 @@ attach GpuRendererCore:
             return
 
         # HDR scene color -> sampled texture for post processing.
-        gpu_tex_barrier(cmd, src_image, 2, 5, 256, 32, 1024, 128)
+        if src_already_sampled == 0:
+            gpu_tex_barrier(cmd, src_image, 2, 5, 256, 32, 1024, 128)
 
         rpi: i64 = self.scratch_render_info
         clear_vals: i64 = self.scratch_clear_values
@@ -5397,7 +5490,9 @@ attach GpuRendererCore:
         if bloom_pipeline != 0 and bloom_layout != 0:
             vkCmdBindPipeline(cmd, 0, bloom_pipeline)
 
-            desc: i64 = self.scale_descriptor_set(rp)
+            desc: i64 = src_desc
+            if desc == 0:
+                desc = self.scale_descriptor_set(rp)
             if desc != 0:
                 Memory.write_ptr(self.scratch_desc_arr, desc)
                 vkCmdBindDescriptorSets(cmd, 0, bloom_layout, 0, 1, self.scratch_desc_arr, 0, 0)
@@ -5443,7 +5538,8 @@ attach GpuRendererCore:
         vkCmdEndRenderPass(cmd)
 
         # Restore the offscreen target for the next frame and present the swapchain image.
-        gpu_tex_barrier(cmd, src_image, 5, 2, 32, 256, 128, 1024)
+        if src_already_sampled == 0:
+            gpu_tex_barrier(cmd, src_image, 5, 2, 32, 256, 128, 1024)
         gpu_tex_barrier(cmd, dst_image, 2, 1000001002, 256, 0, 1024, 8192)
 
     fun _record_commands(self, cmd: i64, framebuffer: i64, present_framebuffer: i64, rp: RenderPass, cam_view: i64, cam_proj: i64, width: i32, height: i32, env: Environment, use_scaled: i32, scale_color_image: i64, swap_image: i64, swap_old_layout: i32, swap_width: i32, swap_height: i32) -> void:
@@ -5582,17 +5678,22 @@ attach GpuRendererCore:
         Memory.write_i32(rpi + 40, width)
         Memory.write_i32(rpi + 44, height)
 
-        # Two clear values: color (RGBA float) + depth (float + uint)
+        # HDR color + neutral geometry buffer + depth.
         clear_vals: i64 = self.scratch_clear_values
         if clear_vals != 0:
-            Memory.set(clear_vals, 0, 32)
+            Memory.set(clear_vals, 0, 48)
             Memory.write_f32(clear_vals, env.clear_color.r)
             Memory.write_f32(clear_vals + 4, env.clear_color.g)
             Memory.write_f32(clear_vals + 8, env.clear_color.b)
             Memory.write_f32(clear_vals + 12, env.clear_color.a)
-            Memory.write_f32(clear_vals + 16, 1.0)
-            Memory.write_i32(clear_vals + 20, 0)
-            Memory.write_i32(rpi + 48, 2)
+            # Encoded neutral normal (0, 1, 0) and fully rough sky/background.
+            Memory.write_f32(clear_vals + 16, 0.5)
+            Memory.write_f32(clear_vals + 20, 1.0)
+            Memory.write_f32(clear_vals + 24, 0.5)
+            Memory.write_f32(clear_vals + 28, 1.0)
+            Memory.write_f32(clear_vals + 32, 1.0)
+            Memory.write_i32(clear_vals + 36, 0)
+            Memory.write_i32(rpi + 48, 3)
             Memory.write_ptr(rpi + 56, clear_vals)
 
         vkCmdBeginRenderPass(cmd, rpi, 0)
@@ -6072,12 +6173,14 @@ attach GpuRendererCore:
             self._record_collision_debug(cmd, rp, debug_vp, width, height)
 
         vkCmdEndRenderPass(cmd)
+        depth_is_sampled: i32 = 0
         if self.gpu_hzb_ptr != 0:
             hzb_build: GpuHzb = self.gpu_hzb_ptr as GpuHzb
             hzb_vp: i64 = self.scratch_vp_matrix
             if hzb_vp != 0 and cam_view != 0 and cam_proj != 0:
                 _frog_multiply_4x4_into(cam_proj, cam_view, hzb_vp)
                 if hzb_build.record_build(cmd, self.scale_depth_image, hzb_vp, width, height) == 1:
+                    depth_is_sampled = 1
                     self.gpu_hzb_prev_x = hzb_cam_x
                     self.gpu_hzb_prev_y = hzb_cam_y
                     self.gpu_hzb_prev_z = hzb_cam_z
@@ -6090,7 +6193,22 @@ attach GpuRendererCore:
         self.profiler.mark(cmd, 2)
         if use_scaled == 1:
             if frog_bloom_pass_ready() != 0:
-                self._record_bloom_present(cmd, present_framebuffer, rp, scale_color_image, swap_image, swap_width, swap_height, env.bloom, env.tone_mapping)
+                post_image: i64 = scale_color_image
+                post_desc: i64 = 0
+                post_sampled: i32 = 0
+                if self.gpu_temporal_ptr != 0:
+                    temporal: GpuTemporal = self.gpu_temporal_ptr as GpuTemporal
+                    if env.advanced_post != 0:
+                        temporal_vp: i64 = self.scratch_vp_matrix
+                        if temporal_vp != 0 and cam_view != 0 and cam_proj != 0:
+                            _frog_multiply_4x4_into(cam_proj, cam_view, temporal_vp)
+                            if temporal.record(cmd, self.scale_color_image, self.scale_geometry_image, self.scale_depth_image, depth_is_sampled, temporal_vp) == 1:
+                                post_image = temporal.output_image()
+                                post_desc = temporal.output_descriptor()
+                                post_sampled = 1
+                    else:
+                        temporal.invalidate_history()
+                self._record_bloom_present(cmd, present_framebuffer, rp, post_image, post_desc, post_sampled, swap_image, swap_width, swap_height, env.bloom, env.tone_mapping)
         # GPU-timer: boundary after post/bloom present (end of GPU frame work).
         self.profiler.mark(cmd, 3)
         vkEndCommandBuffer(cmd)

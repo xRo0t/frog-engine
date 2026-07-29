@@ -155,6 +155,9 @@ struct Environment:
     lighting: EnvironmentLighting = EnvironmentLighting()
     bloom: Bloom = Bloom()
     tone_mapping: ToneMapping = ToneMapping()
+    # Renderer-native G-buffer post stack (GTAO + TAA). Kept explicit so
+    # lightweight/vanilla profiles can disable all temporal work.
+    advanced_post: i32 = 0
 
 attach EnvironmentLighting:
 
@@ -759,6 +762,7 @@ attach Environment:
         env.lighting = EnvironmentLighting.none()
         env.bloom = Bloom.none()
         env.tone_mapping = ToneMapping()
+        env.advanced_post = 0
         return env
 
     fun set_clear_color(self, color: Color) -> Environment:
@@ -785,6 +789,13 @@ attach Environment:
 
     fun set_tone_mapping(self, tone_mapping: ToneMapping) -> Environment:
         self.tone_mapping = tone_mapping
+        return self
+
+    fun set_advanced_post(self, enabled: i32) -> Environment:
+        if enabled == 0:
+            self.advanced_post = 0
+        else:
+            self.advanced_post = 1
         return self
 
     fun clear_sky(self) -> Environment:

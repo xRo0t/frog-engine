@@ -41,6 +41,7 @@ layout(location = 12) flat in uvec4 fragmentTexIndex1;
 layout(location = 13) flat in vec4 fragmentUvTransform;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec4 outGeometry;
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
@@ -586,6 +587,14 @@ void main() {
     }
     vec3 albedo = fragmentColor * textureColor.rgb;
     vec4 surfaceColor = vec4(albedo, textureColor.a);
+    vec3 geometryNormal = normalize(fragmentWorldNormal);
+    if (dot(geometryNormal, geometryNormal) < 0.0001) {
+        geometryNormal = normalize(cross(dFdx(fragmentWorldPosition), dFdy(fragmentWorldPosition)));
+    }
+    if (!gl_FrontFacing) {
+        geometryNormal = -geometryNormal;
+    }
+    float geometryRoughness = clamp(fragmentMaterial.y, 0.045, 1.0);
 
     vec4 emissive = unpackEmissive();
     float packedLight = max(pushConstants.fogColor.a, 0.0);
@@ -607,6 +616,7 @@ void main() {
             vec3 sampledNormal = vec3(sampledXY, sampledZ);
             normal = normalize(normalMapFrame(normal, fragmentWorldPosition, textureCoordinates.uv) * sampledNormal);
         }
+        geometryNormal = normal;
 
         float metallic = clamp(fragmentMaterial.x, 0.0, 1.0);
         float roughness = clamp(fragmentMaterial.y, 0.045, 1.0);
@@ -615,6 +625,7 @@ void main() {
             metallic *= metallicRoughness.b;
             roughness = clamp(roughness * metallicRoughness.g, 0.045, 1.0);
         }
+        geometryRoughness = roughness;
 
         float occlusion = 1.0;
         if (hasOcclusionMap() > 0.5) {
@@ -713,4 +724,5 @@ void main() {
         mix(surfaceColor.rgb, pushConstants.fogColor.rgb, fogFactor),
         surfaceColor.a
     );
+    outGeometry = vec4(geometryNormal * 0.5 + 0.5, geometryRoughness);
 }
