@@ -120,6 +120,14 @@ float hasWorldPixelSampling() {
     return mod(floor(packed / 8388608.0), 2.0);
 }
 
+float worldSurfaceEffect() {
+    if (hasWorldPixelSampling() < 0.5) {
+        return 0.0;
+    }
+    float hintCode = floor(fract(fragmentUv.x) * 16.0 + 0.5);
+    return mod(hintCode, 2.0);
+}
+
 // World-pixel meshes may store inverse sky visibility in the unused fractional
 // V range [0.5, 0.99]. The normal atlas-center value 0.5 remains fully exposed,
 // preserving every existing mesh/material without another vertex attribute.
@@ -153,7 +161,7 @@ TextureCoordinates resolveTextureCoordinates(vec2 meshUv, vec2 textureSizePixels
     // Smooth world-pixel meshes can encode a stable projection axis in the
     // otherwise-unused fractional mesh U: X=0.125, Y=0.375, Z=0.875.
     // The legacy 0.5 center keeps automatic dominant-normal projection.
-    float projectionHint = fract(meshUv.x);
+    float projectionHint = fract(meshUv.x) - worldSurfaceEffect() * 0.0625;
     vec2 worldUv;
     if (projectionHint < 0.25) {
         worldUv = vec2(fragmentWorldPosition.z, -fragmentWorldPosition.y);
@@ -570,6 +578,11 @@ void main() {
     }
     float geometryRoughness = clamp(fragmentMaterial.y, 0.045, 1.0);
 
+    vec3 cameraPosition = vec3(
+        pushConstants.fogShapeProjectionLight.y,
+        pushConstants.fogShapeProjectionLight.z,
+        pushConstants.fogShapeProjectionLight.w
+    );
     vec4 emissive = unpackEmissive();
     float packedLight = max(pushConstants.fogColor.a, 0.0);
     float lightIntensity = max(pushConstants.lightDirectionIntensity.w, 0.0);
@@ -606,11 +619,6 @@ void main() {
             occlusion = textureGrad(occlusionSampler, textureCoordinates.uv, textureCoordinates.dx, textureCoordinates.dy).r;
         }
 
-        vec3 cameraPosition = vec3(
-            pushConstants.fogShapeProjectionLight.y,
-            pushConstants.fogShapeProjectionLight.z,
-            pushConstants.fogShapeProjectionLight.w
-        );
         vec3 viewDirection = normalize(cameraPosition - fragmentWorldPosition);
 
         vec3 irradiance = vec3(0.0);
@@ -667,6 +675,13 @@ void main() {
         if (hasLight) {
             surfaceColor.rgb = irradiance;
         }
+    }
+    if (worldSurfaceEffect() > 0.5) {
+        vec3 viewDirection = normalize(cameraPosition - fragmentWorldPosition);
+        float fresnel = pow(1.0 - abs(dot(geometryNormal, viewDirection)), 4.0);
+        vec3 reflectedSky = sampleSkyLighting(reflect(-viewDirection, geometryNormal));
+        vec3 clearWater = surfaceColor.rgb * vec3(0.78, 0.92, 1.06);
+        surfaceColor.rgb = mix(clearWater, reflectedSky * 0.58 + clearWater * 0.42, 0.14 + fresnel * 0.34);
     }
     vec3 emissiveColor = emissive.rgb;
     if (hasEmissiveMap() > 0.5) {

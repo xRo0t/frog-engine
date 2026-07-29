@@ -49,6 +49,41 @@ void main() {
     }
 
     float objectMode = sky.view[3][3];
+    if (objectMode > 3.5) {
+        if (worldY <= 0.025) {
+            discard;
+        }
+        float scale = max(abs(sky.view[2][3]), 0.02);
+        vec2 plane = worldDirection.xz / max(worldY, 0.055);
+        vec2 cloudUv = plane * scale + vec2(sky.view[0][3], sky.view[1][3]);
+        vec2 cloudCell = floor(cloudUv);
+        vec2 macroCell = floor(cloudCell / 8.0);
+        vec2 localCell = cloudCell - macroCell * 8.0 + vec2(0.5);
+        float cloudSeed = gradientNoise(macroCell);
+        float shapeSeed = gradientNoise(macroCell + vec2(19.0, 47.0));
+        vec2 center = vec2(
+            2.4 + shapeSeed * 3.2,
+            2.6 + fract(cloudSeed + shapeSeed) * 2.8
+        );
+        vec2 halfSize = vec2(
+            1.6 + cloudSeed * 1.8,
+            0.9 + shapeSeed * 1.25
+        );
+        vec2 rectangleDistance = abs(localCell - center) - halfSize;
+        float rectangle = 1.0 - step(0.01, max(rectangleDistance.x, rectangleDistance.y));
+        float coverage = clamp(sky.horizonColor.a, 0.05, 0.95);
+        float softness = clamp(sky.lowerColor.a, 0.005, 0.40);
+        float occupied = smoothstep(coverage - softness, coverage + softness, cloudSeed);
+        float cloudAlpha = rectangle * occupied;
+        float horizonFade = smoothstep(0.025, 0.18, worldY);
+        cloudAlpha *= clamp(sky.zenithColor.a, 0.0, 1.0) * horizonFade;
+        if (cloudAlpha <= 0.004) {
+            discard;
+        }
+        outColor = vec4(clamp(sky.view[3].xyz, 0.0, 1.0), cloudAlpha);
+        return;
+    }
+
     if (objectMode > 2.5) {
         vec3 objectDirection = normalize(vec3(sky.view[0][3], sky.view[1][3], sky.view[2][3]));
         vec3 objectColor = sky.view[3].xyz;

@@ -9,6 +9,29 @@
     sun_ptr: i64 = 0
     moon_ptr: i64 = 0
     sun_path_depth: f32 = 0.32
+    day_sun_intensity: f32 = 1.05
+    day_ambient: f32 = 0.42
+    night_moon_intensity: f32 = 0.22
+    night_ambient: f32 = 0.13
+    twilight_ambient: f32 = 0.04
+    darkest_ambient: f32 = 0.02
+    warm_sun_color: Color = Color()
+    noon_sun_color: Color = Color()
+    moon_color: Color = Color()
+    night_zenith_color: Color = Color()
+    day_zenith_color: Color = Color()
+    night_horizon_color: Color = Color()
+    day_horizon_color: Color = Color()
+    night_lower_color: Color = Color()
+    day_lower_color: Color = Color()
+    sunset_horizon_color: Color = Color()
+    sunset_lower_color: Color = Color()
+    sun_visual_size: f32 = 0.045
+    sun_visual_glow: f32 = 0.78
+    sun_visual_softness: f32 = 0.85
+    moon_visual_size: f32 = 0.032
+    moon_visual_glow: f32 = 0.24
+    moon_visual_softness: f32 = 0.70
     running: i32 = 1
     update_sky: i32 = 1
     update_light: i32 = 1
@@ -34,10 +57,22 @@ fun day_cycle_smooth01(value: f32) -> f32:
 attach DayCycle:
 
     static fun create() -> DayCycle:
-        return DayCycle()
+        cycle: DayCycle = DayCycle()
+        cycle.warm_sun_color = Color.rgb(1.0, 0.55, 0.34)
+        cycle.noon_sun_color = Color.rgb(1.0, 0.94, 0.82)
+        cycle.moon_color = Color.rgb(0.48, 0.58, 0.82)
+        cycle.night_zenith_color = Color.rgb(0.015, 0.025, 0.080)
+        cycle.day_zenith_color = Color.rgb(0.42, 0.57, 0.82)
+        cycle.night_horizon_color = Color.rgb(0.045, 0.060, 0.120)
+        cycle.day_horizon_color = Color.rgb(0.70, 0.79, 0.92)
+        cycle.night_lower_color = Color.rgb(0.025, 0.035, 0.070)
+        cycle.day_lower_color = Color.rgb(0.78, 0.84, 0.94)
+        cycle.sunset_horizon_color = Color.rgb(0.96, 0.34, 0.16)
+        cycle.sunset_lower_color = Color.rgb(0.72, 0.18, 0.10)
+        return cycle
 
     static fun create(sun: DirectionalLight3D) -> DayCycle:
-        cycle: DayCycle = DayCycle()
+        cycle: DayCycle = DayCycle.create()
         cycle.sun_ptr = sun as i64
         return cycle
 
@@ -89,6 +124,62 @@ attach DayCycle:
 
     fun set_sun_path_depth(self, depth: f32) -> DayCycle:
         self.sun_path_depth = clamp(depth, 0.0 - 1.0, 1.0)
+        return self
+
+    # Light energy is profile data, not a hard-coded property of time.
+    # This lets a game keep a crisp, inexpensive Vanilla look and switch to
+    # an HDR/shadow profile without fighting values rewritten every frame.
+    fun set_day_light(self, sun_intensity: f32, ambient: f32) -> DayCycle:
+        self.day_sun_intensity = clamp(sun_intensity, 0.0, 8.0)
+        self.day_ambient = clamp(ambient, 0.0, 4.0)
+        return self
+
+    fun set_night_light(self, moon_intensity: f32, ambient: f32) -> DayCycle:
+        self.night_moon_intensity = clamp(moon_intensity, 0.0, 8.0)
+        self.night_ambient = clamp(ambient, 0.0, 4.0)
+        return self
+
+    fun set_dark_ambient(self, twilight: f32, darkest: f32) -> DayCycle:
+        self.twilight_ambient = clamp(twilight, 0.0, 4.0)
+        self.darkest_ambient = clamp(darkest, 0.0, 4.0)
+        return self
+
+    fun set_sun_colors(self, warm: Color, noon: Color) -> DayCycle:
+        self.warm_sun_color = warm
+        self.noon_sun_color = noon
+        return self
+
+    fun set_moon_color(self, color: Color) -> DayCycle:
+        self.moon_color = color
+        return self
+
+    fun set_day_sky(self, zenith: Color, horizon: Color, lower: Color) -> DayCycle:
+        self.day_zenith_color = zenith
+        self.day_horizon_color = horizon
+        self.day_lower_color = lower
+        return self
+
+    fun set_night_sky(self, zenith: Color, horizon: Color, lower: Color) -> DayCycle:
+        self.night_zenith_color = zenith
+        self.night_horizon_color = horizon
+        self.night_lower_color = lower
+        return self
+
+    fun set_sunset_sky(self, horizon: Color, lower: Color) -> DayCycle:
+        self.sunset_horizon_color = horizon
+        self.sunset_lower_color = lower
+        return self
+
+    fun set_sun_visual(self, size: f32, glow: f32, softness: f32) -> DayCycle:
+        self.sun_visual_size = clamp(size, 0.005, 0.20)
+        self.sun_visual_glow = clamp(glow, 0.0, 1.0)
+        self.sun_visual_softness = clamp(softness, 0.0, 1.0)
+        return self
+
+    fun set_moon_visual(self, size: f32, glow: f32, softness: f32) -> DayCycle:
+        self.moon_visual_size = clamp(size, 0.005, 0.20)
+        self.moon_visual_glow = clamp(glow, 0.0, 1.0)
+        self.moon_visual_softness = clamp(softness, 0.0, 1.0)
         return self
 
     fun control_sky(self, enabled: i32) -> DayCycle:
@@ -152,42 +243,31 @@ attach DayCycle:
         horizon_proximity: f32 = day_cycle_smooth01(1.0 - day_cycle_abs(sun_y) * 4.5)
         twilight: f32 = horizon_proximity * day_cycle_smooth01((sun_y + 0.16) / 0.16)
 
-        warm_sun: Color = Color.rgb(1.0, 0.55, 0.34)
-        noon_sun: Color = Color.rgb(1.0, 0.94, 0.82)
-        sun_color: Color = day_cycle_color_lerp(warm_sun, noon_sun, high_sun)
-        moon_color: Color = Color.rgb(0.48, 0.58, 0.82)
+        sun_color: Color = day_cycle_color_lerp(self.warm_sun_color, self.noon_sun_color, high_sun)
+        moon_color: Color = self.moon_color
 
         if self.update_light == 1:
             sun.set_color(sun_color)
-            sun.set_intensity(lerp(0.0, 1.05, direct_sunlight))
-            sun.set_ambient(lerp(0.04, 0.42, daylight))
+            sun.set_intensity(lerp(0.0, self.day_sun_intensity, direct_sunlight))
+            sun.set_ambient(lerp(self.twilight_ambient, self.day_ambient, daylight))
             if self.moon_ptr != 0:
                 moon_light: DirectionalLight3D = self.moon_ptr as DirectionalLight3D
                 moon_light.set_color(moon_color)
-                moon_light.set_intensity(lerp(0.0, 0.22, moonlight))
-                moon_light.set_ambient(lerp(0.02, 0.13, moonlight))
+                moon_light.set_intensity(lerp(0.0, self.night_moon_intensity, moonlight))
+                moon_light.set_ambient(lerp(self.darkest_ambient, self.night_ambient, moonlight))
 
         if self.update_sky == 1:
             sky: Sky = env.sky
-            sky.ensure_light_object(sun, "DaySkyObject", sun_color, 0.045, 0.78, 0.85)
+            sky.ensure_light_object(sun, "DaySkyObject", sun_color, self.sun_visual_size, self.sun_visual_glow, self.sun_visual_softness)
             if self.moon_ptr != 0:
                 moon_sky: DirectionalLight3D = self.moon_ptr as DirectionalLight3D
-                sky.ensure_light_object(moon_sky, "NightSkyObject", moon_color, 0.032, 0.24, 0.70)
+                sky.ensure_light_object(moon_sky, "NightSkyObject", moon_color, self.moon_visual_size, self.moon_visual_glow, self.moon_visual_softness)
 
-            night_zenith: Color = Color.rgb(0.015, 0.025, 0.080)
-            day_zenith: Color = Color.rgb(0.42, 0.57, 0.82)
-            night_horizon: Color = Color.rgb(0.045, 0.060, 0.120)
-            day_horizon: Color = Color.rgb(0.70, 0.79, 0.92)
-            night_lower: Color = Color.rgb(0.025, 0.035, 0.070)
-            day_lower: Color = Color.rgb(0.78, 0.84, 0.94)
-            sunset_horizon: Color = Color.rgb(0.96, 0.34, 0.16)
-            sunset_lower: Color = Color.rgb(0.72, 0.18, 0.10)
-
-            zenith: Color = day_cycle_color_lerp(night_zenith, day_zenith, daylight)
-            horizon: Color = day_cycle_color_lerp(night_horizon, day_horizon, daylight)
-            lower: Color = day_cycle_color_lerp(night_lower, day_lower, daylight)
-            horizon = day_cycle_color_lerp(horizon, sunset_horizon, twilight * 0.82)
-            lower = day_cycle_color_lerp(lower, sunset_lower, twilight * 0.60)
+            zenith: Color = day_cycle_color_lerp(self.night_zenith_color, self.day_zenith_color, daylight)
+            horizon: Color = day_cycle_color_lerp(self.night_horizon_color, self.day_horizon_color, daylight)
+            lower: Color = day_cycle_color_lerp(self.night_lower_color, self.day_lower_color, daylight)
+            horizon = day_cycle_color_lerp(horizon, self.sunset_horizon_color, twilight * 0.82)
+            lower = day_cycle_color_lerp(lower, self.sunset_lower_color, twilight * 0.60)
 
             sky.set_zenith(zenith)
             sky.set_horizon(horizon)
@@ -197,6 +277,7 @@ attach DayCycle:
                 moon_color_target: DirectionalLight3D = self.moon_ptr as DirectionalLight3D
                 sky.set_object_color_by_light(moon_color_target, moon_color)
             sky.set_stars_object(1.0 - daylight, 110, Color.rgb(0.86, 0.89, 0.95))
+            sky.update_clouds(dt, daylight)
             env.set_sky(sky)
 
         if self.update_fog == 1:

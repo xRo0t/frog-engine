@@ -97,6 +97,16 @@ struct SkyObject:
     count: i32 = 0
     texture_id: i32 = -1
 
+struct SkyClouds:
+    enabled: i32 = 0
+    day_color: Color = Color()
+    night_color: Color = Color()
+    coverage: f32 = 0.56
+    scale: f32 = 1.15
+    speed: f32 = 0.004
+    opacity: f32 = 0.62
+    softness: f32 = 0.10
+
 struct Sky:
     mode: i32 = SKY_MODE_NONE
     zenith_color: Color = Color()
@@ -141,6 +151,16 @@ struct Sky:
     primary_softness: f32 = 0.85
     primary_enabled: i32 = 0
     object_store: i64 = 0
+    cloud_enabled: i32 = 0
+    cloud_day_color: Color = Color()
+    cloud_night_color: Color = Color()
+    cloud_color: Color = Color()
+    cloud_coverage: f32 = 0.56
+    cloud_scale: f32 = 1.15
+    cloud_speed: f32 = 0.004
+    cloud_opacity: f32 = 0.62
+    cloud_softness: f32 = 0.10
+    cloud_offset: f32 = 0.0
 
 struct EnvironmentLighting:
     enabled: i32 = 0
@@ -281,6 +301,43 @@ attach SkyShape:
 
     static fun stars() -> SkyShape:
         return SkyShape(value=SKY_OBJECT_SHAPE_STARS)
+
+attach SkyClouds:
+
+    static fun none() -> SkyClouds:
+        return SkyClouds()
+
+    static fun blocky() -> SkyClouds:
+        clouds: SkyClouds = SkyClouds()
+        clouds.enabled = 1
+        clouds.day_color = Color.rgb(0.94, 0.97, 1.0)
+        clouds.night_color = Color.rgb(0.10, 0.14, 0.24)
+        return clouds
+
+    fun set_colors(self, day: Color, night: Color) -> SkyClouds:
+        self.day_color = day
+        self.night_color = night
+        return self
+
+    fun set_coverage(self, value: f32) -> SkyClouds:
+        self.coverage = clamp(value, 0.05, 0.95)
+        return self
+
+    fun set_scale(self, value: f32) -> SkyClouds:
+        self.scale = clamp(value, 0.02, 32.0)
+        return self
+
+    fun set_speed(self, value: f32) -> SkyClouds:
+        self.speed = clamp(value, 0.0 - 2.0, 2.0)
+        return self
+
+    fun set_opacity(self, value: f32) -> SkyClouds:
+        self.opacity = clamp(value, 0.0, 1.0)
+        return self
+
+    fun set_softness(self, value: f32) -> SkyClouds:
+        self.softness = clamp(value, 0.005, 0.40)
+        return self
 
 attach SkyObject:
 
@@ -482,6 +539,16 @@ attach Sky:
         sky.primary_softness = 0.85
         sky.primary_enabled = 0
         sky.object_store = Memory.malloc_zeroed(SKY_MAX_OBJECTS * SKY_OBJECT_STRIDE)
+        sky.cloud_enabled = 0
+        sky.cloud_day_color = Color.rgb(0.94, 0.97, 1.0)
+        sky.cloud_night_color = Color.rgb(0.10, 0.14, 0.24)
+        sky.cloud_color = sky.cloud_day_color
+        sky.cloud_coverage = 0.56
+        sky.cloud_scale = 1.15
+        sky.cloud_speed = 0.004
+        sky.cloud_opacity = 0.62
+        sky.cloud_softness = 0.10
+        sky.cloud_offset = 0.0
         return sky
 
     static fun gradient(zenith: Color, horizon: Color, lower: Color) -> Sky:
@@ -500,6 +567,34 @@ attach Sky:
         if self.mode == SKY_MODE_NONE:
             return 0
         return 1
+
+    fun set_clouds(self, clouds: SkyClouds) -> Sky:
+        self.cloud_enabled = clouds.enabled
+        self.cloud_day_color = clouds.day_color
+        self.cloud_night_color = clouds.night_color
+        self.cloud_color = clouds.day_color
+        self.cloud_coverage = clouds.coverage
+        self.cloud_scale = clouds.scale
+        self.cloud_speed = clouds.speed
+        self.cloud_opacity = clouds.opacity
+        self.cloud_softness = clouds.softness
+        return self
+
+    fun update_clouds(self, dt: f32, daylight: f32) -> Sky:
+        if self.cloud_enabled == 0:
+            return self
+        self.cloud_offset = self.cloud_offset + dt * self.cloud_speed
+        while self.cloud_offset >= 4096.0:
+            self.cloud_offset = self.cloud_offset - 4096.0
+        while self.cloud_offset < 0.0:
+            self.cloud_offset = self.cloud_offset + 4096.0
+        light: f32 = clamp(daylight, 0.0, 1.0)
+        self.cloud_color = Color.rgb(
+            lerp(self.cloud_night_color.r, self.cloud_day_color.r, light),
+            lerp(self.cloud_night_color.g, self.cloud_day_color.g, light),
+            lerp(self.cloud_night_color.b, self.cloud_day_color.b, light)
+        )
+        return self
 
     fun clear_objects(self) -> Sky:
         self.object_count = 0
