@@ -32,6 +32,7 @@ layout(location = 8) flat in vec4 fragmentShadowSplits;
 layout(location = 9) flat in vec4 fragmentShadowFilter;
 layout(location = 10) in vec3 fragmentWorldNormal;
 layout(location = 11) flat in vec4 fragmentUvTransform;
+layout(location = 12) flat in float fragmentAlpha;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outGeometry;
@@ -568,7 +569,7 @@ void main() {
         discard;
     }
     vec3 albedo = fragmentColor * textureColor.rgb;
-    vec4 surfaceColor = vec4(albedo, textureColor.a);
+    vec4 surfaceColor = vec4(albedo, textureColor.a * clamp(fragmentAlpha, 0.0, 1.0));
     vec3 geometryNormal = normalize(fragmentWorldNormal);
     if (dot(geometryNormal, geometryNormal) < 0.0001) {
         geometryNormal = normalize(cross(dFdx(fragmentWorldPosition), dFdy(fragmentWorldPosition)));
@@ -682,6 +683,10 @@ void main() {
         vec3 reflectedSky = sampleSkyLighting(reflect(-viewDirection, geometryNormal));
         vec3 clearWater = surfaceColor.rgb * vec3(0.78, 0.92, 1.06);
         surfaceColor.rgb = mix(clearWater, reflectedSky * 0.58 + clearWater * 0.42, 0.14 + fresnel * 0.34);
+        // The game submits tagged fluid surfaces through the transparent
+        // material layer. Clear water stays readable head-on and becomes more
+        // reflective/opaque at grazing angles, without a scene-copy viewport.
+        surfaceColor.a = mix(surfaceColor.a, 0.86, fresnel * 0.55);
     }
     vec3 emissiveColor = emissive.rgb;
     if (hasEmissiveMap() > 0.5) {

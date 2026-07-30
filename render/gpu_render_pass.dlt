@@ -871,7 +871,7 @@ attach RenderPass:
         Memory.write_i32(attrs + 156, FROG_GPU_INSTANCE_UV_OFFSET)
         # Shadow cascade 0 columns (loc=9..12), cascade 1 columns
         # (loc=13..16), params (loc=17), splits (loc=18), and filter
-        # controls (loc=19), binding 2.
+        # controls (loc=19), binding 2. As before, loc 19 is not counted.
         sai: i32 = 0
         while sai < 11:
             soff: i64 = 160 + (sai as i64) * 16
@@ -880,6 +880,12 @@ attach RenderPass:
             Memory.write_i32(attrs + soff + 8, 109)
             Memory.write_i32(attrs + soff + 12, sai * 16)
             sai = sai + 1
+        # Material alpha occupies the last spare word of the 128-byte instance
+        # record. R32_UINT keeps the UNORM16 payload exact.
+        Memory.write_i32(attrs + 320, 21)
+        Memory.write_i32(attrs + 324, 1)
+        Memory.write_i32(attrs + 328, 98)
+        Memory.write_i32(attrs + 332, FROG_GPU_INSTANCE_ALPHA_OFFSET)
 
         vi_ci: i64 = Memory.malloc_zeroed(48)
         if vi_ci == 0:
@@ -892,7 +898,7 @@ attach RenderPass:
         Memory.write_i32(vi_ci + 16, 0)
         Memory.write_i32(vi_ci + 20, 3)
         Memory.write_ptr(vi_ci + 24, bind)
-        Memory.write_i32(vi_ci + 32, 20)
+        Memory.write_i32(vi_ci + 32, 21)
         Memory.write_ptr(vi_ci + 40, attrs)
 
         # Input assembly
@@ -940,6 +946,22 @@ attach RenderPass:
         Memory.write_ptr(vp_ci + 24, viewport)
         Memory.write_i32(vp_ci + 32, 1)
         Memory.write_ptr(vp_ci + 40, scissor)
+
+        # The scene can render at a scale different from the swapchain size.
+        # Viewport/scissor therefore belong to command recording, not pipeline
+        # creation; otherwise later pipelines (notably transparency) render
+        # into a stale, offset sub-rectangle of the HDR target.
+        dynamic_values: i64 = Memory.malloc_zeroed(8)
+        dynamic_state: i64 = Memory.malloc_zeroed(32)
+        if dynamic_values == 0 or dynamic_state == 0:
+            Memory.free(dynamic_values)
+            Memory.free(dynamic_state)
+            return 0
+        Memory.write_i32(dynamic_values, 0)       # VK_DYNAMIC_STATE_VIEWPORT
+        Memory.write_i32(dynamic_values + 4, 1)   # VK_DYNAMIC_STATE_SCISSOR
+        Memory.write_i32(dynamic_state, 27)
+        Memory.write_i32(dynamic_state + 20, 2)
+        Memory.write_ptr(dynamic_state + 24, dynamic_values)
 
         # Rasterization
         rast: i64 = Memory.malloc_zeroed(64)
@@ -1024,7 +1046,7 @@ attach RenderPass:
         Memory.write_ptr(pipe_ci + 72, ms)
         Memory.write_ptr(pipe_ci + 80, ds)
         Memory.write_ptr(pipe_ci + 88, cb)
-        Memory.write_ptr(pipe_ci + 96, 0)
+        Memory.write_ptr(pipe_ci + 96, dynamic_state)
         Memory.write_ptr(pipe_ci + 104, self.vk_pipeline_layout)
         Memory.write_ptr(pipe_ci + 112, self.vk_render_pass)
         Memory.write_i32(pipe_ci + 120, 0)
@@ -1068,6 +1090,8 @@ attach RenderPass:
         Memory.free(viewport)
         Memory.free(scissor)
         Memory.free(vp_ci)
+        Memory.free(dynamic_values)
+        Memory.free(dynamic_state)
         Memory.free(rast)
         Memory.free(ms)
         Memory.free(ds)
@@ -1286,6 +1310,18 @@ attach RenderPass:
         Memory.write_i32(vp_ci + 32, 1)
         Memory.write_ptr(vp_ci + 40, scissor)
 
+        dynamic_values: i64 = Memory.malloc_zeroed(8)
+        dynamic_state: i64 = Memory.malloc_zeroed(32)
+        if dynamic_values == 0 or dynamic_state == 0:
+            Memory.free(dynamic_values)
+            Memory.free(dynamic_state)
+            return 0
+        Memory.write_i32(dynamic_values, 0)
+        Memory.write_i32(dynamic_values + 4, 1)
+        Memory.write_i32(dynamic_state, 27)
+        Memory.write_i32(dynamic_state + 20, 2)
+        Memory.write_ptr(dynamic_state + 24, dynamic_values)
+
         rast: i64 = Memory.malloc_zeroed(64)
         if rast == 0:
             return 0
@@ -1335,6 +1371,7 @@ attach RenderPass:
         Memory.write_ptr(pipe_ci + 72, ms)
         Memory.write_ptr(pipe_ci + 80, ds)
         Memory.write_ptr(pipe_ci + 88, cb)
+        Memory.write_ptr(pipe_ci + 96, dynamic_state)
         Memory.write_ptr(pipe_ci + 104, self.bindless_pipeline_layout)
         Memory.write_ptr(pipe_ci + 112, self.vk_render_pass)
         Memory.write_i32(pipe_ci + 120, 0)
@@ -1395,6 +1432,7 @@ attach RenderPass:
             Memory.write_ptr(t_pipe_ci + 72, ms)
             Memory.write_ptr(t_pipe_ci + 80, t_ds)
             Memory.write_ptr(t_pipe_ci + 88, t_cb)
+            Memory.write_ptr(t_pipe_ci + 96, dynamic_state)
             Memory.write_ptr(t_pipe_ci + 104, self.bindless_pipeline_layout)
             Memory.write_ptr(t_pipe_ci + 112, self.vk_render_pass)
             Memory.write_i32(t_pipe_ci + 120, 0)
@@ -1421,6 +1459,8 @@ attach RenderPass:
         Memory.free(viewport)
         Memory.free(scissor)
         Memory.free(vp_ci)
+        Memory.free(dynamic_values)
+        Memory.free(dynamic_state)
         Memory.free(rast)
         Memory.free(ms)
         Memory.free(ds)
@@ -1614,6 +1654,18 @@ attach RenderPass:
         Memory.write_i32(vp_ci + 32, 1)
         Memory.write_ptr(vp_ci + 40, scissor)
 
+        dynamic_values: i64 = Memory.malloc_zeroed(8)
+        dynamic_state: i64 = Memory.malloc_zeroed(32)
+        if dynamic_values == 0 or dynamic_state == 0:
+            Memory.free(dynamic_values)
+            Memory.free(dynamic_state)
+            return 0
+        Memory.write_i32(dynamic_values, 0)
+        Memory.write_i32(dynamic_values + 4, 1)
+        Memory.write_i32(dynamic_state, 27)
+        Memory.write_i32(dynamic_state + 20, 2)
+        Memory.write_ptr(dynamic_state + 24, dynamic_values)
+
         rast: i64 = Memory.malloc_zeroed(64)
         if rast == 0:
             return 0
@@ -1662,6 +1714,7 @@ attach RenderPass:
         Memory.write_ptr(pipe_ci + 72, ms)
         Memory.write_ptr(pipe_ci + 80, ds)
         Memory.write_ptr(pipe_ci + 88, cb)
+        Memory.write_ptr(pipe_ci + 96, dynamic_state)
         Memory.write_ptr(pipe_ci + 104, self.ssbo_pipeline_layout)
         Memory.write_ptr(pipe_ci + 112, self.vk_render_pass)
         Memory.write_i32(pipe_ci + 136, 0 - 1)
@@ -1681,6 +1734,8 @@ attach RenderPass:
         Memory.free(viewport)
         Memory.free(scissor)
         Memory.free(vp_ci)
+        Memory.free(dynamic_values)
+        Memory.free(dynamic_state)
         Memory.free(rast)
         Memory.free(ms)
         Memory.free(cba)

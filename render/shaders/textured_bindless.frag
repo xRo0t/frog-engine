@@ -594,7 +594,8 @@ void main() {
         }
     }
     vec3 albedo = fragmentColor * textureColor.rgb;
-    vec4 surfaceColor = vec4(albedo, textureColor.a);
+    float materialAlpha = float(fragmentTexIndex1.w) / 65535.0;
+    vec4 surfaceColor = vec4(albedo, textureColor.a * clamp(materialAlpha, 0.0, 1.0));
     vec3 geometryNormal = normalize(fragmentWorldNormal);
     if (dot(geometryNormal, geometryNormal) < 0.0001) {
         geometryNormal = normalize(cross(dFdx(fragmentWorldPosition), dFdy(fragmentWorldPosition)));
@@ -708,6 +709,7 @@ void main() {
         vec3 reflectedSky = sampleSkyLighting(reflect(-viewDirection, geometryNormal));
         vec3 clearWater = surfaceColor.rgb * vec3(0.78, 0.92, 1.06);
         surfaceColor.rgb = mix(clearWater, reflectedSky * 0.58 + clearWater * 0.42, 0.14 + fresnel * 0.34);
+        surfaceColor.a = mix(surfaceColor.a, 0.86, fresnel * 0.55);
     }
     vec3 emissiveColor = emissive.rgb;
     if (hasEmissiveMap() > 0.5) {

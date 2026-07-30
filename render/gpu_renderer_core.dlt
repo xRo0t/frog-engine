@@ -657,7 +657,7 @@ struct GpuRendererCore:
     mesh_metallic_roughness_tex_ids: i64 = 0 # mesh_id -> glTF metallic-roughness texture id
     mesh_occlusion_tex_ids: i64 = 0 # mesh_id -> ambient-occlusion texture id
     mesh_desc_sets: i64 = 0    # mesh_id -> material descriptor set cache
-    mesh_material_params: i64 = 0 # mesh_id -> material vec4 + uv transform vec4
+    mesh_material_params: i64 = 0 # mesh_id -> material vec4 + uv transform vec4 + alpha
     mesh_shadow_flags: i64 = 0 # mesh_id -> cast + receive * 2
     mesh_shadow_distances: i64 = 0 # mesh_id -> object shadow cutoff, 0 = inherit light distance
     mesh_transparent: i64 = 0  # mesh_id -> 1 if drawn in the transparent (alpha-blended) pass
@@ -818,7 +818,7 @@ attach GpuRendererCore:
         self.mesh_metallic_roughness_tex_ids = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.mesh_occlusion_tex_ids = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.mesh_desc_sets = Memory.malloc_zeroed(self.vb_capacity * 8)
-        self.mesh_material_params = Memory.malloc_zeroed(self.vb_capacity * 32)
+        self.mesh_material_params = Memory.malloc_zeroed(self.vb_capacity * FROG_GPU_MESH_MATERIAL_STRIDE)
         self.mesh_shadow_flags = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.mesh_transparent = Memory.malloc_zeroed(self.vb_capacity * 4)
         self.mesh_shadow_distances = Memory.malloc_zeroed(self.vb_capacity * 4)
@@ -832,9 +832,11 @@ attach GpuRendererCore:
             Memory.write_i32(self.mesh_normal_tex_ids + mti * 4, 0 - 1)
             Memory.write_i32(self.mesh_metallic_roughness_tex_ids + mti * 4, 0 - 1)
             Memory.write_i32(self.mesh_occlusion_tex_ids + mti * 4, 0 - 1)
-            Memory.write_f32(self.mesh_material_params + mti * 32 + 4, 1.0)
-            Memory.write_f32(self.mesh_material_params + mti * 32 + 16, 1.0)
-            Memory.write_f32(self.mesh_material_params + mti * 32 + 20, 1.0)
+            material_off: i64 = (mti as i64) * (FROG_GPU_MESH_MATERIAL_STRIDE as i64)
+            Memory.write_f32(self.mesh_material_params + material_off + 4, 1.0)
+            Memory.write_f32(self.mesh_material_params + material_off + 16, 1.0)
+            Memory.write_f32(self.mesh_material_params + material_off + 20, 1.0)
+            Memory.write_f32(self.mesh_material_params + material_off + 32, 1.0)
             Memory.write_i32(self.mesh_shadow_flags + mti * 4, 3)
             mti = mti + 1
         self.white_desc_set = 0
@@ -1733,7 +1735,11 @@ attach GpuRendererCore:
         Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET + 16, occ)
         Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET + 20, 0)
         Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET + 24, 0)
-        Memory.write_i32(rec + FROG_GPU_INSTANCE_TEXIDX_OFFSET + 28, 0)
+        alpha: f32 = 1.0
+        if self.mesh_material_params != 0:
+            material_off: i64 = (gi as i64) * (FROG_GPU_MESH_MATERIAL_STRIDE as i64)
+            alpha = clamp(Memory.read_f32(self.mesh_material_params + material_off + 32), 0.0, 1.0)
+        Memory.write_i32(rec + FROG_GPU_INSTANCE_ALPHA_OFFSET, (alpha * 65535.0 + 0.5) as i32)
 
     # Resolve mesh gi's texture id from a mesh->tex_id array into a bindless
     # slot, falling back to `fallback_slot` when the id is missing/-1.
@@ -1770,7 +1776,8 @@ attach GpuRendererCore:
         Memory.copy(rec, g_model, 64)
         # Material + uv: mirror the CPU path exactly.
         if self.mesh_material_params != 0:
-            Memory.copy(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET, self.mesh_material_params + gi * 32, 32)
+            material_off: i64 = (gi as i64) * (FROG_GPU_MESH_MATERIAL_STRIDE as i64)
+            Memory.copy(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET, self.mesh_material_params + material_off, 32)
         else:
             Memory.write_f32(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET, 0.0)
             Memory.write_f32(rec + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 4, 1.0)
@@ -2294,7 +2301,7 @@ attach GpuRendererCore:
         new_mesh_metallic_roughness_tex: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_mesh_occlusion_tex: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_mesh_desc_sets: i64 = Memory.malloc_zeroed(new_cap * 8)
-        new_mesh_materials: i64 = Memory.malloc_zeroed(new_cap * 32)
+        new_mesh_materials: i64 = Memory.malloc_zeroed(new_cap * FROG_GPU_MESH_MATERIAL_STRIDE)
         new_shadow_flags: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_shadow_distances: i64 = Memory.malloc_zeroed(new_cap * 4)
         new_transparent: i64 = Memory.malloc_zeroed(new_cap * 4)
@@ -2305,9 +2312,11 @@ attach GpuRendererCore:
             Memory.write_i32(new_mesh_normal_tex + mti2 * 4, 0 - 1)
             Memory.write_i32(new_mesh_metallic_roughness_tex + mti2 * 4, 0 - 1)
             Memory.write_i32(new_mesh_occlusion_tex + mti2 * 4, 0 - 1)
-            Memory.write_f32(new_mesh_materials + mti2 * 32 + 4, 1.0)
-            Memory.write_f32(new_mesh_materials + mti2 * 32 + 16, 1.0)
-            Memory.write_f32(new_mesh_materials + mti2 * 32 + 20, 1.0)
+            new_material_off: i64 = (mti2 as i64) * (FROG_GPU_MESH_MATERIAL_STRIDE as i64)
+            Memory.write_f32(new_mesh_materials + new_material_off + 4, 1.0)
+            Memory.write_f32(new_mesh_materials + new_material_off + 16, 1.0)
+            Memory.write_f32(new_mesh_materials + new_material_off + 20, 1.0)
+            Memory.write_f32(new_mesh_materials + new_material_off + 32, 1.0)
             Memory.write_i32(new_shadow_flags + mti2 * 4, 3)
             mti2 = mti2 + 1
         new_visible: i64 = Memory.malloc_zeroed(new_cap * 4)
@@ -2350,7 +2359,7 @@ attach GpuRendererCore:
         if self.mesh_desc_sets != 0:
             Memory.copy(new_mesh_desc_sets, self.mesh_desc_sets, self.vb_capacity * 8)
         if self.mesh_material_params != 0:
-            Memory.copy(new_mesh_materials, self.mesh_material_params, self.vb_capacity * 32)
+            Memory.copy(new_mesh_materials, self.mesh_material_params, self.vb_capacity * FROG_GPU_MESH_MATERIAL_STRIDE)
         if self.mesh_shadow_flags != 0:
             Memory.copy(new_shadow_flags, self.mesh_shadow_flags, self.vb_capacity * 4)
         if self.mesh_shadow_distances != 0:
@@ -3903,7 +3912,9 @@ attach GpuRendererCore:
         if self.mesh_desc_sets != 0:
             Memory.write_ptr(self.mesh_desc_sets + idx * 8, Memory.read_ptr(self.mesh_desc_sets + src_vb_idx * 8))
         if self.mesh_material_params != 0:
-            Memory.copy(self.mesh_material_params + idx * 32, self.mesh_material_params + src_vb_idx * 32, 32)
+            dst_material_off: i64 = (idx as i64) * (FROG_GPU_MESH_MATERIAL_STRIDE as i64)
+            src_material_off: i64 = (src_vb_idx as i64) * (FROG_GPU_MESH_MATERIAL_STRIDE as i64)
+            Memory.copy(self.mesh_material_params + dst_material_off, self.mesh_material_params + src_material_off, FROG_GPU_MESH_MATERIAL_STRIDE)
         if self.mesh_shadow_flags != 0:
             Memory.write_i32(self.mesh_shadow_flags + idx * 4, Memory.read_i32(self.mesh_shadow_flags + src_vb_idx * 4))
         if self.mesh_shadow_distances != 0:
@@ -4094,7 +4105,7 @@ attach GpuRendererCore:
                         if self.transparent_visible_count < 0:
                             self.transparent_visible_count = 0
             Memory.write_i32(self.mesh_transparent + mesh_id * 4, tflag)
-        off: i64 = (mesh_id as i64) * 32
+        off: i64 = (mesh_id as i64) * (FROG_GPU_MESH_MATERIAL_STRIDE as i64)
         packed_material: f32 = _frog_pack_material(material)
         # GPU-cull instance records contain a snapshot of these values. Mark
         # them dirty only when the material actually changes so live toggles
@@ -4115,6 +4126,9 @@ attach GpuRendererCore:
             grouping_changed = 1
         if Memory.read_f32(self.mesh_material_params + off + 28) != material.uv_offset_y:
             grouping_changed = 1
+        material_alpha: f32 = clamp(material.alpha, 0.0, 1.0)
+        if Memory.read_f32(self.mesh_material_params + off + 32) != material_alpha:
+            grouping_changed = 1
         Memory.write_f32(self.mesh_material_params + off, material.metallic)
         Memory.write_f32(self.mesh_material_params + off + 4, material.roughness)
         Memory.write_f32(self.mesh_material_params + off + 8, material.emissive_strength)
@@ -4123,6 +4137,7 @@ attach GpuRendererCore:
         Memory.write_f32(self.mesh_material_params + off + 20, material.uv_scale_y)
         Memory.write_f32(self.mesh_material_params + off + 24, material.uv_offset_x)
         Memory.write_f32(self.mesh_material_params + off + 28, material.uv_offset_y)
+        Memory.write_f32(self.mesh_material_params + off + 32, material_alpha)
         if self.mesh_emissive_tex_ids != 0:
             emissive_tex_id: i32 = 0 - 1
             if material.has_emissive_map == 1:
@@ -5948,7 +5963,8 @@ attach GpuRendererCore:
                                     static_dst: i64 = mapped_instances + ((instance_write as i64) * (FROG_GPU_INSTANCE_STRIDE as i64))
                                     Memory.copy(static_dst, static_model, 64)
                                     if self.mesh_material_params != 0:
-                                        Memory.copy(static_dst + FROG_GPU_INSTANCE_MATERIAL_OFFSET, self.mesh_material_params + static_rep * 32, 32)
+                                        static_material_off: i64 = (static_rep as i64) * (FROG_GPU_MESH_MATERIAL_STRIDE as i64)
+                                        Memory.copy(static_dst + FROG_GPU_INSTANCE_MATERIAL_OFFSET, self.mesh_material_params + static_material_off, 32)
                                     receive_shadow: i32 = 1
                                     if self.mesh_shadow_flags != 0:
                                         static_shadow_flags: i32 = Memory.read_i32(self.mesh_shadow_flags + static_rep * 4)
@@ -6137,7 +6153,8 @@ attach GpuRendererCore:
                                     instance_dst: i64 = mapped_instances + ((instance_write as i64) * (FROG_GPU_INSTANCE_STRIDE as i64))
                                     Memory.copy(instance_dst, g_model, 64)
                                     if self.mesh_material_params != 0:
-                                        Memory.copy(instance_dst + FROG_GPU_INSTANCE_MATERIAL_OFFSET, self.mesh_material_params + gi * 32, 32)
+                                        group_material_off: i64 = (gi as i64) * (FROG_GPU_MESH_MATERIAL_STRIDE as i64)
+                                        Memory.copy(instance_dst + FROG_GPU_INSTANCE_MATERIAL_OFFSET, self.mesh_material_params + group_material_off, 32)
                                     else:
                                         Memory.write_f32(instance_dst + FROG_GPU_INSTANCE_MATERIAL_OFFSET, 0.0)
                                         Memory.write_f32(instance_dst + FROG_GPU_INSTANCE_MATERIAL_OFFSET + 4, 1.0)

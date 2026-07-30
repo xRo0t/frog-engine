@@ -21,6 +21,7 @@ layout(location = 17) in vec4 shadowParams;
 layout(location = 18) in vec4 shadowSplits;
 layout(location = 19) in vec4 shadowFilter;
 layout(location = 20) in vec4 instanceUvTransform;
+layout(location = 21) in uint instanceAlpha;
 
 layout(location = 0) out vec3 fragmentColor;
 layout(location = 1) out vec2 fragmentUv;
@@ -34,6 +35,7 @@ layout(location = 8) flat out vec4 fragmentShadowSplits;
 layout(location = 9) flat out vec4 fragmentShadowFilter;
 layout(location = 10) out vec3 fragmentWorldNormal;
 layout(location = 11) flat out vec4 fragmentUvTransform;
+layout(location = 12) flat out float fragmentAlpha;
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProjection;
@@ -102,6 +104,7 @@ void main() {
         fragmentUv = inUv * instanceUvTransform.xy + instanceUvTransform.zw;
     }
     fragmentUvTransform = instanceUvTransform;
+    fragmentAlpha = float(instanceAlpha) / 65535.0;
     fragmentFogDistance = abs(clipPosition.w);
     fragmentWorldPosition = worldPosition.xyz;
     fragmentMaterial = instanceMaterial;
