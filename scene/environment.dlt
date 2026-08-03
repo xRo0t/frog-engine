@@ -7,6 +7,7 @@ imm FOG_MODE_NONE: i32 = 0
 imm FOG_MODE_LINEAR: i32 = 1
 imm FOG_MODE_EXPONENTIAL: i32 = 2
 imm FOG_MODE_EXPONENTIAL_SQUARED: i32 = 3
+imm FOG_MODE_ATMOSPHERIC: i32 = 4
 
 imm FOG_SHAPE_DEPTH: i32 = 0
 imm FOG_SHAPE_SPHERICAL: i32 = 1
@@ -461,6 +462,19 @@ attach Fog:
             distance = 16.0
         start_distance: f32 = distance * 0.72
         return Fog.linear(color, start_distance, distance)
+
+    # A cheap height-aware aerial-perspective profile. Unlike volumetric fog,
+    # this stays in the regular material pass and needs no ray marching or
+    # additional render targets. The renderer blends through the active sky
+    # gradient, so day-cycle horizon and night colors remain synchronized.
+    static fun atmospheric(color: Color, view_distance: f32, intensity: f32) -> Fog:
+        distance: f32 = view_distance
+        if distance < 16.0:
+            distance = 16.0
+        fog: Fog = Fog.linear(color, distance * 0.72, distance)
+        fog.mode = FOG_MODE_ATMOSPHERIC
+        fog.density = clamp(intensity, 0.0, 2.0)
+        return fog
 
     static fun exponential(color: Color, density: f32) -> Fog:
         fog: Fog = Fog.none()

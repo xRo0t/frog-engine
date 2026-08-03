@@ -703,7 +703,7 @@ void main() {
 
     float fogDistance = fogDistanceForFragment();
 
-    if (fogMode == 1) {
+    if (fogMode == 1 || fogMode == 4) {
         float fogRange = max(fogEnd - fogStart, 0.0001);
         fogFactor = clamp((fogDistance - fogStart) / fogRange, 0.0, 1.0);
     } else if (fogMode == 2) {
@@ -713,9 +713,41 @@ void main() {
         fogFactor = 1.0 - exp(-(scaledDistance * scaledDistance));
     }
 
+    vec3 resolvedFogColor = pushConstants.fogColor.rgb;
+    if (fogMode == 4) {
+        vec3 cameraToFragment = fragmentWorldPosition - cameraPosition;
+        float rayLength = max(fogDistance, 0.0001);
+        vec3 rayDirection = cameraToFragment / rayLength;
+        float intensity = fogDensity;
+
+        // Aerial perspective begins well before the final LOD fade, but is
+        // concentrated around the horizon. Looking upward remains clear while
+        // distant valleys retain a subtle layer of height haze.
+        float horizonWeight = 1.0 - smoothstep(0.055, 0.58, abs(rayDirection.y));
+        float aerialStart = max(fogStart * 0.24, 12.0);
+        float aerialEnd = max(fogStart * 0.92, aerialStart + 1.0);
+        float aerialDistance = smoothstep(aerialStart, aerialEnd, fogDistance);
+        float aerialHaze = horizonWeight * aerialDistance * intensity * 0.43;
+
+        float heightScale = max(fogEnd * 0.11, 8.0);
+        float belowCamera = clamp((cameraPosition.y - fragmentWorldPosition.y) / heightScale, 0.0, 1.0);
+        float heightDistance = smoothstep(max(fogStart * 0.30, 16.0), max(fogEnd * 0.78, 17.0), fogDistance);
+        float heightHaze = belowCamera * heightDistance * intensity * 0.20;
+
+        fogFactor = 1.0 - (1.0 - fogFactor)
+            * (1.0 - clamp(aerialHaze, 0.0, 0.82))
+            * (1.0 - clamp(heightHaze, 0.0, 0.42));
+
+        float skyUp = smoothstep(0.0, 0.72, max(rayDirection.y, 0.0));
+        float skyDown = smoothstep(0.0, 0.55, max(-rayDirection.y, 0.0));
+        vec3 skyFogColor = mix(pointLights.skyHorizon.rgb, pointLights.skyZenith.rgb, skyUp);
+        skyFogColor = mix(skyFogColor, pointLights.skyLower.rgb, skyDown);
+        resolvedFogColor = mix(pushConstants.fogColor.rgb, skyFogColor, 0.86);
+    }
+
     fogFactor = clamp(fogFactor, 0.0, 1.0);
     outColor = vec4(
-        mix(surfaceColor.rgb, pushConstants.fogColor.rgb, fogFactor),
+        mix(surfaceColor.rgb, resolvedFogColor, fogFactor),
         surfaceColor.a
     );
     outGeometry = vec4(geometryNormal * 0.5 + 0.5, geometryRoughness);
