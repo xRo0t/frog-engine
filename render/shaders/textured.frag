@@ -129,6 +129,16 @@ float worldSurfaceEffect() {
     return mod(hintCode, 2.0);
 }
 
+float hasWorldFarColor() {
+    if (hasWorldPixelSampling() < 0.5) {
+        return 0.0;
+    }
+    // World-pixel meshes reserve the exact 0.75 U fraction for distant
+    // color-only geometry. The atlas cell remains floor(U), while the far
+    // path can avoid every albedo/atlas sampling instruction.
+    return 1.0 - step(0.001, abs(fract(fragmentUv.x) - 0.75));
+}
+
 // World-pixel meshes may store inverse sky visibility in the unused fractional
 // V range [0.5, 0.99]. The normal atlas-center value 0.5 remains fully exposed,
 // preserving every existing mesh/material without another vertex attribute.
@@ -558,11 +568,19 @@ void main() {
     if (isDoubleSided() < 0.5 && !gl_FrontFacing) {
         discard;
     }
-    TextureCoordinates textureCoordinates = resolveTextureCoordinates(
-        fragmentUv,
-        vec2(textureSize(textureSampler, 0))
-    );
-    vec4 textureColor = textureGrad(textureSampler, textureCoordinates.uv, textureCoordinates.dx, textureCoordinates.dy);
+    float farColorSurface = hasWorldFarColor();
+    TextureCoordinates textureCoordinates;
+    textureCoordinates.uv = fragmentUv;
+    textureCoordinates.dx = vec2(0.0);
+    textureCoordinates.dy = vec2(0.0);
+    vec4 textureColor = vec4(1.0);
+    if (farColorSurface < 0.5) {
+        textureCoordinates = resolveTextureCoordinates(
+            fragmentUv,
+            vec2(textureSize(textureSampler, 0))
+        );
+        textureColor = textureGrad(textureSampler, textureCoordinates.uv, textureCoordinates.dx, textureCoordinates.dy);
+    }
     // Keep the descriptor-set path feature-identical to the bindless path.
     // Cutout foliage remains in the fast opaque/depth-writing pass.
     if (hasAlphaClip() > 0.5 && textureColor.a < 0.5) {
@@ -598,7 +616,7 @@ void main() {
             normal = -normal;
         }
 
-        if (hasNormalMap() > 0.5) {
+        if (farColorSurface < 0.5 && hasNormalMap() > 0.5) {
             vec2 sampledXY = textureGrad(normalSampler, textureCoordinates.uv, textureCoordinates.dx, textureCoordinates.dy).xy * 2.0 - 1.0;
             float sampledZ = sqrt(max(1.0 - dot(sampledXY, sampledXY), 0.0));
             vec3 sampledNormal = vec3(sampledXY, sampledZ);
@@ -608,7 +626,7 @@ void main() {
 
         float metallic = clamp(fragmentMaterial.x, 0.0, 1.0);
         float roughness = clamp(fragmentMaterial.y, 0.045, 1.0);
-        if (hasMetallicRoughnessMap() > 0.5) {
+        if (farColorSurface < 0.5 && hasMetallicRoughnessMap() > 0.5) {
             vec4 metallicRoughness = textureGrad(metallicRoughnessSampler, textureCoordinates.uv, textureCoordinates.dx, textureCoordinates.dy);
             metallic *= metallicRoughness.b;
             roughness = clamp(roughness * metallicRoughness.g, 0.045, 1.0);
@@ -616,7 +634,7 @@ void main() {
         geometryRoughness = roughness;
 
         float occlusion = 1.0;
-        if (hasOcclusionMap() > 0.5) {
+        if (farColorSurface < 0.5 && hasOcclusionMap() > 0.5) {
             occlusion = textureGrad(occlusionSampler, textureCoordinates.uv, textureCoordinates.dx, textureCoordinates.dy).r;
         }
 
@@ -689,7 +707,7 @@ void main() {
         surfaceColor.a = mix(surfaceColor.a, 0.86, fresnel * 0.55);
     }
     vec3 emissiveColor = emissive.rgb;
-    if (hasEmissiveMap() > 0.5) {
+    if (farColorSurface < 0.5 && hasEmissiveMap() > 0.5) {
         vec4 emissiveTexel = textureGrad(emissiveSampler, textureCoordinates.uv, textureCoordinates.dx, textureCoordinates.dy);
         emissiveColor *= emissiveTexel.rgb * emissiveTexel.a;
     }

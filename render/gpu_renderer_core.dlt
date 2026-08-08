@@ -566,6 +566,12 @@ struct GpuRendererCore:
     scratch_scissor:      i64 = 0
     scratch_sky_att:      i64 = 0
     scratch_sky_rect:     i64 = 0
+    # Dense sky-star batching. Projected entries are x/y/size/group (16 B),
+    # and VkClearRect entries are 24 B. Both are allocated once; the render
+    # loop never allocates or emits one Vulkan command per star.
+    scratch_star_projected: i64 = 0
+    scratch_star_rects:     i64 = 0
+    scratch_star_capacity:  i32 = 4096
     scratch_vp_matrix:    i64 = 0
     scratch_push_data:    i64 = 0
     scratch_camera_view:  i64 = 0
@@ -855,6 +861,8 @@ attach GpuRendererCore:
         self.scratch_scissor = Memory.malloc_zeroed(16)
         self.scratch_sky_att = Memory.malloc_zeroed(24)
         self.scratch_sky_rect = Memory.malloc_zeroed(24)
+        self.scratch_star_projected = Memory.malloc_zeroed((self.scratch_star_capacity as i64) * 16)
+        self.scratch_star_rects = Memory.malloc_zeroed((self.scratch_star_capacity as i64) * 24)
         self.scratch_vp_matrix = Memory.malloc_zeroed(64)
         self.scratch_push_data = Memory.malloc_zeroed(256)
         self.scratch_camera_view = Memory.malloc_zeroed(64)
@@ -4545,19 +4553,54 @@ attach GpuRendererCore:
             return
         if cam_view == 0 or cam_proj == 0:
             return
+        if self.scratch_star_projected == 0 or self.scratch_star_rects == 0:
+            return
         max_stars: i32 = sky.star_count
-        if max_stars > 180:
-            max_stars = 180
+        if max_stars > self.scratch_star_capacity:
+            max_stars = self.scratch_star_capacity
+        if max_stars <= 0:
+            return
+
+        # Project once. Natural all-sky randomness is mixed with a tilted
+        # Milky-Way band, so high counts do not reveal latitude rings or an
+        # even Fibonacci lattice.
+        projected_count: i32 = 0
         si: i32 = 0
         while si < max_stars:
+            field_kind: f32 = self._sky_star_hash(si + 1, 2)
             azimuth: f32 = self._sky_star_hash(si + 1, 3) * 6.28318530
-            world_y: f32 = self._sky_star_hash(si + 1, 11) * 2.0 - 1.0
-            radial_sq: f32 = 1.0 - world_y * world_y
-            if radial_sq < 0.0:
-                radial_sq = 0.0
-            radial: f32 = @sqrt(radial_sq)
-            world_x: f32 = @cos(azimuth) * radial
-            world_z: f32 = @sin(azimuth) * radial
+            world_x: f32 = 0.0
+            world_y: f32 = 0.0
+            world_z: f32 = 0.0
+            if field_kind < 0.46:
+                band_random: f32 = self._sky_star_hash(si + 1, 5) + self._sky_star_hash(si + 1, 7) + self._sky_star_hash(si + 1, 11) - 1.5
+                band_width: f32 = 0.23
+                if field_kind < 0.17:
+                    band_width = 0.085
+                band_latitude: f32 = band_random * band_width
+                band_cos: f32 = @cos(band_latitude)
+                raw_x: f32 = @cos(azimuth) * band_cos
+                raw_y: f32 = @sin(band_latitude)
+                raw_z: f32 = @sin(azimuth) * band_cos
+                tilt_x: f32 = 0.61
+                tilt_z: f32 = 0.29
+                cx: f32 = @cos(tilt_x)
+                sx: f32 = @sin(tilt_x)
+                cz: f32 = @cos(tilt_z)
+                sz: f32 = @sin(tilt_z)
+                tilted_y: f32 = raw_y * cx - raw_z * sx
+                tilted_z: f32 = raw_y * sx + raw_z * cx
+                world_x = raw_x * cz - tilted_y * sz
+                world_y = raw_x * sz + tilted_y * cz
+                world_z = tilted_z
+            else:
+                world_y = self._sky_star_hash(si + 1, 13) * 2.0 - 1.0
+                radial_sq: f32 = 1.0 - world_y * world_y
+                if radial_sq < 0.0:
+                    radial_sq = 0.0
+                radial: f32 = @sqrt(radial_sq)
+                world_x = @cos(azimuth) * radial
+                world_z = @sin(azimuth) * radial
 
             view_x: f32 = Memory.read_f32(cam_view) * world_x + Memory.read_f32(cam_view + 16) * world_y + Memory.read_f32(cam_view + 32) * world_z
             view_y: f32 = Memory.read_f32(cam_view + 4) * world_x + Memory.read_f32(cam_view + 20) * world_y + Memory.read_f32(cam_view + 36) * world_z
@@ -4572,13 +4615,74 @@ attach GpuRendererCore:
                             if ndc_y <= 1.0:
                                 sx: i32 = ((ndc_x * 0.5 + 0.5) * (width as f32)) as i32
                                 sy: i32 = ((ndc_y * 0.5 + 0.5) * (height as f32)) as i32
-                                size: i32 = 1
-                                if self._sky_star_hash(si + 1, 23) > 0.92:
-                                    size = 2
-                                base: Color = self._sky_world_color(sky, world_y)
-                                star: Color = self._sky_lerp_color(base, sky.star_color, sky.star_strength)
-                                self._sky_draw_clear_rect(cmd, att, rect, sx, sy, size, size, star)
+                                # Two render-target pixels remain stable after
+                                # Bitora's 2x render-scale resolve. Rare stars
+                                # are larger, but no star is sub-pixel geometry.
+                                size: i32 = 2
+                                size_hash: f32 = self._sky_star_hash(si + 1, 23)
+                                if size_hash > 0.955:
+                                    size = 3
+                                if size_hash > 0.992:
+                                    size = 4
+                                latitude_bin: i32 = (((world_y + 1.0) * 0.5) * 8.0) as i32
+                                if latitude_bin < 0:
+                                    latitude_bin = 0
+                                if latitude_bin > 7:
+                                    latitude_bin = 7
+                                temperature: f32 = self._sky_star_hash(si + 1, 29)
+                                temperature_group: i32 = 1
+                                if temperature < 0.075:
+                                    temperature_group = 0
+                                if temperature > 0.925:
+                                    temperature_group = 2
+                                group: i32 = latitude_bin * 3 + temperature_group
+                                projected: i64 = self.scratch_star_projected + (projected_count as i64) * 16
+                                Memory.write_i32(projected, sx)
+                                Memory.write_i32(projected + 4, sy)
+                                Memory.write_i32(projected + 8, size)
+                                Memory.write_i32(projected + 12, group)
+                                projected_count = projected_count + 1
             si = si + 1
+
+        # Stars of the same sky-latitude/temperature share one clear color and
+        # are submitted as one VkClearAttachments batch. 3200 stars therefore
+        # cost at most 24 commands instead of thousands of commands.
+        group_index: i32 = 0
+        while group_index < 24:
+            rect_count: i32 = 0
+            projected_index: i32 = 0
+            while projected_index < projected_count:
+                projected: i64 = self.scratch_star_projected + (projected_index as i64) * 16
+                if Memory.read_i32(projected + 12) == group_index:
+                    out_rect: i64 = self.scratch_star_rects + (rect_count as i64) * 24
+                    size: i32 = Memory.read_i32(projected + 8)
+                    Memory.write_i32(out_rect, Memory.read_i32(projected) - size / 2)
+                    Memory.write_i32(out_rect + 4, Memory.read_i32(projected + 4) - size / 2)
+                    Memory.write_i32(out_rect + 8, size)
+                    Memory.write_i32(out_rect + 12, size)
+                    Memory.write_i32(out_rect + 16, 0)
+                    Memory.write_i32(out_rect + 20, 1)
+                    rect_count = rect_count + 1
+                projected_index = projected_index + 1
+            if rect_count > 0:
+                latitude_bin: i32 = group_index / 3
+                temperature_group: i32 = group_index - latitude_bin * 3
+                representative_y: f32 = 0.0 - 0.875 + (latitude_bin as f32) * 0.25
+                base: Color = self._sky_world_color(sky, representative_y)
+                target: Color = sky.star_color
+                if temperature_group == 0:
+                    target = Color.rgb(clamp(target.r * 1.10, 0.0, 1.0), target.g * 0.82, target.b * 0.64)
+                elif temperature_group == 2:
+                    target = Color.rgb(target.r * 0.70, target.g * 0.86, clamp(target.b * 1.08, 0.0, 1.0))
+                star: Color = self._sky_lerp_color(base, target, sky.star_strength)
+                Memory.write_i32(att, 1)
+                Memory.write_i32(att + 4, 0)
+                Memory.write_f32(att + 8, star.r)
+                Memory.write_f32(att + 12, star.g)
+                Memory.write_f32(att + 16, star.b)
+                Memory.write_f32(att + 20, 1.0)
+                vkCmdClearAttachments(cmd, 1, att, rect_count, self.scratch_star_rects)
+            group_index = group_index + 1
 
     fun _sky_draw_circle(self, cmd: i64, att: i64, rect: i64, width: i32, height: i32, center_x: i32, center_y: i32, radius: i32, color: Color):
         if radius <= 0:
@@ -6603,6 +6707,10 @@ attach GpuRendererCore:
             Memory.free(self.scratch_sky_att)
         if self.scratch_sky_rect != 0:
             Memory.free(self.scratch_sky_rect)
+        if self.scratch_star_projected != 0:
+            Memory.free(self.scratch_star_projected)
+        if self.scratch_star_rects != 0:
+            Memory.free(self.scratch_star_rects)
         if self.scratch_vp_matrix != 0:
             Memory.free(self.scratch_vp_matrix)
         if self.scratch_push_data != 0:
