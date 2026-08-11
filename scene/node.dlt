@@ -48,6 +48,13 @@ struct Node:
     near_z: f32 = 0.1
     far_z: f32 = 1000.0
     current: i32 = 0
+    # Euler remains the default API. Quaternion mode is opt-in for true local
+    # six-degree-of-freedom cameras where yaw/pitch must follow camera roll.
+    orientation_mode: i32 = 0
+    orientation_x: f32 = 0.0
+    orientation_y: f32 = 0.0
+    orientation_z: f32 = 0.0
+    orientation_w: f32 = 1.0
 
 fun node_store_create(count: i32) -> i64:
     if count <= 0:
@@ -326,6 +333,18 @@ attach Camera3D:
         self.rot_x = x
         self.rot_y = y
         self.rot_z = z
+        self.orientation_mode = 0
+        return self
+
+    # Set an unrestricted camera orientation. Renderer view, shadow focus and
+    # temporal culling all consume this same normalized orientation.
+    fun set_orientation(self, orientation: Quat) -> Camera3D:
+        q: Quat = orientation.normalize()
+        self.orientation_x = q.x
+        self.orientation_y = q.y
+        self.orientation_z = q.z
+        self.orientation_w = q.w
+        self.orientation_mode = 1
         return self
 
     fun set_fov(self, fov: f32) -> Camera3D:
@@ -454,4 +473,9 @@ fun camera3d_create(name: str) -> Camera3D:
     node.near_z = 0.1
     node.far_z = 1000.0
     node.current = 0
+    node.orientation_mode = 0
+    node.orientation_x = 0.0
+    node.orientation_y = 0.0
+    node.orientation_z = 0.0
+    node.orientation_w = 1.0
     return node

@@ -589,8 +589,12 @@ struct GpuRendererCore:
     gpu_hzb_prev_x: f32 = 0.0
     gpu_hzb_prev_y: f32 = 0.0
     gpu_hzb_prev_z: f32 = 0.0
-    gpu_hzb_prev_pitch: f32 = 0.0
-    gpu_hzb_prev_yaw: f32 = 0.0
+    gpu_hzb_prev_forward_x: f32 = 0.0
+    gpu_hzb_prev_forward_y: f32 = 0.0
+    gpu_hzb_prev_forward_z: f32 = 0.0 - 1.0
+    gpu_hzb_prev_up_x: f32 = 0.0
+    gpu_hzb_prev_up_y: f32 = 1.0
+    gpu_hzb_prev_up_z: f32 = 0.0
     gpu_cull_verify_enabled: i32 = 0   # debug: print GPU vs CPU visible counts
     # Phase 3 step 2: actually DRAW from the GPU-culled output (indirect).
     # Separate flag so verification (above) and drawing can be toggled apart.
@@ -867,7 +871,9 @@ attach GpuRendererCore:
         self.scratch_push_data = Memory.malloc_zeroed(256)
         self.scratch_camera_view = Memory.malloc_zeroed(64)
         self.scratch_camera_proj = Memory.malloc_zeroed(64)
-        self.render_state = Memory.malloc_zeroed(104)
+        # 0..99 retain the original render state. 100..115 hold the complete
+        # camera basis needed by quaternion/rolled temporal culling.
+        self.render_state = Memory.malloc_zeroed(116)
         Memory.write_i64(self.scratch_off_arr, 0)
         Memory.write_i64(self.scratch_inst_off_arr, 0)
         self.instance_culling_enabled = 0
@@ -2126,8 +2132,66 @@ attach GpuRendererCore:
             self.point_light_count = FROG_POINT_LIGHT_SLOTS
 
     fun set_shadow_camera(self, x: f32, y: f32, z: f32, pitch: f32, yaw: f32):
+        pitch_rad: f32 = pitch * 3.14159265 / 180.0
+        yaw_rad: f32 = yaw * 3.14159265 / 180.0
+        cos_pitch: f32 = @cos(pitch_rad)
+        sin_pitch: f32 = @sin(pitch_rad)
+        sin_yaw: f32 = @sin(yaw_rad)
+        cos_yaw: f32 = @cos(yaw_rad)
+        self.set_shadow_camera_basis(
+            x,
+            y,
+            z,
+            (0.0 - sin_yaw) * cos_pitch,
+            sin_pitch,
+            (0.0 - cos_yaw) * cos_pitch,
+            sin_yaw * sin_pitch,
+            cos_pitch,
+            cos_yaw * sin_pitch
+        )
+
+    # Direction-only compatibility API. A stable up vector is sufficient for
+    # callers without roll; full camera paths use set_shadow_camera_basis.
+    fun set_shadow_camera_forward(self, x: f32, y: f32, z: f32, forward_x: f32, forward_y: f32, forward_z: f32):
+        up_x: f32 = 0.0
+        up_y: f32 = 1.0
+        up_z: f32 = 0.0
+        if forward_y > 0.99 or forward_y < -0.99:
+            up_x = 1.0
+            up_y = 0.0
+        self.set_shadow_camera_basis(x, y, z, forward_x, forward_y, forward_z, up_x, up_y, up_z)
+
+    # Store the complete camera basis so shadows and temporal occlusion follow
+    # quaternion cameras without lossy Euler reconstruction or gimbal lock.
+    fun set_shadow_camera_basis(self, x: f32, y: f32, z: f32, forward_x: f32, forward_y: f32, forward_z: f32, up_x: f32, up_y: f32, up_z: f32):
         if self.render_state == 0:
             return
+        normalized_forward_x: f32 = forward_x
+        normalized_forward_y: f32 = forward_y
+        normalized_forward_z: f32 = forward_z
+        forward_length: f32 = @sqrt(forward_x * forward_x + forward_y * forward_y + forward_z * forward_z)
+        if forward_length < 0.0001:
+            normalized_forward_x = 0.0
+            normalized_forward_y = 0.0
+            normalized_forward_z = 0.0 - 1.0
+        else:
+            inverse_forward_length: f32 = 1.0 / forward_length
+            normalized_forward_x = forward_x * inverse_forward_length
+            normalized_forward_y = forward_y * inverse_forward_length
+            normalized_forward_z = forward_z * inverse_forward_length
+        normalized_up_x: f32 = up_x
+        normalized_up_y: f32 = up_y
+        normalized_up_z: f32 = up_z
+        up_length: f32 = @sqrt(up_x * up_x + up_y * up_y + up_z * up_z)
+        if up_length < 0.0001:
+            normalized_up_x = 0.0
+            normalized_up_y = 1.0
+            normalized_up_z = 0.0
+        else:
+            inverse_up_length: f32 = 1.0 / up_length
+            normalized_up_x = up_x * inverse_up_length
+            normalized_up_y = up_y * inverse_up_length
+            normalized_up_z = up_z * inverse_up_length
         now: f64 = engine_time_seconds()
         motion_energy: f32 = Memory.read_f32(self.render_state + 84)
         if Memory.read_i32(self.render_state + 96) != 0:
@@ -2155,8 +2219,12 @@ attach GpuRendererCore:
         Memory.write_f32(self.render_state + 64, x)
         Memory.write_f32(self.render_state + 68, y)
         Memory.write_f32(self.render_state + 72, z)
-        Memory.write_f32(self.render_state + 76, pitch)
-        Memory.write_f32(self.render_state + 80, yaw)
+        Memory.write_f32(self.render_state + 76, normalized_forward_x)
+        Memory.write_f32(self.render_state + 80, normalized_forward_y)
+        Memory.write_f32(self.render_state + 100, normalized_forward_z)
+        Memory.write_f32(self.render_state + 104, normalized_up_x)
+        Memory.write_f32(self.render_state + 108, normalized_up_y)
+        Memory.write_f32(self.render_state + 112, normalized_up_z)
 
     fun set_render_stats(self, enabled: i32):
         if enabled == 0:
@@ -3371,12 +3439,9 @@ attach GpuRendererCore:
         if distance > 1000.0:
             distance = 1000.0
 
-        pitch: f32 = Memory.read_f32(self.render_state + 76) * 3.14159265 / 180.0
-        yaw: f32 = Memory.read_f32(self.render_state + 80) * 3.14159265 / 180.0
-        cp: f32 = @cos(pitch)
-        forward_x: f32 = (0.0 - @sin(yaw)) * cp
-        forward_y: f32 = @sin(pitch)
-        forward_z: f32 = (0.0 - @cos(yaw)) * cp
+        forward_x: f32 = Memory.read_f32(self.render_state + 76)
+        forward_y: f32 = Memory.read_f32(self.render_state + 80)
+        forward_z: f32 = Memory.read_f32(self.render_state + 100)
         cascade_count: i32 = light.shadow.cascades
         if cascade_count < 1:
             cascade_count = 1
@@ -5725,8 +5790,12 @@ attach GpuRendererCore:
         hzb_cam_x: f32 = Memory.read_f32(self.render_state + 64)
         hzb_cam_y: f32 = Memory.read_f32(self.render_state + 68)
         hzb_cam_z: f32 = Memory.read_f32(self.render_state + 72)
-        hzb_cam_pitch: f32 = Memory.read_f32(self.render_state + 76)
-        hzb_cam_yaw: f32 = Memory.read_f32(self.render_state + 80)
+        hzb_forward_x: f32 = Memory.read_f32(self.render_state + 76)
+        hzb_forward_y: f32 = Memory.read_f32(self.render_state + 80)
+        hzb_forward_z: f32 = Memory.read_f32(self.render_state + 100)
+        hzb_up_x: f32 = Memory.read_f32(self.render_state + 104)
+        hzb_up_y: f32 = Memory.read_f32(self.render_state + 108)
+        hzb_up_z: f32 = Memory.read_f32(self.render_state + 112)
         self.gpu_hzb_use_frame = 0
         if self.gpu_hzb_ptr != 0 and self.gpu_hzb_camera_valid == 1:
             hzb_history: GpuHzb = self.gpu_hzb_ptr as GpuHzb
@@ -5735,19 +5804,21 @@ attach GpuRendererCore:
                 hzb_dy: f32 = hzb_cam_y - self.gpu_hzb_prev_y
                 hzb_dz: f32 = hzb_cam_z - self.gpu_hzb_prev_z
                 hzb_move2: f32 = hzb_dx * hzb_dx + hzb_dy * hzb_dy + hzb_dz * hzb_dz
-                hzb_pitch_delta: f32 = hzb_cam_pitch - self.gpu_hzb_prev_pitch
-                if hzb_pitch_delta < 0.0:
-                    hzb_pitch_delta = 0.0 - hzb_pitch_delta
-                hzb_yaw_delta: f32 = hzb_cam_yaw - self.gpu_hzb_prev_yaw
-                if hzb_yaw_delta < 0.0:
-                    hzb_yaw_delta = 0.0 - hzb_yaw_delta
-                if hzb_yaw_delta > 180.0:
-                    hzb_yaw_delta = 360.0 - hzb_yaw_delta
+                hzb_forward_dx: f32 = hzb_forward_x - self.gpu_hzb_prev_forward_x
+                hzb_forward_dy: f32 = hzb_forward_y - self.gpu_hzb_prev_forward_y
+                hzb_forward_dz: f32 = hzb_forward_z - self.gpu_hzb_prev_forward_z
+                hzb_forward_delta2: f32 = hzb_forward_dx * hzb_forward_dx + hzb_forward_dy * hzb_forward_dy + hzb_forward_dz * hzb_forward_dz
+                hzb_up_dx: f32 = hzb_up_x - self.gpu_hzb_prev_up_x
+                hzb_up_dy: f32 = hzb_up_y - self.gpu_hzb_prev_up_y
+                hzb_up_dz: f32 = hzb_up_z - self.gpu_hzb_prev_up_z
+                hzb_up_delta2: f32 = hzb_up_dx * hzb_up_dx + hzb_up_dy * hzb_up_dy + hzb_up_dz * hzb_up_dz
                 # Camera cuts/fast turns disable temporal occlusion for one
                 # frame; ordinary motion remains GPU-occluded continuously.
                 if hzb_move2 <= 0.25:
-                    if hzb_pitch_delta <= 2.0 and hzb_yaw_delta <= 2.0:
-                        self.gpu_hzb_use_frame = 1
+                    # Squared chord length for a two-degree direction change.
+                    if hzb_forward_delta2 <= 0.00122:
+                        if hzb_up_delta2 <= 0.00122:
+                            self.gpu_hzb_use_frame = 1
         shadow_global_mapped_ptrs: i64 = Memory.read_ptr(self.render_state + 56)
         shadow_global_buffers: i64 = Memory.read_ptr(self.render_state + 40)
         if shadow_global_mapped_ptrs == 0 or shadow_global_buffers == 0:
@@ -6354,8 +6425,12 @@ attach GpuRendererCore:
                     self.gpu_hzb_prev_x = hzb_cam_x
                     self.gpu_hzb_prev_y = hzb_cam_y
                     self.gpu_hzb_prev_z = hzb_cam_z
-                    self.gpu_hzb_prev_pitch = hzb_cam_pitch
-                    self.gpu_hzb_prev_yaw = hzb_cam_yaw
+                    self.gpu_hzb_prev_forward_x = hzb_forward_x
+                    self.gpu_hzb_prev_forward_y = hzb_forward_y
+                    self.gpu_hzb_prev_forward_z = hzb_forward_z
+                    self.gpu_hzb_prev_up_x = hzb_up_x
+                    self.gpu_hzb_prev_up_y = hzb_up_y
+                    self.gpu_hzb_prev_up_z = hzb_up_z
                     self.gpu_hzb_camera_valid = 1
                 else:
                     self.gpu_hzb_camera_valid = 0

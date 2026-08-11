@@ -64,3 +64,45 @@ attach Quat:
             return Quat.identity()
         inv: f32 = 1.0 / l
         return Quat.make(self.x * inv, self.y * inv, self.z * inv, self.w * inv)
+
+    # Rotate a direction from local space into world space. This is the
+    # allocation-free q * v * conjugate(q) form for a unit quaternion.
+    fun rotate_vec3(self, v: Vec3) -> Vec3:
+        q: Quat = self.normalize()
+        tx: f32 = 2.0 * (q.y * v.z - q.z * v.y)
+        ty: f32 = 2.0 * (q.z * v.x - q.x * v.z)
+        tz: f32 = 2.0 * (q.x * v.y - q.y * v.x)
+        return Vec3.make(
+            v.x + q.w * tx + q.y * tz - q.z * ty,
+            v.y + q.w * ty + q.z * tx - q.x * tz,
+            v.z + q.w * tz + q.x * ty - q.y * tx
+        )
+
+    # Build a column-major rigid world transform from this orientation.
+    # Keeping this next to Quat makes quaternion camera/viewmodel transforms
+    # use exactly one convention throughout Frog.
+    fun to_mat4(self, tx: f32, ty: f32, tz: f32) -> Mat4:
+        q: Quat = self.normalize()
+        xx: f32 = q.x * q.x
+        yy: f32 = q.y * q.y
+        zz: f32 = q.z * q.z
+        xy: f32 = q.x * q.y
+        xz: f32 = q.x * q.z
+        yz: f32 = q.y * q.z
+        xw: f32 = q.x * q.w
+        yw: f32 = q.y * q.w
+        zw: f32 = q.z * q.w
+        m: Mat4 = Mat4()
+        m.m0 = 1.0 - 2.0 * (yy + zz)
+        m.m1 = 2.0 * (xy + zw)
+        m.m2 = 2.0 * (xz - yw)
+        m.m4 = 2.0 * (xy - zw)
+        m.m5 = 1.0 - 2.0 * (xx + zz)
+        m.m6 = 2.0 * (yz + xw)
+        m.m8 = 2.0 * (xz + yw)
+        m.m9 = 2.0 * (yz - xw)
+        m.m10 = 1.0 - 2.0 * (xx + yy)
+        m.m12 = tx
+        m.m13 = ty
+        m.m14 = tz
+        return m

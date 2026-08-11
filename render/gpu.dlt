@@ -48,24 +48,31 @@ fun gpu_set_model_matrix_raw(ren: GpuRendererCore, mesh_id: i32, src: i64):
     else:
         ren._mark_cull_dirty()
 
-fun gpu_camera_view_into(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32, m: i64):
+fun gpu_camera_view_roll_into(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32, roll: f32, m: i64):
     if m == 0:
         return
     pi: f32 = 3.14159265
     rad_x: f32 = pitch * pi / 180.0
     rad_y: f32 = yaw * pi / 180.0
+    rad_z: f32 = roll * pi / 180.0
     cx: f32 = @cos(rad_x)
     sx: f32 = @sin(rad_x)
     cy: f32 = @cos(rad_y)
     sy: f32 = @sin(rad_y)
-    r00: f32 = cy
-    r01: f32 = sx * sy
+    cz: f32 = @cos(rad_z)
+    sz: f32 = @sin(rad_z)
+    # Camera world rotation follows Mat4.trs: R = Ry * Rx * Rz.  The view
+    # matrix stores its inverse (the transposed orthonormal rotation).  Roll
+    # rotates the local right/up axes around the unchanged forward axis, which
+    # is required for unrestricted six-degree-of-freedom cameras.
+    r00: f32 = cy * cz + sy * sx * sz
+    r01: f32 = 0.0 - cy * sz + sy * sx * cz
     r02: f32 = cx * sy
-    r10: f32 = 0.0
-    r11: f32 = cx
+    r10: f32 = cx * sz
+    r11: f32 = cx * cz
     r12: f32 = 0.0 - sx
-    r20: f32 = 0.0 - sy
-    r21: f32 = sx * cy
+    r20: f32 = 0.0 - sy * cz + cy * sx * sz
+    r21: f32 = sy * sz + cy * sx * cz
     r22: f32 = cx * cy
     tx: f32 = 0.0 - (r00 * cam_x + r10 * cam_y + r20 * cam_z)
     ty: f32 = 0.0 - (r01 * cam_x + r11 * cam_y + r21 * cam_z)
@@ -88,12 +95,84 @@ fun gpu_camera_view_into(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f3
     Memory.write_f32(m + 56, tz)
     Memory.write_f32(m + 60, 1.0)
 
+# Backward-compatible pitch/yaw camera path.
+fun gpu_camera_view_into(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32, m: i64):
+    gpu_camera_view_roll_into(cam_x, cam_y, cam_z, pitch, yaw, 0.0, m)
+
 fun gpu_camera_view(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32) -> i64:
     m: i64 = Memory.malloc_zeroed(64)
     if m == 0:
         return 0
     gpu_camera_view_into(cam_x, cam_y, cam_z, pitch, yaw, m)
     return m
+
+fun gpu_camera_view_roll(cam_x: f32, cam_y: f32, cam_z: f32, pitch: f32, yaw: f32, roll: f32) -> i64:
+    m: i64 = Memory.malloc_zeroed(64)
+    if m == 0:
+        return 0
+    gpu_camera_view_roll_into(cam_x, cam_y, cam_z, pitch, yaw, roll, m)
+    return m
+
+# Quaternion view path for unrestricted local-axis camera rotation. The
+# quaternion describes camera-local -> world; the view stores its inverse.
+fun gpu_camera_view_quat_into(cam_x: f32, cam_y: f32, cam_z: f32, qx: f32, qy: f32, qz: f32, qw: f32, m: i64):
+    if m == 0:
+        return
+    normalized_qx: f32 = qx
+    normalized_qy: f32 = qy
+    normalized_qz: f32 = qz
+    normalized_qw: f32 = qw
+    length: f32 = @sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if length < 0.0001:
+        normalized_qx = 0.0
+        normalized_qy = 0.0
+        normalized_qz = 0.0
+        normalized_qw = 1.0
+    else:
+        inverse_length: f32 = 1.0 / length
+        normalized_qx = qx * inverse_length
+        normalized_qy = qy * inverse_length
+        normalized_qz = qz * inverse_length
+        normalized_qw = qw * inverse_length
+    xx: f32 = normalized_qx * normalized_qx
+    yy: f32 = normalized_qy * normalized_qy
+    zz: f32 = normalized_qz * normalized_qz
+    xy: f32 = normalized_qx * normalized_qy
+    xz: f32 = normalized_qx * normalized_qz
+    yz: f32 = normalized_qy * normalized_qz
+    xw: f32 = normalized_qx * normalized_qw
+    yw: f32 = normalized_qy * normalized_qw
+    zw: f32 = normalized_qz * normalized_qw
+    r0: f32 = 1.0 - 2.0 * (yy + zz)
+    r1: f32 = 2.0 * (xy + zw)
+    r2: f32 = 2.0 * (xz - yw)
+    r4: f32 = 2.0 * (xy - zw)
+    r5: f32 = 1.0 - 2.0 * (xx + zz)
+    r6: f32 = 2.0 * (yz + xw)
+    r8: f32 = 2.0 * (xz + yw)
+    r9: f32 = 2.0 * (yz - xw)
+    r10: f32 = 1.0 - 2.0 * (xx + yy)
+    tx: f32 = 0.0 - (r0 * cam_x + r1 * cam_y + r2 * cam_z)
+    ty: f32 = 0.0 - (r4 * cam_x + r5 * cam_y + r6 * cam_z)
+    tz: f32 = 0.0 - (r8 * cam_x + r9 * cam_y + r10 * cam_z)
+    Memory.set(m, 0, 64)
+    Memory.write_f32(m + 0, r0)
+    Memory.write_f32(m + 4, r4)
+    Memory.write_f32(m + 8, r8)
+    Memory.write_f32(m + 16, r1)
+    Memory.write_f32(m + 20, r5)
+    Memory.write_f32(m + 24, r9)
+    Memory.write_f32(m + 32, r2)
+    Memory.write_f32(m + 36, r6)
+    Memory.write_f32(m + 40, r10)
+    Memory.write_f32(m + 48, tx)
+    Memory.write_f32(m + 52, ty)
+    Memory.write_f32(m + 56, tz)
+    Memory.write_f32(m + 60, 1.0)
+
+fun gpu_camera_quat_forward(qx: f32, qy: f32, qz: f32, qw: f32) -> Vec3:
+    q: Quat = Quat.make(qx, qy, qz, qw).normalize()
+    return q.rotate_vec3(Vec3.forward())
 
 fun gpu_camera_proj_into(fov: f32, aspect: f32, m: i64):
     gpu_camera_proj_into_range(fov, aspect, 0.1, 1000.0, m)
@@ -501,6 +580,12 @@ attach Renderer:
     fun set_shadow_camera(self, x: f32, y: f32, z: f32, pitch: f32, yaw: f32):
         self.core.set_shadow_camera(x, y, z, pitch, yaw)
 
+    fun set_shadow_camera_forward(self, x: f32, y: f32, z: f32, forward_x: f32, forward_y: f32, forward_z: f32):
+        self.core.set_shadow_camera_forward(x, y, z, forward_x, forward_y, forward_z)
+
+    fun set_shadow_camera_basis(self, x: f32, y: f32, z: f32, forward_x: f32, forward_y: f32, forward_z: f32, up_x: f32, up_y: f32, up_z: f32):
+        self.core.set_shadow_camera_basis(x, y, z, forward_x, forward_y, forward_z, up_x, up_y, up_z)
+
     fun render_camera3d_frame(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32):
         self.core.render_camera3d_frame(render_pass, swapchain, ctx, camera, width, height)
 
@@ -679,9 +764,19 @@ attach GpuRendererCore:
     fun render_camera3d_frame_with_environment(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32, env: Environment):
         view: i64 = self.scratch_camera_view
         proj: i64 = self.scratch_camera_proj
-        gpu_camera_view_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y, view)
+        if camera.orientation_mode != 0:
+            gpu_camera_view_quat_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.orientation_x, camera.orientation_y, camera.orientation_z, camera.orientation_w, view)
+            forward: Vec3 = gpu_camera_quat_forward(camera.orientation_x, camera.orientation_y, camera.orientation_z, camera.orientation_w)
+            orientation: Quat = Quat.make(camera.orientation_x, camera.orientation_y, camera.orientation_z, camera.orientation_w).normalize()
+            up: Vec3 = orientation.rotate_vec3(Vec3.up())
+            self.set_shadow_camera_basis(camera.pos_x, camera.pos_y, camera.pos_z, forward.x, forward.y, forward.z, up.x, up.y, up.z)
+        else:
+            gpu_camera_view_roll_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y, camera.rot_z, view)
+            orientation: Quat = Quat.from_euler_deg(camera.rot_y, camera.rot_x, camera.rot_z).normalize()
+            forward: Vec3 = orientation.rotate_vec3(Vec3.forward())
+            up: Vec3 = orientation.rotate_vec3(Vec3.up())
+            self.set_shadow_camera_basis(camera.pos_x, camera.pos_y, camera.pos_z, forward.x, forward.y, forward.z, up.x, up.y, up.z)
         gpu_camera_proj_into_range(camera.fov, (width as f32) / (height as f32), camera.near_z, camera.far_z, proj)
-        self.set_shadow_camera(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y)
         self.render_frame_with_environment(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height, env)
 
     fun render_camera3d_frame_scaled(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32, render_width: i32, render_height: i32):
@@ -690,7 +785,17 @@ attach GpuRendererCore:
     fun render_camera3d_frame_scaled_with_environment(self, render_pass: RenderPass, swapchain: Swapchain, ctx: VulkanContext, camera: Camera3D, width: i32, height: i32, render_width: i32, render_height: i32, env: Environment):
         view: i64 = self.scratch_camera_view
         proj: i64 = self.scratch_camera_proj
-        gpu_camera_view_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y, view)
+        if camera.orientation_mode != 0:
+            gpu_camera_view_quat_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.orientation_x, camera.orientation_y, camera.orientation_z, camera.orientation_w, view)
+            forward: Vec3 = gpu_camera_quat_forward(camera.orientation_x, camera.orientation_y, camera.orientation_z, camera.orientation_w)
+            orientation: Quat = Quat.make(camera.orientation_x, camera.orientation_y, camera.orientation_z, camera.orientation_w).normalize()
+            up: Vec3 = orientation.rotate_vec3(Vec3.up())
+            self.set_shadow_camera_basis(camera.pos_x, camera.pos_y, camera.pos_z, forward.x, forward.y, forward.z, up.x, up.y, up.z)
+        else:
+            gpu_camera_view_roll_into(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y, camera.rot_z, view)
+            orientation: Quat = Quat.from_euler_deg(camera.rot_y, camera.rot_x, camera.rot_z).normalize()
+            forward: Vec3 = orientation.rotate_vec3(Vec3.forward())
+            up: Vec3 = orientation.rotate_vec3(Vec3.up())
+            self.set_shadow_camera_basis(camera.pos_x, camera.pos_y, camera.pos_z, forward.x, forward.y, forward.z, up.x, up.y, up.z)
         gpu_camera_proj_into_range(camera.fov, (render_width as f32) / (render_height as f32), camera.near_z, camera.far_z, proj)
-        self.set_shadow_camera(camera.pos_x, camera.pos_y, camera.pos_z, camera.rot_x, camera.rot_y)
         self.render_frame_scaled_with_environment(render_pass, swapchain, ctx.vk_device, ctx.vk_graphics_queue, ctx.vk_present_queue, view, proj, width, height, render_width, render_height, env)
