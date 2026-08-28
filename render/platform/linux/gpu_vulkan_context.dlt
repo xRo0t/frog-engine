@@ -4,8 +4,6 @@
 # Adapted from qubic/core/window.dlt
 ##############################
 
-import sys.linux.vulkan_surface
-
 # GPU capability tier — detected once at startup (Requirement 5). Mirrors
 # the Windows context. On Linux the detection is currently minimal (the
 # Linux renderer is largely a facade); fields default to 0 so every
@@ -123,7 +121,7 @@ attach VulkanContext:
     fun init_with_gpu_preference(self, window_handle: i64, gpu_preference: i32) -> i32:
         # Step 1: Required Vulkan extensions (replaces glfwGetRequiredInstanceExtensions)
         ext1: str = "VK_KHR_surface"
-        ext2: str = "VK_KHR_xlib_surface"
+        ext2: str = Window.get_required_extension_2()
         ext_count: i32 = 2
         extensions: i64 = Memory.malloc_zeroed(16)
         if extensions == 0:
@@ -172,35 +170,24 @@ attach VulkanContext:
             return 0
         print("  VkInstance created")
 
-        # Step 4: Create surface via native Xlib. Device suitability depends
-        # on present support, so the surface must exist before GPU selection.
-        surface_ptr: i64 = Memory.malloc_zeroed(8)
-        if surface_ptr == 0:
-            return 0
-        surf_ci: i64 = Memory.malloc_zeroed(40)
-        if surf_ci == 0:
-            Memory.free(surface_ptr)
-            return 0
-        display: i64 = Window.hinstance()
-        if display == 0:
-            print("  X11 display is not available")
-            Memory.free(surf_ci)
-            Memory.free(surface_ptr)
-            return 0
-        Memory.write_i32(surf_ci, VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR)
-        Memory.write_ptr(surf_ci + 8, 0)
-        Memory.write_i32(surf_ci + 16, 0)
-        Memory.write_ptr(surf_ci + 24, display)
-        Memory.write_ptr(surf_ci + 32, window_handle)
-        surf_result: i32 = vkCreateXlibSurfaceKHR(self.vk_instance, surf_ci, 0, surface_ptr)
-        Memory.free(surf_ci)
-        if surf_result != 0:
-            print("  vkCreateXlibSurfaceKHR failed")
-            Memory.free(surface_ptr)
+        # Step 4: Create the surface through the selected window backend.
+        # Device suitability depends on present support, so the surface must
+        # exist before GPU selection.
+        native_window: Window = Window(
+            handle=Window.handle(),
+            hinstance=Window.hinstance(),
+            width=Window.width(),
+            height=Window.height(),
+            should_close_flag=0,
+            is_resized=0,
+            is_focused=Window.focused(),
+            vulkan_surface=0
+        )
+        self.vk_surface = native_window.create_vulkan_surface(self.vk_instance)
+        if self.vk_surface == 0:
+            print("  Native Vulkan surface creation failed")
             return 0
         print("  Surface created")
-        self.vk_surface = Memory.read_ptr(surface_ptr)
-        Memory.free(surface_ptr)
 
         # Step 5: Pick physical device and queue families.
         dev_count_ptr: i64 = Memory.malloc_zeroed(4)
