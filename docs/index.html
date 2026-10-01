@@ -1111,6 +1111,9 @@ camera.add_child(raycast)
         <tr><td><code>set_zenith(color)</code></td><td>Sets the top sky color.</td></tr>
         <tr><td><code>set_horizon(color)</code></td><td>Sets the middle horizon color.</td></tr>
         <tr><td><code>set_lower(color)</code></td><td>Sets the lower sky color.</td></tr>
+        <tr><td><code>set_up_direction(x, y, z)</code></td><td>Overrides the local zenith used by the gradient sky and local sky effects. The vector is normalized; a zero vector clears the override. Stars and explicit celestial objects remain in world space.</td></tr>
+        <tr><td><code>up_direction()</code></td><td>Returns the active normalized sky-up vector, or world +Y when no override is active.</td></tr>
+        <tr><td><code>clear_up_direction()</code></td><td>Clears the override and restores world +Y as the sky-up direction.</td></tr>
         <tr><td><code>add_object(object)</code></td><td>Adds a visible sky object. The first two circle/quad objects map to the optimized sky-body renderer; stars are drawn as one procedural field.</td></tr>
         <tr><td><code>clear_objects()</code></td><td>Clears all explicit sky objects.</td></tr>
         <tr><td><code>set_stars(strength, count)</code></td><td>Legacy shortcut for stars. Prefer <code>SkyObject</code> with <code>SkyShape.stars()</code>.</td></tr>

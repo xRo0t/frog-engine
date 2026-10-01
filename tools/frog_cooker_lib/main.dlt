@@ -85,10 +85,10 @@ fun cook_abs_i64(value: i64) -> i64:
 fun cook_align4(value: i64) -> i64:
     return (value + 3) & (0 - 4)
 
-fun cook_json_skip_ws(source: str, position: i64, limit: i64) -> i64:
+fun cook_json_skip_ws(src: i64, position: i64, limit: i64) -> i64:
     p: i64 = position
     while p < limit:
-        ch: i32 = Memory.read_i8((source as i64) + p) as i32
+        ch: i32 = Memory.read_i8(src + p) as i32
         if ch == 32 or ch == 9 or ch == 10 or ch == 13:
             p = p + 1
         else:
@@ -96,18 +96,18 @@ fun cook_json_skip_ws(source: str, position: i64, limit: i64) -> i64:
     return p
 
 # Returns the first byte after one already-validated JSON value.
-fun cook_json_value_end(source: str, position: i64, limit: i64) -> i64:
-    start: i64 = cook_json_skip_ws(source, position, limit)
+fun cook_json_value_end(src: i64, position: i64, limit: i64) -> i64:
+    start: i64 = cook_json_skip_ws(src, position, limit)
     if start >= limit:
         return start
-    first: i32 = Memory.read_i8((source as i64) + start) as i32
+    first: i32 = Memory.read_i8(src + start) as i32
     if first == 123 or first == 91:
         depth: i32 = 0
         in_string: i32 = 0
         escaped: i32 = 0
         p: i64 = start
         while p < limit:
-            ch: i32 = Memory.read_i8((source as i64) + p) as i32
+            ch: i32 = Memory.read_i8(src + p) as i32
             if in_string == 1:
                 if escaped == 1:
                     escaped = 0
@@ -130,7 +130,7 @@ fun cook_json_value_end(source: str, position: i64, limit: i64) -> i64:
         p: i64 = start + 1
         escaped: i32 = 0
         while p < limit:
-            ch: i32 = Memory.read_i8((source as i64) + p) as i32
+            ch: i32 = Memory.read_i8(src + p) as i32
             if escaped == 1:
                 escaped = 0
             elif ch == 92:
@@ -141,7 +141,7 @@ fun cook_json_value_end(source: str, position: i64, limit: i64) -> i64:
         return limit
     p: i64 = start
     while p < limit:
-        ch: i32 = Memory.read_i8((source as i64) + p) as i32
+        ch: i32 = Memory.read_i8(src + p) as i32
         if ch == 44 or ch == 93 or ch == 125 or ch == 32 or ch == 9 or ch == 10 or ch == 13:
             return p
         p = p + 1
@@ -154,17 +154,17 @@ fun cook_json_cache_array(value: JsonValue, count: i32) -> i64:
     cache: i64 = Memory.malloc_zeroed((count as i64) * COOK_JSON_CACHE_STRIDE)
     if cache == 0:
         cook_fail("out of memory indexing glTF JSON")
-    p: i64 = cook_json_skip_ws(value.source, value.content_start, value.content_end)
+    p: i64 = cook_json_skip_ws(value.src, value.content_start, value.content_end)
     i: i32 = 0
     while i < count and p < value.content_end:
         start: i64 = p
-        finish: i64 = cook_json_value_end(value.source, start, value.content_end)
+        finish: i64 = cook_json_value_end(value.src, start, value.content_end)
         entry: i64 = cache + ((i as i64) * COOK_JSON_CACHE_STRIDE)
         Memory.write_i64(entry, start)
         Memory.write_i64(entry + 8, finish)
-        p = cook_json_skip_ws(value.source, finish, value.content_end)
-        if p < value.content_end and (Memory.read_i8((value.source as i64) + p) as i32) == 44:
-            p = cook_json_skip_ws(value.source, p + 1, value.content_end)
+        p = cook_json_skip_ws(value.src, finish, value.content_end)
+        if p < value.content_end and (Memory.read_i8(value.src + p) as i32) == 44:
+            p = cook_json_skip_ws(value.src, p + 1, value.content_end)
         i = i + 1
     if i != count:
         cook_fail("could not index glTF JSON array")
@@ -176,7 +176,7 @@ fun cook_json_cached_at(value: JsonValue, cache: i64, count: i32, index: i32) ->
     entry: i64 = cache + ((index as i64) * COOK_JSON_CACHE_STRIDE)
     start: i64 = Memory.read_i64(entry)
     finish: i64 = Memory.read_i64(entry + 8)
-    first: i32 = Memory.read_i8((value.source as i64) + start) as i32
+    first: i32 = Memory.read_i8(value.src + start) as i32
     kind: i32 = JSON_KIND_NUMBER
     content_start: i64 = start
     content_end: i64 = finish
@@ -196,7 +196,7 @@ fun cook_json_cached_at(value: JsonValue, cache: i64, count: i32, index: i32) ->
         kind = JSON_KIND_BOOL
     elif first == 110:
         kind = JSON_KIND_NULL
-    return JsonValue(source=value.source, kind=kind, start_pos=start, end_pos=finish, content_start=content_start, content_end=content_end)
+    return JsonValue(src=value.src, src_len=value.src_len, kind=kind, start_pos=start, end_pos=finish, content_start=content_start, content_end=content_end)
 
 fun cook_component_size(component_type: i32) -> i32:
     if component_type == 5120 or component_type == 5121:

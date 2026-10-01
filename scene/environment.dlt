@@ -162,6 +162,13 @@ struct Sky:
     cloud_opacity: f32 = 0.62
     cloud_softness: f32 = 0.10
     cloud_offset: f32 = 0.0
+    # Optional local-up frame for sky gradients and local sky effects.
+    # Celestial objects and stars remain in world space. When disabled, the
+    # default sky up direction is world +Y.
+    has_up_direction: i32 = 0
+    up_dir_x: f32 = 0.0
+    up_dir_y: f32 = 1.0
+    up_dir_z: f32 = 0.0
 
 struct EnvironmentLighting:
     enabled: i32 = 0
@@ -563,6 +570,10 @@ attach Sky:
         sky.cloud_opacity = 0.62
         sky.cloud_softness = 0.10
         sky.cloud_offset = 0.0
+        sky.has_up_direction = 0
+        sky.up_dir_x = 0.0
+        sky.up_dir_y = 1.0
+        sky.up_dir_z = 0.0
         return sky
 
     static fun gradient(zenith: Color, horizon: Color, lower: Color) -> Sky:
@@ -581,6 +592,36 @@ attach Sky:
         if self.mode == SKY_MODE_NONE:
             return 0
         return 1
+
+    # Override the local zenith used by the gradient sky and local sky
+    # effects. The direction is normalized here so render code receives a
+    # stable unit vector. Celestial objects and stars remain in world space.
+    fun set_up_direction(self, x: f32, y: f32, z: f32) -> Sky:
+        direction: Vec3 = Vec3.make(x, y, z)
+        if direction.length_sq() <= 0.000001:
+            self.has_up_direction = 0
+            self.up_dir_x = 0.0
+            self.up_dir_y = 1.0
+            self.up_dir_z = 0.0
+            return self
+        direction = direction.normalize()
+        self.has_up_direction = 1
+        self.up_dir_x = direction.x
+        self.up_dir_y = direction.y
+        self.up_dir_z = direction.z
+        return self
+
+    fun up_direction(self) -> Vec3:
+        if self.has_up_direction == 0:
+            return Vec3.up()
+        return Vec3.make(self.up_dir_x, self.up_dir_y, self.up_dir_z)
+
+    fun clear_up_direction(self) -> Sky:
+        self.has_up_direction = 0
+        self.up_dir_x = 0.0
+        self.up_dir_y = 1.0
+        self.up_dir_z = 0.0
+        return self
 
     fun set_clouds(self, clouds: SkyClouds) -> Sky:
         self.cloud_enabled = clouds.enabled

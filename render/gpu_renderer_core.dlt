@@ -4578,6 +4578,71 @@ attach GpuRendererCore:
         t: f32 = 0.0 - world_y
         return self._sky_lerp_color(sky.horizon_color, sky.lower_color, t)
 
+    # Copy the real camera view, then align only the gradient/local-effect
+    # frame so local +Y follows Sky.up_direction(). Celestial objects are
+    # rendered with the untouched camera view and therefore stay in world space.
+    # The constructed basis is orthonormal to avoid horizon distortion.
+    fun _sky_write_up_aligned_view(self, output: i64, cam_view: i64, sky: Sky):
+        Memory.copy(output, cam_view, 64)
+        if sky.has_up_direction == 0:
+            return
+
+        up_x: f32 = sky.up_dir_x
+        up_y: f32 = sky.up_dir_y
+        up_z: f32 = sky.up_dir_z
+        up_length: f32 = @sqrt(up_x * up_x + up_y * up_y + up_z * up_z)
+        if up_length <= 0.000001:
+            return
+        up_x = up_x / up_length
+        up_y = up_y / up_length
+        up_z = up_z / up_length
+
+        guide_x: f32 = 0.0
+        guide_y: f32 = 0.0
+        guide_z: f32 = 1.0
+        if up_z > 0.95 or up_z < 0.0 - 0.95:
+            guide_x = 1.0
+            guide_z = 0.0
+
+        # right = up x guide
+        right_x: f32 = up_y * guide_z - up_z * guide_y
+        right_y: f32 = up_z * guide_x - up_x * guide_z
+        right_z: f32 = up_x * guide_y - up_y * guide_x
+        right_length: f32 = @sqrt(right_x * right_x + right_y * right_y + right_z * right_z)
+        if right_length <= 0.000001:
+            return
+        right_x = right_x / right_length
+        right_y = right_y / right_length
+        right_z = right_z / right_length
+
+        # forward = right x up. With the default +Y up direction this resolves
+        # to world +Z, preserving the ordinary sky orientation.
+        forward_x: f32 = right_y * up_z - right_z * up_y
+        forward_y: f32 = right_z * up_x - right_x * up_z
+        forward_z: f32 = right_x * up_y - right_y * up_x
+
+        # Transform each up-aligned basis vector into camera/view space.
+        view_right_x: f32 = Memory.read_f32(cam_view) * right_x + Memory.read_f32(cam_view + 16) * right_y + Memory.read_f32(cam_view + 32) * right_z
+        view_right_y: f32 = Memory.read_f32(cam_view + 4) * right_x + Memory.read_f32(cam_view + 20) * right_y + Memory.read_f32(cam_view + 36) * right_z
+        view_right_z: f32 = Memory.read_f32(cam_view + 8) * right_x + Memory.read_f32(cam_view + 24) * right_y + Memory.read_f32(cam_view + 40) * right_z
+        view_up_x: f32 = Memory.read_f32(cam_view) * up_x + Memory.read_f32(cam_view + 16) * up_y + Memory.read_f32(cam_view + 32) * up_z
+        view_up_y: f32 = Memory.read_f32(cam_view + 4) * up_x + Memory.read_f32(cam_view + 20) * up_y + Memory.read_f32(cam_view + 36) * up_z
+        view_up_z: f32 = Memory.read_f32(cam_view + 8) * up_x + Memory.read_f32(cam_view + 24) * up_y + Memory.read_f32(cam_view + 40) * up_z
+        view_forward_x: f32 = Memory.read_f32(cam_view) * forward_x + Memory.read_f32(cam_view + 16) * forward_y + Memory.read_f32(cam_view + 32) * forward_z
+        view_forward_y: f32 = Memory.read_f32(cam_view + 4) * forward_x + Memory.read_f32(cam_view + 20) * forward_y + Memory.read_f32(cam_view + 36) * forward_z
+        view_forward_z: f32 = Memory.read_f32(cam_view + 8) * forward_x + Memory.read_f32(cam_view + 24) * forward_y + Memory.read_f32(cam_view + 40) * forward_z
+
+        # Matrix columns are the view-space images of local X/Y/Z.
+        Memory.write_f32(output, view_right_x)
+        Memory.write_f32(output + 4, view_right_y)
+        Memory.write_f32(output + 8, view_right_z)
+        Memory.write_f32(output + 16, view_up_x)
+        Memory.write_f32(output + 20, view_up_y)
+        Memory.write_f32(output + 24, view_up_z)
+        Memory.write_f32(output + 32, view_forward_x)
+        Memory.write_f32(output + 36, view_forward_y)
+        Memory.write_f32(output + 40, view_forward_z)
+
     fun _sky_draw_clear_rect(self, cmd: i64, att: i64, rect: i64, x: i32, y: i32, w: i32, h: i32, color: Color):
         if w <= 0:
             return
@@ -4680,8 +4745,7 @@ attach GpuRendererCore:
                             if ndc_y <= 1.0:
                                 sx: i32 = ((ndc_x * 0.5 + 0.5) * (width as f32)) as i32
                                 sy: i32 = ((ndc_y * 0.5 + 0.5) * (height as f32)) as i32
-                                # Two render-target pixels remain stable after
-                                # Bitora's 2x render-scale resolve. Rare stars
+                                # Two render-target pixels remain stable under scaled presentation. Rare stars
                                 # are larger, but no star is sub-pixel geometry.
                                 size: i32 = 2
                                 size_hash: f32 = self._sky_star_hash(si + 1, 23)
@@ -5008,7 +5072,7 @@ attach GpuRendererCore:
         vkCmdSetScissor(cmd, 0, 1, scissor)
 
         Memory.set(push_data, 0, 128)
-        Memory.copy(push_data, cam_view, 64)
+        self._sky_write_up_aligned_view(push_data, cam_view, sky)
         Memory.write_f32(push_data + 12, sky.cloud_offset)
         Memory.write_f32(push_data + 28, sky.cloud_offset * 0.37)
         Memory.write_f32(push_data + 44, sky.cloud_scale)
@@ -5061,7 +5125,7 @@ attach GpuRendererCore:
                     vkCmdSetScissor(cmd, 0, 1, scissor)
 
                     Memory.set(push_data, 0, 128)
-                    Memory.copy(push_data, cam_view, 64)
+                    self._sky_write_up_aligned_view(push_data, cam_view, sky)
                     sun_enabled: i32 = 0
                     sun_dir_x: f32 = 0.0
                     sun_dir_y: f32 = 1.0
