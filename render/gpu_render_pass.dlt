@@ -25,6 +25,15 @@ struct RenderPass:
     desc_set_layout:      i64 = 0
     lighting_set_layout:  i64 = 0
     desc_pool:            i64 = 0
+    # Immutable texture-tuple cache, owned by this render-pass generation.
+    # Only the shared shadow binding is refreshed, after waiting for GPU idle.
+    # 1024 buckets -> linked 96-byte entries (10 handles, set, next).
+    material_desc_cache: i64 = 0
+    material_desc_count: i32 = 0
+    # Exhausted pools remain alive until GPU-idle cleanup; never rewrite a set
+    # that an in-flight frame or another mesh may still be using.
+    retired_desc_pools: i64 = 0
+    desc_pool_count: i32 = 0
     # Phase 1 bindless: a second pipeline + layout that binds the bindless
     # texture table (set 2) and reads per-instance texture indices. Built
     # only when bindless is enabled; vk_pipeline stays the classic fallback.
@@ -75,6 +84,15 @@ struct MaterialDescriptorImages:
     metallic_roughness_sampler: i64 = 0
     occlusion_view: i64 = 0
     occlusion_sampler: i64 = 0
+
+fun frog_material_descriptor_bucket(images: MaterialDescriptorImages) -> i32:
+    key: i64 = images as i64
+    hash: i64 = 0
+    index: i32 = 0
+    while index < 10:
+        hash = (hash << 5) ^ (hash >> 2) ^ Memory.read_ptr(key + index * 8)
+        index = index + 1
+    return (hash & 1023) as i32
 
 fun frog_create_color_depth_render_pass(device: i64, color_format: i32) -> i64:
     att_descs: i64 = Memory.malloc_zeroed(72)
@@ -145,6 +163,131 @@ fun frog_create_color_depth_render_pass(device: i64, color_format: i32) -> i64:
     return result_pass
 
 attach RenderPass:
+
+    fun _make_descriptor_pool(self, device: i64) -> i64:
+        sizes: i64 = Memory.malloc_zeroed(16)
+        info: i64 = Memory.malloc_zeroed(40)
+        out: i64 = Memory.malloc_zeroed(8)
+        if sizes == 0 or info == 0 or out == 0:
+            Memory.free(sizes)
+            Memory.free(info)
+            Memory.free(out)
+            return 0
+        Memory.write_i32(sizes, 1)          # COMBINED_IMAGE_SAMPLER
+        Memory.write_i32(sizes + 4, 49152)  # six samplers per material
+        Memory.write_i32(sizes + 8, 6)      # UNIFORM_BUFFER
+        Memory.write_i32(sizes + 12, 64)
+        Memory.write_i32(info, 33)
+        Memory.write_i32(info + 20, 8192)
+        Memory.write_i32(info + 24, 2)
+        Memory.write_ptr(info + 32, sizes)
+        result: i32 = vkCreateDescriptorPool(device, info, 0, out)
+        pool: i64 = Memory.read_ptr(out)
+        Memory.free(out)
+        Memory.free(info)
+        Memory.free(sizes)
+        if result != 0:
+            return 0
+        return pool
+
+    fun _allocate_descriptor_set(self, device: i64, layout: i64) -> i64:
+        layouts: i64 = Memory.malloc_zeroed(8)
+        info: i64 = Memory.malloc_zeroed(40)
+        out: i64 = Memory.malloc_zeroed(8)
+        if layouts == 0 or info == 0 or out == 0:
+            Memory.free(layouts)
+            Memory.free(info)
+            Memory.free(out)
+            return 0
+        Memory.write_ptr(layouts, layout)
+        Memory.write_i32(info, 34)
+        Memory.write_ptr(info + 16, self.desc_pool)
+        Memory.write_i32(info + 24, 1)
+        Memory.write_ptr(info + 32, layouts)
+        result: i32 = vkAllocateDescriptorSets(device, info, out)
+        # Only pool exhaustion/fragmentation warrants another bank. Genuine
+        # device/host OOM is not retried or hidden as unbounded pool growth.
+        if result == -1000069000 or result == -12:
+            retired: i64 = Memory.malloc_zeroed(16)
+            if retired != 0:
+                next_pool: i64 = self._make_descriptor_pool(device)
+                if next_pool != 0:
+                    Memory.write_ptr(info + 16, next_pool)
+                    Memory.write_ptr(out, 0)
+                    result = vkAllocateDescriptorSets(device, info, out)
+                    if result == 0:
+                        Memory.write_ptr(retired, self.desc_pool)
+                        Memory.write_ptr(retired + 8, self.retired_desc_pools)
+                        self.retired_desc_pools = retired
+                        self.desc_pool = next_pool
+                        self.desc_pool_count = self.desc_pool_count + 1
+                    else:
+                        vkDestroyDescriptorPool(device, next_pool, 0)
+                        Memory.free(retired)
+                else:
+                    Memory.free(retired)
+        dset: i64 = Memory.read_ptr(out)
+        Memory.free(out)
+        Memory.free(info)
+        Memory.free(layouts)
+        if result != 0:
+            return 0
+        return dset
+
+    fun _find_material_descriptor(self, key: MaterialDescriptorImages, bucket: i32) -> i64:
+        entry: i64 = Memory.read_ptr(self.material_desc_cache + bucket * 8)
+        key_ptr: i64 = key as i64
+        while entry != 0:
+            index: i32 = 0
+            while index < 10:
+                if Memory.read_ptr(entry + index * 8) != Memory.read_ptr(key_ptr + index * 8):
+                    break
+                index = index + 1
+            if index == 10:
+                return Memory.read_ptr(entry + 80)
+            entry = Memory.read_ptr(entry + 88)
+        return 0
+
+    fun _cleanup_material_descriptors(self, device: i64):
+        if self.material_desc_cache != 0:
+            bucket: i32 = 0
+            while bucket < 1024:
+                entry: i64 = Memory.read_ptr(self.material_desc_cache + bucket * 8)
+                while entry != 0:
+                    next: i64 = Memory.read_ptr(entry + 88)
+                    Memory.free(entry)
+                    entry = next
+                bucket = bucket + 1
+            Memory.free(self.material_desc_cache)
+            self.material_desc_cache = 0
+        self.material_desc_count = 0
+        retired: i64 = self.retired_desc_pools
+        while retired != 0:
+            next: i64 = Memory.read_ptr(retired + 8)
+            vkDestroyDescriptorPool(device, Memory.read_ptr(retired), 0)
+            Memory.free(retired)
+            retired = next
+        self.retired_desc_pools = 0
+        if self.desc_pool != 0:
+            vkDestroyDescriptorPool(device, self.desc_pool, 0)
+            self.desc_pool = 0
+        self.desc_pool_count = 0
+
+    fun refresh_material_shadow_descriptors(self, device: i64) -> i32:
+        # Caller must wait for GPU idle before replacing the shadow target.
+        # Include cached auxiliary-map tuples and sets from retired pools.
+        if self.material_desc_cache == 0:
+            return 0
+        refreshed: i32 = 0
+        bucket: i32 = 0
+        while bucket < 1024:
+            entry: i64 = Memory.read_ptr(self.material_desc_cache + bucket * 8)
+            while entry != 0:
+                self.update_shadow_descriptor(device, Memory.read_ptr(entry + 80))
+                refreshed = refreshed + 1
+                entry = Memory.read_ptr(entry + 88)
+            bucket = bucket + 1
+        return refreshed
 
     fun init(self, device: i64, phys_device: i64, swapchain_format: i32, sc_image_count: i32, sc_image_views: i64, depth_view: i64, width: i32, height: i32, gfx_family: i32, vert_data: i64, vert_size: i64, frag_data: i64, frag_size: i64, shadow_vert_data: i64, shadow_vert_size: i64) -> i32:
         # 1. Create render pass — color + depth attachments
@@ -350,32 +493,10 @@ attach RenderPass:
             return 0
 
         # 2c. Descriptor pool sized for texture/material and shared lighting sets.
-        # VkDescriptorPoolSize (8 bytes): type(0), descriptorCount(4)
-        dps: i64 = Memory.malloc_zeroed(16)
-        if dps == 0:
+        self.desc_pool = self._make_descriptor_pool(device)
+        if self.desc_pool == 0:
             return 0
-        Memory.write_i32(dps, 1)             # COMBINED_IMAGE_SAMPLER
-        Memory.write_i32(dps + 4, 49152)     # six samplers per material set
-        Memory.write_i32(dps + 8, 6)          # UNIFORM_BUFFER
-        Memory.write_i32(dps + 12, 64)
-        # VkDescriptorPoolCreateInfo (sType = 33):
-        #  0 sType, 8 pNext, 16 flags, 20 maxSets, 24 poolSizeCount, 32 pPoolSizes
-        dp_ci: i64 = Memory.malloc_zeroed(40)
-        if dp_ci == 0:
-            Memory.free(dps)
-            return 0
-        Memory.write_i32(dp_ci, 33)
-        Memory.write_i32(dp_ci + 20, 8192)   # maxSets
-        Memory.write_i32(dp_ci + 24, 2)      # poolSizeCount
-        Memory.write_ptr(dp_ci + 32, dps)
-        dp_ptr: i64 = Memory.malloc_zeroed(8)
-        dp_r: i32 = vkCreateDescriptorPool(device, dp_ci, 0, dp_ptr)
-        self.desc_pool = Memory.read_ptr(dp_ptr)
-        Memory.free(dp_ptr)
-        Memory.free(dp_ci)
-        Memory.free(dps)
-        if dp_r != 0:
-            return 0
+        self.desc_pool_count = 1
 
         # 3. Create pipeline layout: materials (set 0), shared lights (set 1),
         # and transform/fog/directional-light push constants.
@@ -581,27 +702,32 @@ attach RenderPass:
             final_occlusion_view = images.albedo_view
         if final_occlusion_sampler == 0:
             final_occlusion_sampler = images.albedo_sampler
-        # VkDescriptorSetAllocateInfo (sType = 34):
-        #  0 sType, 8 pNext, 16 descriptorPool, 24 descriptorSetCount, 32 pSetLayouts
-        layout_arr: i64 = Memory.malloc_zeroed(8)
-        Memory.write_ptr(layout_arr, self.desc_set_layout)
-        ai: i64 = Memory.malloc_zeroed(40)
-        Memory.write_i32(ai, 34)
-        Memory.write_ptr(ai + 16, self.desc_pool)
-        Memory.write_i32(ai + 24, 1)
-        Memory.write_ptr(ai + 32, layout_arr)
-        set_ptr: i64 = Memory.malloc_zeroed(8)
-        ar: i32 = vkAllocateDescriptorSets(device, ai, set_ptr)
-        dset: i64 = Memory.read_ptr(set_ptr)
-        Memory.free(set_ptr)
-        Memory.free(ai)
-        Memory.free(layout_arr)
-        if ar != 0:
+        key: MaterialDescriptorImages = MaterialDescriptorImages(albedo_view=images.albedo_view, albedo_sampler=images.albedo_sampler, emissive_view=final_emissive_view, emissive_sampler=final_emissive_sampler, normal_view=final_normal_view, normal_sampler=final_normal_sampler, metallic_roughness_view=final_metallic_roughness_view, metallic_roughness_sampler=final_metallic_roughness_sampler, occlusion_view=final_occlusion_view, occlusion_sampler=final_occlusion_sampler)
+        if self.material_desc_cache == 0:
+            self.material_desc_cache = Memory.malloc_zeroed(8192)
+        if self.material_desc_cache == 0:
+            return 0
+        bucket: i32 = frog_material_descriptor_bucket(key)
+        cached: i64 = self._find_material_descriptor(key, bucket)
+        if cached != 0:
+            return cached
+        entry: i64 = Memory.malloc_zeroed(96)
+        if entry == 0:
+            return 0
+        dset: i64 = self._allocate_descriptor_set(device, self.desc_set_layout)
+        if dset == 0:
+            Memory.free(entry)
             return 0
 
         # VkDescriptorImageInfo[6] (24 bytes each): albedo, shadow, emission,
         # normal, metallic-roughness, and occlusion.
         img_info: i64 = Memory.malloc_zeroed(144)
+        wds: i64 = Memory.malloc_zeroed(384)
+        if img_info == 0 or wds == 0:
+            Memory.free(img_info)
+            Memory.free(wds)
+            Memory.free(entry)
+            return 0
         Memory.write_ptr(img_info, images.albedo_sampler)
         Memory.write_ptr(img_info + 8, images.albedo_view)
         Memory.write_i32(img_info + 16, 5)   # SHADER_READ_ONLY_OPTIMAL
@@ -625,7 +751,6 @@ attach RenderPass:
         # VkWriteDescriptorSet (sType = 35):
         #  0 sType, 8 pNext, 16 dstSet, 24 dstBinding, 28 dstArrayElement,
         # 32 descriptorCount, 36 descriptorType, 40 pImageInfo, 48 pBufferInfo, 56 pTexelBufferView
-        wds: i64 = Memory.malloc_zeroed(384)
         Memory.write_i32(wds, 35)
         Memory.write_ptr(wds + 16, dset)
         Memory.write_i32(wds + 24, 0)        # dstBinding
@@ -668,6 +793,11 @@ attach RenderPass:
         vkUpdateDescriptorSets(device, 6, wds, 0, 0)
         Memory.free(wds)
         Memory.free(img_info)
+        Memory.copy(entry, key as i64, 80)
+        Memory.write_ptr(entry + 80, dset)
+        Memory.write_ptr(entry + 88, Memory.read_ptr(self.material_desc_cache + bucket * 8))
+        Memory.write_ptr(self.material_desc_cache + bucket * 8, entry)
+        self.material_desc_count = self.material_desc_count + 1
         return dset
 
     fun make_lighting_descriptor(self, device: i64, buffer: i64, size: i64) -> i64:
@@ -679,28 +809,8 @@ attach RenderPass:
             return 0
         if size <= 0:
             return 0
-        layout_arr: i64 = Memory.malloc_zeroed(8)
-        alloc_info: i64 = Memory.malloc_zeroed(40)
-        out: i64 = Memory.malloc_zeroed(8)
-        if layout_arr == 0 or alloc_info == 0 or out == 0:
-            if layout_arr != 0:
-                Memory.free(layout_arr)
-            if alloc_info != 0:
-                Memory.free(alloc_info)
-            if out != 0:
-                Memory.free(out)
-            return 0
-        Memory.write_ptr(layout_arr, self.lighting_set_layout)
-        Memory.write_i32(alloc_info, 34)
-        Memory.write_ptr(alloc_info + 16, self.desc_pool)
-        Memory.write_i32(alloc_info + 24, 1)
-        Memory.write_ptr(alloc_info + 32, layout_arr)
-        alloc_result: i32 = vkAllocateDescriptorSets(device, alloc_info, out)
-        dset: i64 = Memory.read_ptr(out)
-        Memory.free(out)
-        Memory.free(alloc_info)
-        Memory.free(layout_arr)
-        if alloc_result != 0:
+        dset: i64 = self._allocate_descriptor_set(device, self.lighting_set_layout)
+        if dset == 0:
             return 0
 
         buffer_info: i64 = Memory.malloc_zeroed(24)
@@ -1812,8 +1922,7 @@ attach RenderPass:
             vkDestroyPipelineLayout(device, self.vk_pipeline_layout, 0)
         if self.ssbo_set_layout != 0:
             vkDestroyDescriptorSetLayout(device, self.ssbo_set_layout, 0)
-        if self.desc_pool != 0:
-            vkDestroyDescriptorPool(device, self.desc_pool, 0)
+        self._cleanup_material_descriptors(device)
         if self.desc_set_layout != 0:
             vkDestroyDescriptorSetLayout(device, self.desc_set_layout, 0)
         if self.lighting_set_layout != 0:

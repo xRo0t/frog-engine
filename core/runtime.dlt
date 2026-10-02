@@ -386,6 +386,8 @@ attach EngineRuntime:
         if new_height <= 0:
             return 0
 
+        # Pending uploads belong to the command pool about to be destroyed.
+        gpu_tex_flush_pending(self.ctx.vk_device, self.render_pass.vk_command_pool, self.ctx.vk_graphics_queue)
         vkDeviceWaitIdle(self.ctx.vk_device)
         frog_debug_collision_destroy_pipeline(self.ctx.vk_device)
         self.renderer.destroy_render_scale_target()
@@ -423,6 +425,21 @@ attach EngineRuntime:
             swapchain.cleanup(self.ctx.vk_instance, self.ctx.vk_device)
             self.ready_flag = 0
             return 0
+        # The texture table survives resize, but its graphics pipelines do not.
+        # Rebuild every variant against the new render pass (also fullscreen).
+        self.renderer.core.ssbo_pipeline_ready = 0
+        self.renderer.core.ssbo_draw_enabled = 0
+        self.renderer.core.ssbo_desc_outbuf = 0
+        if self.renderer.core.bindless_set != 0 and self.renderer.core.bindless_layout != 0:
+            if render_pass._create_bindless_pipeline(self.ctx.vk_device, new_width, new_height, self.renderer.core.bindless_layout) == 1:
+                self.renderer.core.bindless_enabled = 1
+                render_pass._create_ssbo_pipeline(self.ctx.vk_device, new_width, new_height, self.renderer.core.bindless_layout)
+                if render_pass.ssbo_pipeline != 0:
+                    self.renderer.core.ssbo_pipeline_ready = 1
+            else:
+                self.renderer.core.bindless_enabled = 0
+                print("[frog.bindless] resize pipeline unavailable; classic path")
+        self.renderer.core._mark_cull_dirty_struct()
         vert_shader.release()
         frag_shader.release()
         shadow_vert_shader.release()

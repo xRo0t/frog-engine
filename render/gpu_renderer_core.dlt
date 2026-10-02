@@ -3381,6 +3381,7 @@ attach GpuRendererCore:
         Memory.write_f32(out, active_count)
 
     fun _refresh_shadow_descriptors(self, rp: RenderPass):
+        rp.refresh_material_shadow_descriptors(self.device)
         if self.tex_desc_sets == 0:
             return
         ti: i32 = 0
@@ -4142,9 +4143,9 @@ attach GpuRendererCore:
             return
         old_tex_id: i32 = Memory.read_i32(self.mesh_tex_ids + mesh_id * 4)
         Memory.write_i32(self.mesh_tex_ids + mesh_id * 4, tex_id)
-        if self.mesh_desc_sets != 0:
-            Memory.write_ptr(self.mesh_desc_sets + mesh_id * 8, 0)
         if old_tex_id != tex_id:
+            if self.mesh_desc_sets != 0:
+                Memory.write_ptr(self.mesh_desc_sets + mesh_id * 8, 0)
             self._mark_cull_dirty_struct()
 
     fun bind_material(self, mesh_id: i32, material: Material3D):
@@ -4155,6 +4156,7 @@ attach GpuRendererCore:
         if self.mesh_material_params == 0:
             return
         grouping_changed: i32 = 0
+        textures_changed: i32 = 0
         if self.mesh_transparent != 0:
             tflag: i32 = 0
             if material.transparent != 0:
@@ -4217,6 +4219,7 @@ attach GpuRendererCore:
                 emissive_tex_id = material.emissive_map.texture_id
             if Memory.read_i32(self.mesh_emissive_tex_ids + mesh_id * 4) != emissive_tex_id:
                 grouping_changed = 1
+                textures_changed = 1
             Memory.write_i32(self.mesh_emissive_tex_ids + mesh_id * 4, emissive_tex_id)
         if self.mesh_normal_tex_ids != 0:
             normal_tex_id: i32 = 0 - 1
@@ -4224,6 +4227,7 @@ attach GpuRendererCore:
                 normal_tex_id = material.normal_map.texture_id
             if Memory.read_i32(self.mesh_normal_tex_ids + mesh_id * 4) != normal_tex_id:
                 grouping_changed = 1
+                textures_changed = 1
             Memory.write_i32(self.mesh_normal_tex_ids + mesh_id * 4, normal_tex_id)
         if self.mesh_metallic_roughness_tex_ids != 0:
             metallic_roughness_tex_id: i32 = 0 - 1
@@ -4231,6 +4235,7 @@ attach GpuRendererCore:
                 metallic_roughness_tex_id = material.metallic_roughness_map.texture_id
             if Memory.read_i32(self.mesh_metallic_roughness_tex_ids + mesh_id * 4) != metallic_roughness_tex_id:
                 grouping_changed = 1
+                textures_changed = 1
             Memory.write_i32(self.mesh_metallic_roughness_tex_ids + mesh_id * 4, metallic_roughness_tex_id)
         if self.mesh_occlusion_tex_ids != 0:
             occlusion_tex_id: i32 = 0 - 1
@@ -4238,9 +4243,13 @@ attach GpuRendererCore:
                 occlusion_tex_id = material.occlusion_map.texture_id
             if Memory.read_i32(self.mesh_occlusion_tex_ids + mesh_id * 4) != occlusion_tex_id:
                 grouping_changed = 1
+                textures_changed = 1
             Memory.write_i32(self.mesh_occlusion_tex_ids + mesh_id * 4, occlusion_tex_id)
-        if self.mesh_desc_sets != 0:
-            Memory.write_ptr(self.mesh_desc_sets + mesh_id * 8, 0)
+        # Scalar/UV/alpha changes live in instance records, not sampler sets.
+        # Keep the immutable descriptor unless its actual texture tuple changes.
+        if textures_changed == 1:
+            if self.mesh_desc_sets != 0:
+                Memory.write_ptr(self.mesh_desc_sets + mesh_id * 8, 0)
         if grouping_changed == 1:
             self._mark_cull_dirty_struct()
 
